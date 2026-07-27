@@ -32,6 +32,7 @@
 const db = require('../db/pool');
 const presence = require('../realtime/presence');
 const { publish } = require('../realtime/hub');
+const { tentar: tentarLock } = require('../workers/leaderLock');
 
 const cadeias = new Map(); // departamentoId -> Promise (fila de execução)
 
@@ -99,6 +100,7 @@ async function rodada(departamentoId, tentativa = 0) {
   if (!irrestrito && !numerosServiveis.length) return; // candidatos só atendem números que não estão na fila
 
   const resultado = await db.comTenant(tenantId, async (conn) => {
+    if (!await tentarLock(conn, 'fila', tenantId)) return null;
     // Conversa mais antiga aguardando QUE ALGUÉM consiga atender (evita head-of-line:
     // uma conversa de número sem candidato online não trava as outras da fila).
     const bSel = { d: departamentoId };

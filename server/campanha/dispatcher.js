@@ -36,6 +36,7 @@ const db = require('../db/pool');
 const { sendTemplate } = require('../graph/sendTemplate');
 const { publish } = require('../realtime/hub');
 const { variantes } = require('../utils/telefone');
+const { tentar: tentarLock } = require('../workers/leaderLock');
 
 const TICK_MS = 4000;        // varre campanhas 'enviando' a cada 4s
 const CUSTO_UTILITY_BR = 0.04; // estimativa R$/msg utility (ajustável)
@@ -163,6 +164,7 @@ async function processarItem(tenantId, campanhaId, item, deps) {
 /** Processa UM lote (até RATE_POR_SEG itens). Re-agenda se sobrar trabalho. */
 async function processarLote(tenantId, campanhaId, deps) {
   const preparo = await deps.comTenant(tenantId, async (conn) => {
+    if (!await tentarLock(conn, 'campanha', tenantId)) return { acao: 'nada' };
     // Estado atual da campanha (+ número de origem).
     const cSel = await conn.execute(
       `SELECT c.STATUS, c.TEMPLATE_NOME, c.LANG, c.RATE_POR_SEG, c.JANELA_INICIO, c.JANELA_FIM,

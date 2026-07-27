@@ -13,6 +13,7 @@
 
 const db = require('../db/pool');
 const runtime = require('./runtime');
+const { tentar: tentarLock } = require('../workers/leaderLock');
 
 const INTERVALO_MS = 60_000;
 let timer = null;
@@ -50,6 +51,7 @@ function timeoutMinDe(definicao) {
 /** Verifica os fluxos parados além do timeout para UM tenant e dispara o expirar. */
 async function varrerTenant(tenantId) {
   const expirados = await db.comTenant(tenantId, async (conn) => {
+    if (!await tentarLock(conn, 'bot', tenantId)) return [];
     const r = await conn.execute(
       `SELECT c.id, f.definicao,
               EXTRACT(EPOCH FROM (now() - c.bot_ultima_interacao)) / 60 AS parada_min
