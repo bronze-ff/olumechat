@@ -141,13 +141,21 @@ CREATE TABLE IF NOT EXISTS numero (
   departamento_padrao_id bigint,
   criado_em              timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT uq_num_tenant_id UNIQUE (tenant_id, id),
-  CONSTRAINT uq_num_pnid      UNIQUE (tenant_id, phone_number_id),
+  -- GLOBAL, não por tenant: o webhook da Meta identifica o tenant A PARTIR do
+  -- phone_number_id. Se dois tenants registrassem o mesmo número, a mensagem
+  -- de um cliente poderia cair no tenant errado. É a única unicidade do schema
+  -- que NÃO é escopada por tenant — e por isso a tentativa de registrar um
+  -- número já usado precisa ser tratada como conflito na camada de aplicação.
+  CONSTRAINT uq_num_pnid      UNIQUE (phone_number_id),
   CONSTRAINT ck_num_ativo     CHECK (ativo IN ('S','N')),
   CONSTRAINT ck_num_permativo CHECK (permite_ativo IN ('S','N')),
   CONSTRAINT ck_num_modo      CHECK (modo IN ('padrao','ia')),
   CONSTRAINT fk_num_deppad    FOREIGN KEY (tenant_id, departamento_padrao_id)
     REFERENCES departamento (tenant_id, id)
 );
+-- A unicidade acima é global; este índice serve as listagens por tenant
+-- (padrão do schema: tenant_id como primeira coluna).
+CREATE INDEX IF NOT EXISTS ix_num_pnid ON numero (tenant_id, phone_number_id);
 
 -- ----------------------------------------------------------------------------
 -- template — HSMs gerenciados pela plataforma e submetidos à Meta.

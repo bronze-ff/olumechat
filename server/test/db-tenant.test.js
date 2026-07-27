@@ -315,6 +315,51 @@ test('RLS real: contexto de tenant não sobrevive ao COMMIT na mesma conexão',
     }
   });
 
+test('RLS real: phone_number_id é único GLOBAL — outro tenant não registra o mesmo número',
+  { skip: semBanco && 'defina TEST_DATABASE_URL para rodar (usa Postgres real)' },
+  async () => {
+    // O webhook resolve o tenant A PARTIR do phone_number_id. Se dois tenants
+    // pudessem registrar o mesmo, a mensagem de um cliente cairia no tenant
+    // errado — por isso esta é a única unicidade não escopada por tenant.
+    const { Client } = require('pg');
+    const c = new Client({ connectionString: URL_INTEGRACAO });
+    await c.connect();
+    const marca = `p${Date.now()}`;
+    const pnid = `pnid-${marca}`;
+    try {
+      const t = await c.query(
+        `INSERT INTO tenant (nome, slug) VALUES ('A ${marca}', 'a-${marca}'), ('B ${marca}', 'b-${marca}')
+         RETURNING id, slug`
+      );
+      const A = t.rows.find((r) => r.slug === `a-${marca}`).id;
+      const B = t.rows.find((r) => r.slug === `b-${marca}`).id;
+
+      await c.query('BEGIN');
+      await c.query('SET LOCAL ROLE falatta_app');
+      await c.query("SELECT set_config('app.current_tenant_id', $1, true)", [String(A)]);
+      await c.query('INSERT INTO numero (phone_number_id, display_phone) VALUES ($1, $2)', [pnid, '5562...']);
+      await c.query('COMMIT');
+
+      // Tenant B tenta registrar o MESMO phone_number_id: tem de falhar por
+      // violação de unicidade, e não passar por não enxergar a linha do A.
+      await c.query('BEGIN');
+      await c.query('SET LOCAL ROLE falatta_app');
+      await c.query("SELECT set_config('app.current_tenant_id', $1, true)", [String(B)]);
+      await assert.rejects(
+        c.query('INSERT INTO numero (phone_number_id, display_phone) VALUES ($1, $2)', [pnid, '5562...']),
+        (err) => err.code === '23505' && /uq_num_pnid/.test(err.constraint || ''),
+        'segundo tenant conseguiu registrar o mesmo phone_number_id'
+      );
+      await c.query('ROLLBACK');
+    } finally {
+      await c.query('BEGIN');
+      await c.query('DELETE FROM numero WHERE phone_number_id = $1', [pnid]);
+      await c.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]);
+      await c.query('COMMIT').catch(() => {});
+      await c.end();
+    }
+  });
+
 test('RLS real: toda tabela tem RLS habilitada e policy (nenhuma esquecida)',
   { skip: semBanco && 'defina TEST_DATABASE_URL para rodar (usa Postgres real)' },
   async () => {
