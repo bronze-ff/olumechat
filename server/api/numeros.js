@@ -6,7 +6,7 @@
 
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows } = require('../utils/oracleHelper');
+const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
 const { graphGet, graphPost } = require('../graph/client');
 
@@ -144,7 +144,7 @@ router.post('/', exigirPapel('ADMIN'), async (req, res, next) => {
   let conn;
   try {
     conn = await db.getConnection();
-    const { oracledb } = db;
+    const { tipos } = db;
     const ins = await conn.execute(
       `INSERT INTO MC_ZAP_NUMERO (PHONE_NUMBER_ID, DISPLAY_PHONE, NOME_EXIBICAO, DEPARTAMENTO_PADRAO_ID, CODFILIAL)
        VALUES (:p, :tel, :nome, :dep, :fil) RETURNING ID INTO :id`,
@@ -154,7 +154,7 @@ router.post('/', exigirPapel('ADMIN'), async (req, res, next) => {
         nome: b.nomeExibicao ? String(b.nomeExibicao).trim() : null,
         dep: b.departamentoPadraoId ? Number(b.departamentoPadraoId) : null,
         fil: b.codfilial ? Number(b.codfilial) : null,
-        id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
       }
     );
     await conn.commit();
@@ -180,12 +180,12 @@ router.put('/:id', exigirPapel('ADMIN'), async (req, res, next) => {
   let conn;
   try {
     conn = await db.getConnection();
-    const { oracledb } = db;
+    const { tipos } = db;
     // departamentoPadraoId: null explícito limpa o roteamento (volta ao inbox geral).
     const limparDep = b.departamentoPadraoId === null;
     // Binds numéricos que podem ir NULL precisam de TIPO EXPLÍCITO: null sem tipo
     // vira CHAR no driver e o COALESCE(CHAR, NUMBER) dá ORA-00932 no Oracle.
-    const numOuNull = (v) => ({ type: oracledb.NUMBER, val: v });
+    const numOuNull = (v) => ({ type: tipos.NUMBER, val: v });
     const upd = await conn.execute(
       `UPDATE MC_ZAP_NUMERO
           SET NOME_EXIBICAO          = COALESCE(:nome, NOME_EXIBICAO),

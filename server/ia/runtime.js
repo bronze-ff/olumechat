@@ -3,7 +3,6 @@
 'use strict';
 const db = require('../db/pool');
 const { sendText } = require('../graph/sendText');
-const { codificar } = require('../utils/texto');
 const store = require('./iaConfigStore');
 const client = require('./client');
 const toolExec = require('./toolExecutor');
@@ -49,7 +48,7 @@ async function responder(conn, cv, textos) {
       await conn.execute(
         `INSERT INTO MC_ZAP_MENSAGEM (CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
          VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, SYSTIMESTAMP)`,
-        { cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt: codificar(pedaco), st: status });
+        { cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt: pedaco, st: status });
     }
   }
 }

@@ -6,9 +6,12 @@ chatbot de fluxos, bot de IA, campanhas em massa e métricas — vendida como
 serviço para empresas de qualquer segmento (farmácia, RH, clínica, varejo).
 
 > ⚠️ **Estado atual: fork em porte.** O código veio do `mc-atendimentos`, um
-> sistema on-prem single-tenant que rodava em Oracle acoplado ao ERP WinThor.
-> O acoplamento com o cliente original **já foi removido** (ver "O que saiu"),
-> mas o porte para Postgres/Neon e a multi-tenancy **ainda não foram feitos**.
+> sistema on-prem single-tenant, e o acoplamento com o cliente original **já
+> foi removido** (ver "O que saiu"). A **fundação Postgres/Neon já está de
+> pé**: schema multi-tenant com RLS, pool `pg`, helper de binds e
+> `comTenant()`. O que ainda falta é o **porte das queries dos módulos de
+> negócio** (`api/*`, `bot/*`, `ia/*`, `fila/*`), que seguem escritas para o
+> schema antigo — por isso o sistema **ainda não roda de ponta a ponta**.
 > O que fazer, em ordem, está em [`docs/PORTE.md`](docs/PORTE.md).
 > **Não existe deploy ainda. Não rode isto em produção.**
 
@@ -45,11 +48,11 @@ serviço para empresas de qualquer segmento (farmácia, RH, clínica, varejo).
 
 ## Stack
 
-| Camada | Hoje (herdado) | Alvo |
+| Camada | Hoje | Alvo |
 |---|---|---|
 | Backend | Node.js 18+ · Express | igual |
-| Banco | **Oracle** (node-oracledb thick) | **PostgreSQL no [Neon](https://neon.com)** (`pg`) |
-| Tenancy | nenhuma (single-tenant) | **shared schema + RLS**, `tenant_id` em tudo |
+| Banco | **PostgreSQL no [Neon](https://neon.com)** (`pg`) | igual |
+| Tenancy | **shared schema + RLS**, `tenant_id` em tudo | igual (queries dos módulos ainda a portar) |
 | Frontend | React 18 · Vite 5 · Tailwind 3 | igual |
 | Auth | JWT HS256 + blacklist de `jti` | igual, com login próprio |
 | Tempo real | SSE + EventEmitter **in-process** | barramento externo (ver PORTE) |
@@ -83,11 +86,50 @@ contra uma tabela do ERP antigo, os nomes de tabela são `MC_ZAP_*`, e
 
 ---
 
+## Banco de dados
+
+Schema em `server/db/migrations/` — numerado, idempotente e **nunca editado
+depois de aplicado**. Mudança de schema é migração nova.
+
+```bash
+cd server
+cp .env.example .env          # preencha DATABASE_URL (string POOLED do Neon)
+npm run migrar                # aplica db/migrations/ em ordem
+```
+
+Para DDL prefira a connection string **direta** (host sem `-pooler`), via
+`MIGRATION_DATABASE_URL`.
+
+### Como falar com o banco
+
+Toda query de dados de tenant passa por `comTenant()`. Os binds continuam
+nomeados (`:nome`) como no código herdado — `server/db/sql.js` traduz para os
+posicionais (`$1`) do `pg`:
+
+```js
+const { comTenant } = require('./db/pool');
+
+const conversas = await comTenant(req.tenantId, async (conn) => {
+  const r = await conn.execute(
+    'SELECT id, protocolo FROM conversa WHERE fila_status = :st',
+    { st: 'aguardando' }
+  );
+  return r.rows;               // só linhas do tenant corrente
+});
+```
+
+`comTenant()` abre a transação, assume o papel de aplicação e seta o tenant com
+`set_config('app.current_tenant_id', $1, true)` — **transaction-scoped**, pois
+o pooler do Neon roda PgBouncer em *transaction mode* e uma configuração de
+sessão vazaria o tenant para a requisição seguinte. Detalhes e a armadilha
+completa no topo de [`server/db/pool.js`](server/db/pool.js); o isolamento tem
+teste dedicado em `server/test/db-tenant.test.js`.
+
 ## Referência
 
-`docs/referencia/schema-oracle/` guarda a DDL Oracle original. **Não é para
-rodar** — é a fonte de verdade do modelo de dados enquanto o schema Postgres é
-escrito.
+`docs/referencia/schema-oracle/` guarda a DDL Oracle original do fork. **Não é
+para rodar** — ficou como fonte histórica do modelo de dados; o schema vigente
+é o de `server/db/migrations/`.
 
 ## Desenvolvimento
 
@@ -95,5 +137,8 @@ escrito.
 cd server && npm install && npm test    # node:test
 cd client && npm install && npm run dev
 ```
+
+Os testes de RLS contra Postgres real só rodam com `TEST_DATABASE_URL` no
+ambiente; sem ela são pulados e a suíte segue verde.
 
 Convenções de branch, commit, PR e review: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).

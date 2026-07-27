@@ -9,8 +9,7 @@
 
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows } = require('../utils/oracleHelper');
-const { codificar, decodificar } = require('../utils/texto');
+const { mapRows } = require('../utils/linhas');
 const { acharClientePorTelefone, dadosClienteWinthor } = require('../utils/clienteLookup');
 const { publish } = require('../realtime/hub');
 
@@ -69,11 +68,11 @@ function montarFicha(row) {
   return {
     id: row.ID,
     telefone: row.TELEFONE,
-    nomePerfil: decodificar(row.NOME_PERFIL),
-    nomeInterno: decodificar(row.NOME_INTERNO),
+    nomePerfil: row.NOME_PERFIL,
+    nomeInterno: row.NOME_INTERNO,
     codcli: row.CODCLI || null,
     cgcent: row.CGCENT || null,
-    observacoes: decodificar(row.OBSERVACOES),
+    observacoes: row.OBSERVACOES,
     tags: row.TAGS_CONTATO ? JSON.parse(row.TAGS_CONTATO) : [],
     atualizadoPor: row.ATUALIZADO_POR_NOME || null,
     atualizadoEm: row.ATUALIZADO_EM || null,
@@ -121,7 +120,7 @@ router.put('/:id', naoAuditor, async (req, res, next) => {
   let conn;
   try {
     conn = await db.getConnection();
-    const { oracledb } = db;
+    const { tipos } = db;
     if (!(await contatoNoEscopo(conn, id, req.perfil))) {
       return res.status(404).json({ error: 'Contato não encontrado' });
     }
@@ -140,10 +139,10 @@ router.put('/:id', naoAuditor, async (req, res, next) => {
               ATUALIZADO_EM  = SYSTIMESTAMP
         WHERE ID = :id`,
       {
-        ni: codificar(nomeInterno),
-        obs: codificar(observacoes),
-        cgc: { type: oracledb.STRING, val: cgcent },
-        cod: { type: oracledb.NUMBER, val: codcli },
+        ni: nomeInterno,
+        obs: observacoes,
+        cgc: { type: tipos.STRING, val: cgcent },
+        cod: { type: tipos.NUMBER, val: codcli },
         tags: tags.length ? JSON.stringify(tags) : null,
         atd: req.perfil ? req.perfil.atendenteId : null,
         id,

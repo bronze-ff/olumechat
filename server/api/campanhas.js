@@ -5,9 +5,8 @@
 
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows } = require('../utils/oracleHelper');
+const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
-const { codificar, decodificar, jsonAscii } = require('../utils/texto');
 const { normalizar, variantes } = require('../utils/telefone');
 const segmento = require('../campanha/segmento');
 const dispatcher = require('../campanha/dispatcher');
@@ -36,7 +35,7 @@ router.get('/', async (req, res, next) => {
          FROM MC_ZAP_CAMPANHA c LEFT JOIN MC_ZAP_NUMERO n ON n.ID = c.NUMERO_ID
         ORDER BY c.ID DESC`
     );
-    res.json(mapRows(r.rows).map((c) => ({ ...c, nome: decodificar(c.nome) })));
+    res.json(mapRows(r.rows));
   } catch (err) { next(err); } finally { if (conn) await conn.close().catch(() => {}); }
 });
 
@@ -54,7 +53,7 @@ router.get('/:id', async (req, res, next) => {
     if (!r.rows.length) return res.status(404).json({ error: 'Campanha não encontrada' });
     const row = r.rows[0];
     res.json({
-      id: row.ID, nome: decodificar(row.NOME), status: row.STATUS, numeroId: row.NUMERO_ID,
+      id: row.ID, nome: row.NOME, status: row.STATUS, numeroId: row.NUMERO_ID,
       templateNome: row.TEMPLATE_NOME, lang: row.LANG, segmento: parseSegmento(await lerClob(row.SEGMENTO)),
       total: row.TOTAL, enviados: row.ENVIADOS, ratePorSeg: row.RATE_POR_SEG,
       janelaInicio: row.JANELA_INICIO, janelaFim: row.JANELA_FIM, pausaMotivo: row.PAUSA_MOTIVO,
@@ -80,17 +79,17 @@ router.post('/', async (req, res, next) => {
   let conn;
   try {
     conn = await db.getConnection();
-    const { oracledb } = db;
+    const { tipos } = db;
     const ins = await conn.execute(
       `INSERT INTO MC_ZAP_CAMPANHA
          (NOME, NUMERO_ID, TEMPLATE_NOME, LANG, SEGMENTO, RATE_POR_SEG, JANELA_INICIO, JANELA_FIM, CRIADO_POR)
        VALUES (:nome, :num, :tpl, :lang, :seg, :rate, :ji, :jf, :atd) RETURNING ID INTO :id`,
       {
-        nome: codificar(v.nome), num: b.numeroId ? Number(b.numeroId) : null,
-        tpl: b.templateNome || null, lang: b.lang || 'pt_BR', seg: jsonAscii(v.seg),
+        nome: v.nome, num: b.numeroId ? Number(b.numeroId) : null,
+        tpl: b.templateNome || null, lang: b.lang || 'pt_BR', seg: JSON.stringify(v.seg),
         rate: Number(b.ratePorSeg) || 10, ji: b.janelaInicio || '08:00', jf: b.janelaFim || '20:00',
         atd: (req.perfil && req.perfil.atendenteId) || null, // trilha de autoria
-        id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
       }
     );
     await conn.commit();
@@ -119,8 +118,8 @@ router.put('/:id', async (req, res, next) => {
               RATE_POR_SEG = :rate, JANELA_INICIO = :ji, JANELA_FIM = :jf, ATUALIZADO_EM = SYSTIMESTAMP
         WHERE ID = :id`,
       {
-        nome: codificar(v.nome), num: b.numeroId ? Number(b.numeroId) : null,
-        tpl: b.templateNome || null, lang: b.lang || 'pt_BR', seg: jsonAscii(v.seg),
+        nome: v.nome, num: b.numeroId ? Number(b.numeroId) : null,
+        tpl: b.templateNome || null, lang: b.lang || 'pt_BR', seg: JSON.stringify(v.seg),
         rate: Number(b.ratePorSeg) || 10, ji: b.janelaInicio || '08:00', jf: b.janelaFim || '20:00', id,
       }
     );
@@ -191,7 +190,7 @@ router.post('/:id/preparar', async (req, res, next) => {
         await conn.execute(
           `INSERT INTO MC_ZAP_CAMPANHA_ITEM (CAMPANHA_ID, TELEFONE, VARIAVEIS, STATUS)
            VALUES (:cid, :tel, :vars, 'pendente')`,
-          { cid: id, tel, vars: jsonAscii(vars) }
+          { cid: id, tel, vars: JSON.stringify(vars) }
         );
         inseridos++;
       } catch (e) {
@@ -318,7 +317,7 @@ router.get('/:id/itens', async (req, res, next) => {
       { ...binds, off: (pagina - 1) * POR_PAGINA, lim: POR_PAGINA });
     res.json({
       total: total.rows[0].QTD, pagina, porPagina: POR_PAGINA,
-      itens: mapRows(rows.rows).map((r) => ({ ...r, nomePerfil: decodificar(r.nomePerfil) })),
+      itens: mapRows(rows.rows),
     });
   } catch (err) { next(err); } finally { if (conn) await conn.close().catch(() => {}); }
 });
@@ -360,7 +359,7 @@ router.get('/:id/itens/export.csv', async (req, res, next) => {
     const linhas = [cab.join(';')];
     for (const r of rows.rows) {
       linhas.push([
-        decodificar(r.NOME_PERFIL), r.TELEFONE, ROTULO_STATUS[r.STATUS] || r.STATUS, r.ERRO_CODIGO,
+        r.NOME_PERFIL, r.TELEFONE, ROTULO_STATUS[r.STATUS] || r.STATUS, r.ERRO_CODIGO,
         r.ENVIADO_EM ? new Date(r.ENVIADO_EM).toLocaleString('pt-BR') : '',
         r.CUSTO != null ? Number(r.CUSTO).toFixed(2).replace('.', ',') : '',
       ].map(csvEscape).join(';'));

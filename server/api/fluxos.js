@@ -5,10 +5,9 @@
 
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows } = require('../utils/oracleHelper');
+const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
 const engine = require('../bot/engine');
-const { jsonAscii } = require('../utils/texto');
 
 const router = express.Router();
 
@@ -73,14 +72,14 @@ router.post('/', exigirPapel('ADMIN'), async (req, res, next) => {
   let conn;
   try {
     conn = await db.getConnection();
-    const { oracledb } = db;
+    const { tipos } = db;
     const ins = await conn.execute(
       `INSERT INTO MC_ZAP_FLUXO (NOME, NUMERO_ID, DEFINICAO)
        VALUES (:n, :num, :def) RETURNING ID INTO :id`,
       {
         n: nome, num: b.numeroId ? Number(b.numeroId) : null,
-        def: jsonAscii(b.definicao),
-        id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+        def: JSON.stringify(b.definicao),
+        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
       }
     );
     await conn.commit();
@@ -116,7 +115,7 @@ router.put('/:id', exigirPapel('ADMIN'), async (req, res, next) => {
     } else if (b.numeroId) {
       sets.push('NUMERO_ID = :num'); binds.num = Number(b.numeroId);
     }
-    if (b.definicao) { sets.push('DEFINICAO = :def'); binds.def = jsonAscii(b.definicao); }
+    if (b.definicao) { sets.push('DEFINICAO = :def'); binds.def = JSON.stringify(b.definicao); }
 
     const upd = await conn.execute(
       `UPDATE MC_ZAP_FLUXO SET ${sets.join(', ')} WHERE ID = :id`,

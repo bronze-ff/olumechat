@@ -4,9 +4,8 @@
 
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows } = require('../utils/oracleHelper');
+const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
-const { decodificar } = require('../utils/texto');
 
 const router = express.Router();
 
@@ -103,7 +102,7 @@ router.get('/', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req, res, 
       total: total.rows[0].QTD,
       pagina,
       porPagina,
-      itens: mapRows(rows.rows).map((r) => ({ ...r, nomePerfil: decodificar(r.nomePerfil), ultimaMsg: decodificar(r.ultimaMsg) })),
+      itens: mapRows(rows.rows).map((r) => ({ ...r, nomePerfil: r.nomePerfil, ultimaMsg: r.ultimaMsg })),
     });
   } catch (err) {
     next(err);
@@ -143,12 +142,12 @@ router.get('/export.csv', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (
     const linhas = [cab.join(';')];
     for (const r of rows.rows) {
       linhas.push([
-        r.PROTOCOLO, r.FILA_STATUS, r.ORIGEM, decodificar(r.NOME_PERFIL), r.TELEFONE, r.CODCLI,
+        r.PROTOCOLO, r.FILA_STATUS, r.ORIGEM, r.NOME_PERFIL, r.TELEFONE, r.CODCLI,
         r.DEPARTAMENTO, r.ATENDENTE,
         r.CRIADO_EM ? new Date(r.CRIADO_EM).toLocaleString('pt-BR') : '',
         r.ATRIBUIDA_EM ? new Date(r.ATRIBUIDA_EM).toLocaleString('pt-BR') : '',
         r.RESOLVIDA_EM ? new Date(r.RESOLVIDA_EM).toLocaleString('pt-BR') : '',
-        decodificar(r.ULTIMA_MSG),
+        r.ULTIMA_MSG,
       ].map(csvEscape).join(';'));
     }
     res.send('﻿' + linhas.join('\r\n')); // BOM p/ Excel abrir com acentos

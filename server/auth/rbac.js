@@ -51,14 +51,14 @@ async function carregarPerfil(matricula, nome) {
       // de volta pra ADMIN. (Proteção contra trancar o último admin fica no
       // PUT /api/atendentes.)
     } else {
-      const { oracledb } = db;
+      const { tipos } = db;
       papel = diretores().includes(key) ? 'ADMIN' : 'ATENDENTE';
       ativo = true;
       const ins = await conn.execute(
         `INSERT INTO MC_ZAP_ATENDENTE (MATRICULA, NOME, PAPEL)
          VALUES (:m, :n, :p) RETURNING ID INTO :id`,
         { m: matricula, n: nome || null, p: papel,
-          id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT } }
+          id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
       );
       await conn.commit();
       atendenteId = ins.outBinds.id[0];

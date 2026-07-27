@@ -7,7 +7,6 @@
 // FETCH do próprio admin) — mesma técnica do GET /api/conversas.
 'use strict';
 
-const { decodificar } = require('../utils/texto');
 
 class SegmentoInvalido extends Error {}
 
@@ -65,7 +64,7 @@ async function rodarPreview(conn, sqlBruto, params, limite = 50) {
   return r.rows.map((row) => {
     const o = {};
     for (const [col, val] of Object.entries(row)) {
-      o[col.toLowerCase()] = val == null ? null : decodificar(String(val));
+      o[col.toLowerCase()] = val == null ? null : String(val);
     }
     return o;
   });
@@ -80,7 +79,7 @@ async function rodarCompleto(conn, sqlBruto, params) {
   return r.rows.map((row) => {
     const o = {};
     for (const [col, val] of Object.entries(row)) {
-      o[col.toLowerCase()] = val == null ? null : decodificar(String(val));
+      o[col.toLowerCase()] = val == null ? null : String(val);
     }
     return o;
   });

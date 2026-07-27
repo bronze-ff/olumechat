@@ -5,8 +5,7 @@
 
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows } = require('../utils/oracleHelper');
-const { codificar, decodificar } = require('../utils/texto');
+const { mapRows } = require('../utils/linhas');
 
 const router = express.Router();
 
@@ -46,7 +45,7 @@ router.get('/', async (req, res, next) => {
     for (const row of mapRows(r.rows)) {
       rows.push({
         ...row,
-        conteudo: decodificar(await lerClob(row.conteudo)),
+        conteudo: await lerClob(row.conteudo),
         meu: row.criadoPor === perfil.atendenteId,
       });
     }
@@ -80,16 +79,16 @@ router.post('/', async (req, res, next) => {
   let conn;
   try {
     conn = await db.getConnection();
-    const { oracledb } = db;
+    const { tipos } = db;
     const ins = await conn.execute(
       `INSERT INTO MC_ZAP_RESPOSTA_RAPIDA (ATALHO, TITULO, CONTEUDO, ESCOPO, DEPARTAMENTO_ID, CRIADO_POR)
        VALUES (:a, :t, :c, :e, :d, :por) RETURNING ID INTO :id`,
       {
         a: atalho,
-        t: b.titulo ? codificar(String(b.titulo).trim().slice(0, 120)) : null,
-        c: codificar(conteudo),
+        t: b.titulo ? String(b.titulo).trim().slice(0, 120) : null,
+        c: conteudo,
         e: escopo, d: departamentoId, por: perfil.atendenteId,
-        id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
       }
     );
     await conn.commit();

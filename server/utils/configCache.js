@@ -3,7 +3,6 @@
 // banco por minuto, não por mensagem. Recebe a conexão já aberta do chamador.
 'use strict';
 
-const { decodificar } = require('./texto');
 
 const TTL_MS = 60_000;
 let cache = null;
@@ -14,7 +13,7 @@ async function lerConfig(conn) {
   try {
     const r = await conn.execute(`SELECT CHAVE, VALOR FROM MC_ZAP_CONFIG`);
     const out = {};
-    for (const row of r.rows) out[row.CHAVE] = decodificar(row.VALOR);
+    for (const row of r.rows) out[row.CHAVE] = row.VALOR;
     cache = out;
     exp = Date.now() + TTL_MS;
     return out;

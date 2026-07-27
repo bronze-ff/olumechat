@@ -6,7 +6,6 @@
 const express = require('express');
 const db = require('../db/pool');
 const { exigirPapel } = require('../auth/rbac');
-const { codificar, decodificar } = require('../utils/texto');
 
 const router = express.Router();
 
@@ -21,7 +20,7 @@ router.get('/', async (req, res, next) => {
     conn = await db.getConnection();
     const r = await conn.execute(`SELECT CHAVE, VALOR FROM MC_ZAP_CONFIG`);
     const out = {};
-    for (const row of r.rows) out[row.CHAVE] = decodificar(row.VALOR);
+    for (const row of r.rows) out[row.CHAVE] = row.VALOR;
     res.json(out);
   } catch (err) {
     next(err);
@@ -45,7 +44,7 @@ router.put('/', exigirPapel('ADMIN'), async (req, res, next) => {
             ON (c.CHAVE = n.CHAVE)
           WHEN MATCHED THEN UPDATE SET c.VALOR = :v, c.ATUALIZADO_EM = SYSTIMESTAMP
           WHEN NOT MATCHED THEN INSERT (CHAVE, VALOR) VALUES (:k2, :v2)`,
-        { k: chave, v: codificar(String(valor ?? '')).slice(0, 2000), k2: chave, v2: codificar(String(valor ?? '')).slice(0, 2000) }
+        { k: chave, v: String(valor ?? '').slice(0, 2000), k2: chave, v2: String(valor ?? '').slice(0, 2000) }
       );
     }
     await conn.execute(

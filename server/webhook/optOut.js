@@ -36,7 +36,7 @@ function classificar(txt) {
  * Persiste a mudança de opt-in/opt-out: atualiza o estado no contato e grava
  * a trilha na auditoria. Não dá commit — quem chama controla a transação.
  */
-async function registrarOpt(conn, oracledb, { contatoId, telefone, acao, origem }) {
+async function registrarOpt(conn, { contatoId, telefone, acao, origem }) {
   if (acao === 'optin') {
     await conn.execute(
       `UPDATE MC_ZAP_CONTATO SET OPTIN = 'S', OPTIN_ORIGEM = :o, OPTIN_EM = SYSTIMESTAMP
