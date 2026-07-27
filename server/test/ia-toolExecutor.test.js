@@ -55,6 +55,14 @@ test('tool desconhecida lança erro', async () => {
   await assert.rejects(() => executar({}, 'nao_existe', {}, { conhecimentoDir: '/x' }), /desconhecida/i);
 });
 
+test('corta em 100 linhas mesmo se o banco devolver mais (pool.js não implementa maxRows)', async () => {
+  const base = dirComSql('SELECT X FROM V');
+  const muitas = Array.from({ length: 250 }, (_, i) => ({ X: i }));
+  const conn = { async execute() { return { rows: muitas }; } };
+  const r = await executar(conn, 'consultar_exemplo', {}, { conhecimentoDir: base });
+  assert.equal(r.linhas.length, 100);
+});
+
 test('aceita .sql com cabeçalho comentado e NÃO passa bind que só existe em comentário', async () => {
   // Regressão: os .sql curados começam com comentário e binds em comentários viravam
   // binds fantasmas (ORA-01036). Aqui o :fantasma está só no comentário.

@@ -28,10 +28,13 @@ async function executar(conn, nomeTool, args = {}, opts = {}) {
     const nome = m[1];
     if (!(nome in binds)) binds[nome] = args[nome] !== undefined ? String(args[nome]) : null;
   }
-  // maxRows: teto de linhas para não estourar contexto do modelo nem o CLOB do
-  // histórico (ex.: inadimplência pode ter centenas de clientes).
-  const r = await conn.execute(sql, binds, { maxRows: 100 });
-  const linhas = r.rows || [];
+  // maxRows: teto de linhas para não estourar contexto do modelo nem o texto
+  // do histórico (ex.: inadimplência pode ter centenas de clientes). O
+  // node-oracledb honrava a opção no driver; o wrapper `db/pool.js` (pg) não
+  // tem equivalente — por isso o corte é feito aqui, no cliente.
+  const MAX_LINHAS = 100;
+  const r = await conn.execute(sql, binds, { maxRows: MAX_LINHAS });
+  const linhas = (r.rows || []).slice(0, MAX_LINHAS);
   const colunas = linhas.length ? Object.keys(linhas[0]) : [];
   return { colunas, linhas };
 }
