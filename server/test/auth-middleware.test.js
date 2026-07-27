@@ -120,7 +120,7 @@ test('token expirado → 401', async () => {
 });
 
 test('jti na blacklist → 401 mesmo com tenantId válido', async () => {
-  blacklist.add('revogado');
+  await blacklist.add('revogado', Math.floor(Date.now() / 1000) + 3600, { tenantId: 7 });
   const r = await req(ctx.port, '/eco', { tok: token({ jti: 'revogado', tenantId: 7, matricula: 10 }) });
   assert.equal(r.status, 401);
 });

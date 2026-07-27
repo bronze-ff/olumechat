@@ -67,7 +67,7 @@ function leituraDeSuporte(req) {
   return SUPORTE_LIBERADOS.has(caminhoDaRequisicao(req));
 }
 
-module.exports = function auth(req, res, next) {
+module.exports = async function auth(req, res, next) {
   const header = req.headers['authorization'];
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Token não informado' });
@@ -84,15 +84,19 @@ module.exports = function auth(req, res, next) {
     return res.status(401).json({ error: 'Token inválido' });
   }
 
-  if (decoded.jti && blacklist.has(decoded.jti)) {
-    return res.status(401).json({ error: 'Sessão encerrada. Faça login novamente.' });
-  }
-
   const tenantId = tenantValido(decoded.tenantId);
   if (!tenantId) {
     // Sem tenant não há fronteira. Mesma mensagem de "token inválido": o
     // cliente não precisa saber QUAL claim faltou.
     return res.status(401).json({ error: 'Token inválido' });
+  }
+
+  try {
+    if (decoded.jti && await blacklist.has(decoded.jti, { tenantId })) {
+      return res.status(401).json({ error: 'Sessão encerrada. Faça login novamente.' });
+    }
+  } catch (err) {
+    return next(err);
   }
 
   // Sessão de suporte do operador: só leitura, decidido antes de qualquer

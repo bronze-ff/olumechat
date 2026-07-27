@@ -260,9 +260,11 @@ router.post(
 // ---------------------------------------------------------------------------
 // POST /api/auth/logout — jti na blacklist (o JWT em si continua assinado).
 // ---------------------------------------------------------------------------
-router.post('/logout', auth, (req, res) => {
-  if (req.user && req.user.jti) blacklist.add(req.user.jti);
-  res.json({ ok: true });
+router.post('/logout', auth, async (req, res, next) => {
+  try {
+    if (req.user && req.user.jti) await blacklist.add(req.user.jti, req.user.exp, { tenantId: req.user.tenantId });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
 });
 
 // ---------------------------------------------------------------------------
