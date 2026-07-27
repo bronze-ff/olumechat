@@ -74,7 +74,9 @@ function montarFicha(row) {
     codigoExterno: row.CODIGO_EXTERNO || null,
     documento: row.DOCUMENTO || null,
     observacoes: row.OBSERVACOES,
-    tags: row.TAGS_CONTATO ? JSON.parse(row.TAGS_CONTATO) : [],
+    // jsonb já chega decodificado pelo driver `pg` (ver db/pool.js) — só faz
+    // parse se, por algum motivo, ainda vier como string (defensivo).
+    tags: typeof row.TAGS_CONTATO === 'string' ? JSON.parse(row.TAGS_CONTATO) : (row.TAGS_CONTATO || []),
     atualizadoPor: row.ATUALIZADO_POR_NOME || null,
     atualizadoEm: row.ATUALIZADO_EM || null,
   };
@@ -161,7 +163,7 @@ router.put('/:id', naoAuditor, async (req, res, next) => {
       return true;
     });
     if (!encontrado) return res.status(404).json({ error: 'Contato não encontrado' });
-    publish({ tipo: 'contato', contatoId: id });
+    publish({ tipo: 'contato', contatoId: id, tenantId: req.tenantId });
     res.json({ ok: true });
   } catch (err) {
     next(err);

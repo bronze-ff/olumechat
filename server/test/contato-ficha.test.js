@@ -131,3 +131,20 @@ test('GET /contatos/:id: contato inexistente → 404', async () => {
     assert.equal(r.status, 404);
   } finally { server.close(); }
 });
+
+// REGRESSÃO: o driver `pg` já decodifica jsonb pra array/objeto JS — chamar
+// JSON.parse em cima de novo lança ("Unexpected token o in JSON" pro array
+// virar "[object Object]" antes, ou explode direto pro array/objeto real).
+test('GET /contatos/:id: TAGS_CONTATO já vem decodificado (array) do driver — não relança JSON.parse', async () => {
+  const contato = {
+    ID: 5, TELEFONE: '5562999990000', NOME_PERFIL: null, NOME_INTERNO: null,
+    CODIGO_EXTERNO: null, DOCUMENTO: null, OBSERVACOES: null,
+    TAGS_CONTATO: [1, 2, 3], ATUALIZADO_EM: null, ATUALIZADO_POR_NOME: null,
+  };
+  const { server, port } = await app(fakeConn({ contato }));
+  try {
+    const r = await req(port, 'GET', '/api/contatos/5');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.tags, [1, 2, 3]);
+  } finally { server.close(); }
+});

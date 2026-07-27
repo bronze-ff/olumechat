@@ -254,29 +254,30 @@ async function safeDownload(mediaObj) {
   }
 }
 
-/** Insere mensagem recebida (mídia embutida); ignora duplicados (dedup por WAMID). */
+/** Insere mensagem recebida (mídia embutida); ignora duplicados (dedup por WAMID).
+    ON CONFLICT DO NOTHING em vez de capturar 23505: um erro de verdade deixaria a
+    transação em estado abortado no Postgres (25P02) até o ROLLBACK — as PRÓXIMAS
+    mensagens do MESMO change (mesma transação tenant-scoped) parariam de gravar
+    silenciosamente. Redelivery da Meta (webhook reenviado) precisa continuar
+    idempotente sem envenenar o resto do lote. */
 async function insertInbound(conn, m) {
   const media = m.media || {};
-  try {
-    await conn.execute(
-      `INSERT INTO mensagem
-         (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, ts,
-          media_id, mime_type, nome_arquivo, midia_caminho, midia_tamanho, midia_sha256)
-       VALUES (:cv, :ct, :num, :wamid, 'in', :tipo, :cont, :ts,
-          :mediaId, :mime, :nome, :cam, :tam, :sha)`,
-      {
-        cv: m.conversaId, ct: m.contatoId, num: m.numeroId,
-        wamid: m.wamid, tipo: m.tipo, cont: m.conteudo, ts: m.ts,
-        mediaId: media.mediaId || null, mime: media.mime || null,
-        nome: media.filename || null, cam: media.caminho || null,
-        tam: media.size || null, sha: media.sha256 || null,
-      }
-    );
-    return true;
-  } catch (err) {
-    if (err.code === PG_UNIQUE_VIOLATION) return false; // duplicado — ok
-    throw err;
-  }
+  const r = await conn.execute(
+    `INSERT INTO mensagem
+       (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, ts,
+        media_id, mime_type, nome_arquivo, midia_caminho, midia_tamanho, midia_sha256)
+     VALUES (:cv, :ct, :num, :wamid, 'in', :tipo, :cont, :ts,
+        :mediaId, :mime, :nome, :cam, :tam, :sha)
+     ON CONFLICT (tenant_id, wamid) DO NOTHING`,
+    {
+      cv: m.conversaId, ct: m.contatoId, num: m.numeroId,
+      wamid: m.wamid, tipo: m.tipo, cont: m.conteudo, ts: m.ts,
+      mediaId: media.mediaId || null, mime: media.mime || null,
+      nome: media.filename || null, cam: media.caminho || null,
+      tam: media.size || null, sha: media.sha256 || null,
+    }
+  );
+  return Boolean(r.rowsAffected);
 }
 
 // Status da Meta → status do item de campanha.
@@ -361,7 +362,7 @@ async function enviarAvisoForaHorario(evt) {
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: evt.texto }
       );
     });
-    publish({ tipo: 'mensagem', direcao: 'out', conversaId: evt.conversaId, contatoId: evt.contatoId });
+    publish({ tipo: 'mensagem', direcao: 'out', conversaId: evt.conversaId, contatoId: evt.contatoId, tenantId: evt.tenantId });
   } catch (err) {
     console.error('[webhook] persistência do aviso fora de horário falhou:', err.message);
   }
@@ -630,10 +631,10 @@ async function processPayload(payload) {
   for (const evt of eventosGlobais) {
     if (evt.tipo === 'bot_iniciar') { runtime.iniciarFluxo(evt.tenantId, evt.conversaId); continue; }
     if (evt.tipo === 'bot_entrada') { runtime.processarEntrada(evt.tenantId, evt.conversaId, evt.texto); continue; }
-    if (evt.tipo === 'ia_entrada') { require('../ia/runtime').processarEntrada(evt.conversaId, evt.texto); continue; }
+    if (evt.tipo === 'ia_entrada') { require('../ia/runtime').processarEntrada(evt.tenantId, evt.conversaId, evt.texto); continue; }
     if (evt.tipo === 'encerrar_cliente') {
       confirmarEncerramento(evt); // envia a confirmação fora da tx (isolado)
-      publish({ tipo: 'conversa', conversaId: evt.conversaId, departamentoId: evt.departamentoId });
+      publish({ tipo: 'conversa', conversaId: evt.conversaId, departamentoId: evt.departamentoId, tenantId: evt.tenantId });
       continue;
     }
     if (evt.tipo === 'fora_horario') { enviarAvisoForaHorario(evt); continue; }

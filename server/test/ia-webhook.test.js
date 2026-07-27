@@ -39,22 +39,25 @@ const aguardar = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 
 test('conversa nova em número MODO=ia entra em FILA_STATUS=ia e JÁ chama o runtime na 1ª msg', async () => {
   const conn = fakeConn(null); db.getConnection = async () => conn;
-  let chamado = null; iaRuntime.processarEntrada = async (id, texto) => { chamado = { id, texto }; };
+  // FIL-63: ia/runtime.processarEntrada passa a receber (tenantId, conversaId, texto).
+  let chamado = null; iaRuntime.processarEntrada = async (tenantId, id, texto) => { chamado = { tenantId, id, texto }; };
   await processPayload(payload('vendas de ontem?'));
   await aguardar();
   const ins = conn.cap.find((c) => c.sql.startsWith('INSERT INTO conversa'));
   assert.equal(ins.binds.fst, 'ia');
   // A 1ª mensagem já é a pergunta — o runtime TEM que ser acionado (regressão:
   // antes exigia !conversa.criada e engolia a primeira mensagem, sem resposta).
+  assert.equal(chamado && chamado.tenantId, 1);
   assert.equal(chamado && chamado.id, 88);
   assert.match(chamado.texto, /vendas/);
 });
 
 test('mensagem em conversa ia chama o runtime de IA', async () => {
   const conn = fakeConn({ ID: 88, DEPARTAMENTO_ID: null, FILA_STATUS: 'ia' }); db.getConnection = async () => conn;
-  let chamado = null; iaRuntime.processarEntrada = async (id, texto) => { chamado = { id, texto }; };
+  let chamado = null; iaRuntime.processarEntrada = async (tenantId, id, texto) => { chamado = { tenantId, id, texto }; };
   await processPayload(payload('inadimplência da filial 2'));
   await aguardar();
+  assert.equal(chamado.tenantId, 1);
   assert.equal(chamado.id, 88);
   assert.match(chamado.texto, /inadimpl/);
 });

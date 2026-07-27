@@ -27,6 +27,28 @@ class RespostaHttp extends Error {
   }
 }
 
+/**
+ * Roda `fn` isolado num SAVEPOINT da transação corrente. Usado nos loops de
+ * ação em lote (forçar-transferir/forçar-finalizar): sem isso, um erro de
+ * verdade num item deixa a transação Postgres inteira ABORTADA (25P02) — todo
+ * item SEGUINTE do lote falharia também, mas pelo motivo errado (a resposta
+ * `{ ok, erros }` prometeria partial-success que não aconteceu de verdade). O
+ * catch do chamador continua tratando "não encontrada"/"já resolvida" como
+ * skip normal (função devolve sem lançar); só erro de verdade dá ROLLBACK TO
+ * SAVEPOINT antes de propagar.
+ */
+async function comSavepoint(conn, fn) {
+  await conn.execute('SAVEPOINT lote_item');
+  try {
+    const resultado = await fn();
+    await conn.execute('RELEASE SAVEPOINT lote_item');
+    return resultado;
+  } catch (err) {
+    await conn.execute('ROLLBACK TO SAVEPOINT lote_item').catch(() => {});
+    throw err;
+  }
+}
+
 /** Bloqueia AUDITOR (papel SOMENTE-LEITURA) nas rotas de mutação. ADMIN/SUPERVISOR/
     ATENDENTE seguem; demais checagens (escopo, podeAtivo, gestor) continuam valendo. */
 function naoAuditor(req, res, next) {
@@ -248,7 +270,7 @@ router.post('/', naoAuditor, async (req, res, next) => {
       return { id: conversaId, contatoId, telefone, departamentoId: departamentoId || null, wamid };
     });
 
-    publish({ tipo: 'mensagem', direcao: 'out', conversaId: resultado.id, contatoId: resultado.contatoId, departamentoId: resultado.departamentoId });
+    publish({ tipo: 'mensagem', direcao: 'out', conversaId: resultado.id, contatoId: resultado.contatoId, departamentoId: resultado.departamentoId, tenantId: req.tenantId });
     res.status(201).json(resultado);
   } catch (err) {
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
@@ -529,7 +551,7 @@ router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
 
     publish({
       tipo: 'mensagem', direcao: 'out', conversaId: resultado.conversaId, contatoId: resultado.contatoId,
-      departamentoId: resultado.departamentoId,
+      departamentoId: resultado.departamentoId, tenantId: req.tenantId,
     });
     res.status(201).json(mapRow({
       ID: resultado.msgId, DIRECAO: 'out', TIPO: 'text',
@@ -663,7 +685,7 @@ router.post('/:id/arquivos', naoAuditor, (req, res, next) => {
 
     publish({
       tipo: 'mensagem', direcao: 'out', conversaId: resultado.conversaId, contatoId: resultado.contatoId,
-      departamentoId: resultado.departamentoId,
+      departamentoId: resultado.departamentoId, tenantId: req.tenantId,
     });
     res.status(201).json({ id: resultado.id, tipo: resultado.tipo, nomeArquivo: resultado.nomeArquivo, wamid: resultado.wamid });
   } catch (err) {
@@ -709,7 +731,7 @@ router.post('/:id/notas', naoAuditor, async (req, res, next) => {
       return { msgId: ins.outBinds.id[0] };
     });
 
-    publish({ tipo: 'mensagem', direcao: 'nota', conversaId: id });
+    publish({ tipo: 'mensagem', direcao: 'nota', conversaId: id, tenantId: req.tenantId });
     res.status(201).json(mapRow({
       ID: resultado.msgId, DIRECAO: 'nota', TIPO: 'text', CONTEUDO: texto, TS: new Date(),
     }));
@@ -738,7 +760,7 @@ router.put('/:id/tags', naoAuditor, async (req, res, next) => {
       );
       if (!upd.rowsAffected) throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
     });
-    publish({ tipo: 'conversa', conversaId: id });
+    publish({ tipo: 'conversa', conversaId: id, tenantId: req.tenantId });
     res.json({ id, tags });
   } catch (err) {
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
@@ -783,44 +805,46 @@ router.post('/forcar-transferir', exigirPapel('ADMIN'), async (req, res, next) =
       let okCount = 0; const errosLocais = [];
       for (const id of ids) {
         try {
-          const sel = await conn.execute(
-            `SELECT contato_id, departamento_id, atendente_id, protocolo, fila_status, status FROM conversa WHERE id = :id`, { id });
-          if (!sel.rows.length) { errosLocais.push({ id, error: 'não encontrada' }); continue; }
-          const atual = sel.rows[0];
-          // Não reabrir conversa já encerrada por engano (a seleção do Histórico pode incluir resolvidas).
-          if (atual.FILA_STATUS === 'resolvida' || atual.STATUS === 'resolvida') { errosLocais.push({ id, error: 'já resolvida' }); continue; }
-          if (paraDepto) {
-            const protocolo = atual.PROTOCOLO || await gerarProtocolo(conn);
+          await comSavepoint(conn, async () => {
+            const sel = await conn.execute(
+              `SELECT contato_id, departamento_id, atendente_id, protocolo, fila_status, status FROM conversa WHERE id = :id`, { id });
+            if (!sel.rows.length) { errosLocais.push({ id, error: 'não encontrada' }); return; }
+            const atual = sel.rows[0];
+            // Não reabrir conversa já encerrada por engano (a seleção do Histórico pode incluir resolvidas).
+            if (atual.FILA_STATUS === 'resolvida' || atual.STATUS === 'resolvida') { errosLocais.push({ id, error: 'já resolvida' }); return; }
+            if (paraDepto) {
+              const protocolo = atual.PROTOCOLO || await gerarProtocolo(conn);
+              await conn.execute(
+                `UPDATE conversa SET departamento_id = :d, atendente_id = NULL,
+                    fila_status = 'aguardando', fila_entrou_em = now(), protocolo = :prot WHERE id = :id`,
+                { d: paraDepto, prot: protocolo, id });
+              deptosAfetadosSet.add(paraDepto);
+            } else {
+              await conn.execute(
+                `UPDATE conversa SET atendente_id = :a, fila_status = 'em_atendimento', atribuida_em = now() WHERE id = :id`,
+                { a: paraAtendente, id });
+            }
             await conn.execute(
-              `UPDATE conversa SET departamento_id = :d, atendente_id = NULL,
-                  fila_status = 'aguardando', fila_entrou_em = now(), protocolo = :prot WHERE id = :id`,
-              { d: paraDepto, prot: protocolo, id });
-            deptosAfetadosSet.add(paraDepto);
-          } else {
+              `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, ts)
+               VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, now())`,
+              { cv: id, ct: atual.CONTATO_ID, atd: autorId, txt: `Transferência forçada para ${destinoTxt} por ${(req.user && req.user.nome) || 'admin'}.` });
             await conn.execute(
-              `UPDATE conversa SET atendente_id = :a, fila_status = 'em_atendimento', atribuida_em = now() WHERE id = :id`,
-              { a: paraAtendente, id });
-          }
-          await conn.execute(
-            `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, ts)
-             VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, now())`,
-            { cv: id, ct: atual.CONTATO_ID, atd: autorId, txt: `Transferência forçada para ${destinoTxt} por ${(req.user && req.user.nome) || 'admin'}.` });
-          await conn.execute(
-            `INSERT INTO auditoria (atendente_id, matricula, acao, entidade, entidade_id, detalhe)
-             VALUES (:atd, :m, 'transferencia', 'conversa', :id, :det)`,
-            { atd: autorId, m: req.user && req.user.matricula, id,
-              det: JSON.stringify({ forcada: true, deDepto: atual.DEPARTAMENTO_ID, deAtendente: atual.ATENDENTE_ID, paraDepto, paraAtendente }) });
-          eventosLocais.push({ tipo: 'transferencia', conversaId: id, departamentoId: atual.DEPARTAMENTO_ID || null });
-          if (paraDepto && paraDepto !== atual.DEPARTAMENTO_ID) eventosLocais.push({ tipo: 'transferencia', conversaId: id, departamentoId: paraDepto });
-          if (paraAtendente) eventosLocais.push({ tipo: 'transferencia', conversaId: id, atendenteId: paraAtendente, departamentoId: atual.DEPARTAMENTO_ID || null });
-          okCount += 1;
+              `INSERT INTO auditoria (atendente_id, matricula, acao, entidade, entidade_id, detalhe)
+               VALUES (:atd, :m, 'transferencia', 'conversa', :id, :det)`,
+              { atd: autorId, m: req.user && req.user.matricula, id,
+                det: JSON.stringify({ forcada: true, deDepto: atual.DEPARTAMENTO_ID, deAtendente: atual.ATENDENTE_ID, paraDepto, paraAtendente }) });
+            eventosLocais.push({ tipo: 'transferencia', conversaId: id, departamentoId: atual.DEPARTAMENTO_ID || null });
+            if (paraDepto && paraDepto !== atual.DEPARTAMENTO_ID) eventosLocais.push({ tipo: 'transferencia', conversaId: id, departamentoId: paraDepto });
+            if (paraAtendente) eventosLocais.push({ tipo: 'transferencia', conversaId: id, atendenteId: paraAtendente, departamentoId: atual.DEPARTAMENTO_ID || null });
+            okCount += 1;
+          });
         } catch (e) {
           errosLocais.push({ id, error: e.message });
         }
       }
       return { ok: okCount, total: ids.length, erros: errosLocais, eventos: eventosLocais, deptosAfetados: [...deptosAfetadosSet] };
     });
-    for (const evt of eventos) publish(evt);
+    for (const evt of eventos) publish({ ...evt, tenantId: req.tenantId });
     for (const d of deptosAfetados) distribuidor.atribuir(d);
     res.json({ ok, total, erros });
   } catch (err) {
@@ -842,24 +866,26 @@ router.post('/forcar-finalizar', exigirPapel('ADMIN'), async (req, res, next) =>
       let okCount = 0; const errosLocais = []; const eventosLocais = [];
       for (const id of ids) {
         try {
-          const sel = await conn.execute(`SELECT departamento_id, protocolo, fila_status FROM conversa WHERE id = :id`, { id });
-          if (!sel.rows.length) { errosLocais.push({ id, error: 'não encontrada' }); continue; }
-          if (sel.rows[0].FILA_STATUS === 'resolvida') { errosLocais.push({ id, error: 'já resolvida' }); continue; }
-          await conn.execute(
-            `UPDATE conversa SET status = 'resolvida', fila_status = 'resolvida', resolvida_em = now() WHERE id = :id`, { id });
-          await conn.execute(
-            `INSERT INTO auditoria (atendente_id, matricula, acao, entidade, entidade_id, detalhe)
-             VALUES (:atd, :m, 'encerramento', 'conversa', :id, :det)`,
-            { atd: autorId, m: req.user && req.user.matricula, id, det: JSON.stringify({ forcada: true, protocolo: sel.rows[0].PROTOCOLO }) });
-          eventosLocais.push({ tipo: 'conversa', conversaId: id, departamentoId: sel.rows[0].DEPARTAMENTO_ID || null });
-          okCount += 1;
+          await comSavepoint(conn, async () => {
+            const sel = await conn.execute(`SELECT departamento_id, protocolo, fila_status FROM conversa WHERE id = :id`, { id });
+            if (!sel.rows.length) { errosLocais.push({ id, error: 'não encontrada' }); return; }
+            if (sel.rows[0].FILA_STATUS === 'resolvida') { errosLocais.push({ id, error: 'já resolvida' }); return; }
+            await conn.execute(
+              `UPDATE conversa SET status = 'resolvida', fila_status = 'resolvida', resolvida_em = now() WHERE id = :id`, { id });
+            await conn.execute(
+              `INSERT INTO auditoria (atendente_id, matricula, acao, entidade, entidade_id, detalhe)
+               VALUES (:atd, :m, 'encerramento', 'conversa', :id, :det)`,
+              { atd: autorId, m: req.user && req.user.matricula, id, det: JSON.stringify({ forcada: true, protocolo: sel.rows[0].PROTOCOLO }) });
+            eventosLocais.push({ tipo: 'conversa', conversaId: id, departamentoId: sel.rows[0].DEPARTAMENTO_ID || null });
+            okCount += 1;
+          });
         } catch (e) {
           errosLocais.push({ id, error: e.message });
         }
       }
       return { ok: okCount, total: ids.length, erros: errosLocais, eventos: eventosLocais };
     });
-    for (const evt of eventos) publish(evt);
+    for (const evt of eventos) publish({ ...evt, tenantId: req.tenantId });
     res.json({ ok, total, erros });
   } catch (err) {
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
@@ -913,7 +939,7 @@ router.post('/:id/atribuir', naoAuditor, async (req, res, next) => {
     });
     publish({
       tipo: 'atribuicao', conversaId: id, atendenteId: alvoId,
-      departamentoId: resultado.departamentoId,
+      departamentoId: resultado.departamentoId, tenantId: req.tenantId,
     });
     res.json({ ok: true, atendenteId: alvoId });
   } catch (err) {
@@ -1021,7 +1047,7 @@ router.post('/:id/transferir', naoAuditor, async (req, res, next) => {
       return { eventos: eventosLocais };
     });
 
-    for (const evt of eventos) publish(evt);
+    for (const evt of eventos) publish({ ...evt, tenantId: req.tenantId });
     if (paraDepto) distribuidor.atribuir(paraDepto);
 
     res.json({ ok: true });
@@ -1087,7 +1113,7 @@ router.post('/:id/encerrar', naoAuditor, async (req, res, next) => {
       return { departamentoId: cv.DEPARTAMENTO_ID || null };
     });
 
-    publish({ tipo: 'conversa', conversaId: id, departamentoId: resultado.departamentoId });
+    publish({ tipo: 'conversa', conversaId: id, departamentoId: resultado.departamentoId, tenantId: req.tenantId });
     res.json({ ok: true });
   } catch (err) {
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
