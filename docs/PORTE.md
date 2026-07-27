@@ -139,3 +139,13 @@ Coisas que ficaram e devem sumir junto com a onda em que se encaixam:
 - `server/public/exclusao-de-dados.html` — página exigida pela Meta, ainda com
   a marca do cliente original. Regerar por tenant.
 - `.env.example` — ainda descreve variáveis single-tenant.
+- **Identidade visual** — os arquivos de marca do cliente original foram
+  removidos, mas `client/public/favicon*.{svg,png}`, `apple-touch-icon.png` e
+  `icon-{192,512}.png` **ainda são a arte antiga**. Precisam ser refeitos com a
+  identidade do Falatta (estão referenciados no `index.html` e no manifest, então
+  não podem só ser deletados). A paleta no `tailwind.config.js` também é a do
+  cliente original.
+- `server/telemetria/pulso-agent.js` — heartbeat de licença/uso que "liga pra
+  casa". É genérico (URL vem de `PULSO_URL`) e não vaza nada do cliente antigo,
+  mas num SaaS hospedado por nós é redundante: já temos os dados. Decidir se
+  vira métrica interna ou sai.
