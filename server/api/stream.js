@@ -3,6 +3,15 @@
 // GET  /api/stream?ticket= → abre o stream; repassa os eventos do hub
 //                            FILTRADOS pelo perfil (departamentos/papel) e
 //                            registra a PRESENÇA do atendente (Fase 5B).
+//
+// MULTI-TENANT: o hub (realtime/hub.js) continua um EventEmitter local sem
+// noção de tenant — quem publica evento tageia `evento.tenantId` na origem
+// (fila/distribuidor.js, realtime/presence.js) e o filtro aqui é o gate final
+// e OBRIGATÓRIO: evt.tenantId !== tenantId do assinante → descarta, sempre,
+// antes de qualquer outra regra de escopo (inclusive antes do bypass de
+// ADMIN/AUDITOR em podeReceber — "vê tudo" nunca pode significar "vê tudo de
+// todo mundo"). Fail-closed: evento sem tenantId (publicador ainda não
+// portado) também é descartado, nunca vaza por omissão.
 'use strict';
 
 const express = require('express');
@@ -53,6 +62,15 @@ router.get('/', async (req, res) => {
     return res.status(500).json({ error: 'Falha ao carregar perfil' });
   }
 
+  let tenantId;
+  try {
+    tenantId = await presence.tenantDoAtendente(perfil.atendenteId);
+  } catch (err) {
+    console.error('[stream] falha ao resolver tenant:', err.message);
+    return res.status(500).json({ error: 'Falha ao resolver tenant' });
+  }
+  if (!tenantId) return res.status(401).json({ error: 'Atendente sem tenant associado' });
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -63,6 +81,7 @@ router.get('/', async (req, res) => {
   res.write('event: ready\ndata: {}\n\n'); // sinaliza conexão pronta
 
   const enviar = (evt) => {
+    if (evt.tenantId !== tenantId) return; // isolamento de tenant — nunca vaza (ver cabeçalho)
     if (podeReceber(perfil, evt)) res.write(`data: ${JSON.stringify(evt)}\n\n`);
   };
   const cancelar = subscribe(enviar);
@@ -70,6 +89,7 @@ router.get('/', async (req, res) => {
   // Presença: conexão SSE conta como "online" (pausa persistida no banco).
   presence.conectar({
     atendenteId: perfil.atendenteId,
+    tenantId,
     deptoIds: perfil.deptoIds,
     numeroIds: perfil.numeroIds,
     matricula: user.matricula,
@@ -89,3 +109,4 @@ router.get('/', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.podeReceber = podeReceber; // uso em teste

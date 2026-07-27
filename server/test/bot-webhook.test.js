@@ -52,7 +52,7 @@ function fakeConn({ conversaExistente = null, botState = null, capturas = [] }) 
       if (sql.includes('FROM MC_ZAP_CONVERSA')) {
         return { rows: conversaExistente ? [conversaExistente] : [] };
       }
-      if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260610100077' }] };
+      if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100077' }] };
       if (sql.startsWith('INSERT INTO MC_ZAP_CONVERSA')) return { outBinds: { id: [88] } };
       return { rows: [], outBinds: { id: [1] }, rowsAffected: 1 };
     },

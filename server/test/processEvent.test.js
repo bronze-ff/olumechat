@@ -43,7 +43,7 @@ function fakeConn({ deptoDoNumero = null, conversaExistente = null, capturas = [
       if (sql.includes('FROM MC_ZAP_CONVERSA')) {
         return { rows: conversaExistente ? [conversaExistente] : [] };
       }
-      if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260610100042' }] };
+      if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100042' }] };
       if (sql.startsWith('INSERT INTO MC_ZAP_CONVERSA')) return { outBinds: { id: [70] } };
       return { rows: [], outBinds: {}, rowsAffected: 1 };
     },

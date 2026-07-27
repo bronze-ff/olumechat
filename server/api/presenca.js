@@ -52,8 +52,13 @@ router.put('/:atendenteId', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res,
   }
 });
 
-router.get('/', exigirPapel('ADMIN', 'SUPERVISOR'), (req, res) => {
-  res.json(presence.snapshot());
+router.get('/', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
+  try {
+    const tenantId = await presence.tenantDoAtendente(req.perfil.atendenteId);
+    res.json(presence.snapshot(tenantId));
+  } catch (err) {
+    next(err);
+  }
 });
 
 module.exports = router;
