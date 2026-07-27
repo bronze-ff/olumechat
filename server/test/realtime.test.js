@@ -74,3 +74,47 @@ test('hub: queda da conexão não propaga erro ao processo e tenta reconectar', 
   assert.ok(clients.length >= 3); // listener + publisher e pelo menos uma tentativa nova
   await hub.stop();
 });
+
+test('hub: queda do publicador via end reconecta e publica novamente', async () => {
+  const clients = [];
+  const notificacoes = [];
+  class FakeClient extends EventEmitter {
+    async connect() { clients.push(this); }
+    async query(sql, values) {
+      if (sql.includes('pg_notify')) notificacoes.push(values);
+    }
+    async end() {}
+  }
+  const hub = createHub({ directUrl: 'direct', clientFactory: () => new FakeClient(), retryMs: 1 });
+  await hub.start();
+  clients[1].emit('end');
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(clients.length >= 4); // listener + publisher inicial e um novo par
+  assert.equal(hub.publish({ tipo: 'mensagem', tenantId: 7 }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(notificacoes.length, 1);
+  await hub.stop();
+});
+
+test('hub: ao sair o ultimo assinante, o canal e desassinado', async () => {
+  const queries = [];
+  class FakeClient extends EventEmitter {
+    async connect() {}
+    async query(sql) { queries.push(sql); }
+    async end() {}
+  }
+  const hub = createHub({ directUrl: 'direct', clientFactory: () => new FakeClient() });
+  await hub.start();
+  const cancelar = hub.subscribe(() => {}, 7);
+  await new Promise((resolve) => setImmediate(resolve));
+  cancelar();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(queries, ['LISTEN falatta_realtime_tenant_7', 'UNLISTEN falatta_realtime_tenant_7']);
+
+  queries.length = 0;
+  const cancelarNovamente = hub.subscribe(() => {}, 7);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(queries, ['LISTEN falatta_realtime_tenant_7']);
+  cancelarNovamente();
+  await hub.stop();
+});

@@ -68,6 +68,7 @@ function createHub({ clientFactory = (connectionString) => new Client({ connecti
         console.error('[realtime] publicador indisponível:', err.message);
         caiu();
       });
+      novoPublisher.on('end', caiu);
       await novoPublisher.connect();
       publisher = novoPublisher;
     } catch (err) {
@@ -139,7 +140,12 @@ function createHub({ clientFactory = (connectionString) => new Client({ connecti
     inscritos.add(handler);
     return () => {
       inscritos.delete(handler);
-      if (!inscritos.size) tenants.delete(id);
+      if (!inscritos.size) {
+        tenants.delete(id);
+        if (listener) listener.query(`UNLISTEN ${canalDoTenant(id)}`).catch((err) => {
+          console.error('[realtime] falha ao desassinar tenant:', err.message);
+        });
+      }
     };
   }
 
