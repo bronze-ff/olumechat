@@ -20,14 +20,18 @@ async function guardar({ tenantId, accessToken, wabaId, status = 'conectada', co
 }
 
 async function resolver(phoneNumberId, tenantId) {
-  if (!phoneNumberId) return null;
+  if (!phoneNumberId && !tenantId) return null;
   const conn = await db.getConnection();
   try {
     const r = await conn.execute(
-      `SELECT n.tenant_id, n.phone_number_id, m.waba_id, m.access_token_criptografado
-         FROM numero n JOIN meta_conexao m ON m.tenant_id = n.tenant_id
-        WHERE n.phone_number_id = :phone${tenantId ? ' AND n.tenant_id = :tenantId' : ''}`,
-      tenantId ? { phone: phoneNumberId, tenantId } : { phone: phoneNumberId });
+      `SELECT m.tenant_id, n.phone_number_id, m.waba_id, m.access_token_criptografado
+         FROM meta_conexao m
+         LEFT JOIN numero n ON n.tenant_id = m.tenant_id
+        WHERE ${phoneNumberId ? 'n.phone_number_id = :phone' : 'm.tenant_id = :tenantId'}
+          ${phoneNumberId && tenantId ? 'AND n.tenant_id = :tenantId' : ''}
+        ORDER BY n.id NULLS LAST
+        FETCH FIRST 1 ROW ONLY`,
+      phoneNumberId ? (tenantId ? { phone: phoneNumberId, tenantId } : { phone: phoneNumberId }) : { tenantId });
     if (!r.rows.length) return null;
     const row = r.rows[0];
     return {

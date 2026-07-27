@@ -7,7 +7,7 @@
 // ENVIAR: upload do arquivo (gera media_id) ou envio por link hospedado.
 const fs = require('fs');
 const path = require('path');
-const { graphGet, sendMessage, cfg, BASE } = require('./client');
+const { graphGet, sendMessage, credenciais, cfg, BASE } = require('./client');
 
 const EXT_BY_MIME = {
   'image/jpeg': '.jpg',
@@ -40,15 +40,15 @@ function ensureDir(dir) {
  *   Espera { id, mime_type, sha256, filename?, caption? }.
  * @returns {Promise<object>} Metadados para gravar em MC_ZAP_MIDIA.
  */
-async function downloadMedia(mediaObj) {
+async function downloadMedia(mediaObj, phoneNumberId, tenantId) {
   const mediaId = mediaObj.id;
 
   // 1) Resolve a URL temporária do arquivo.
-  const metaRes = await graphGet(mediaId);
+  const metaRes = await graphGet(mediaId, phoneNumberId, tenantId);
   const meta = await metaRes.json();
 
   // 2) Baixa o binário (a URL exige o mesmo Bearer token).
-  const fileRes = await graphGet(meta.url);
+  const fileRes = await graphGet(meta.url, phoneNumberId, tenantId);
   const buf = Buffer.from(await fileRes.arrayBuffer());
 
   // 3) Define caminho e grava no servidor de arquivos.
@@ -86,8 +86,9 @@ async function downloadMedia(mediaObj) {
  * @param {string} mime            MIME type.
  * @param {string} [phoneNumberId] Número de origem; default = .env.
  */
-async function uploadMedia(filePath, mime, phoneNumberId) {
-  const from = phoneNumberId || cfg.phoneNumberId;
+async function uploadMedia(filePath, mime, phoneNumberId, tenantId) {
+  const c = await credenciais(phoneNumberId, tenantId);
+  const from = c.phoneNumberId;
   const data = fs.readFileSync(filePath);
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
@@ -96,7 +97,7 @@ async function uploadMedia(filePath, mime, phoneNumberId) {
 
   const res = await fetch(`${BASE}/${from}/media`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${cfg.waToken}` },
+    headers: { Authorization: `Bearer ${c.accessToken}` },
     body: form,
   });
   const json = await res.json().catch(() => ({}));
@@ -105,7 +106,7 @@ async function uploadMedia(filePath, mime, phoneNumberId) {
 }
 
 /** Envia documento (PDF de boleto, etc.) por media_id OU por link. */
-async function sendDocument(to, { id, link, filename, caption }, phoneNumberId) {
+async function sendDocument(to, { id, link, filename, caption }, phoneNumberId, tenantId) {
   const doc = {};
   if (id) doc.id = id; else if (link) doc.link = link;
   if (filename) doc.filename = filename;
@@ -113,36 +114,36 @@ async function sendDocument(to, { id, link, filename, caption }, phoneNumberId) 
   return sendMessage({
     messaging_product: 'whatsapp', recipient_type: 'individual', to,
     type: 'document', document: doc,
-  }, phoneNumberId);
+  }, phoneNumberId, tenantId);
 }
 
 /** Envia imagem por media_id OU por link. */
-async function sendImage(to, { id, link, caption }, phoneNumberId) {
+async function sendImage(to, { id, link, caption }, phoneNumberId, tenantId) {
   const img = {};
   if (id) img.id = id; else if (link) img.link = link;
   if (caption) img.caption = caption;
   return sendMessage({
     messaging_product: 'whatsapp', recipient_type: 'individual', to,
     type: 'image', image: img,
-  }, phoneNumberId);
+  }, phoneNumberId, tenantId);
 }
 
 /** Envia áudio por media_id. */
-async function sendAudio(to, { id }, phoneNumberId) {
+async function sendAudio(to, { id }, phoneNumberId, tenantId) {
   return sendMessage({
     messaging_product: 'whatsapp', recipient_type: 'individual', to,
     type: 'audio', audio: { id },
-  }, phoneNumberId);
+  }, phoneNumberId, tenantId);
 }
 
 /** Envia vídeo por media_id (legenda opcional). */
-async function sendVideo(to, { id, caption }, phoneNumberId) {
+async function sendVideo(to, { id, caption }, phoneNumberId, tenantId) {
   const vid = { id };
   if (caption) vid.caption = caption;
   return sendMessage({
     messaging_product: 'whatsapp', recipient_type: 'individual', to,
     type: 'video', video: vid,
-  }, phoneNumberId);
+  }, phoneNumberId, tenantId);
 }
 
 /** Decide o tipo da Cloud API a partir do MIME (espelha o WhatsApp). */

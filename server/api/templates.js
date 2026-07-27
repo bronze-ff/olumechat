@@ -9,7 +9,7 @@ const OCULTOS = new Set(['hello_world']);
 
 router.get('/', async (req, res) => {
   try {
-    const todos = await listApprovedTemplates();
+    const todos = await listApprovedTemplates(req.tenantId);
     res.json(todos.filter((t) => !OCULTOS.has(t.name)));
   } catch (err) {
     res.status(502).json({ error: 'Falha ao listar templates: ' + err.message });

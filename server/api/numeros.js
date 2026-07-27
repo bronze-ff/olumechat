@@ -25,7 +25,7 @@ router.get('/:id/meta-status', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, r
     });
     if (pnid === undefined) return res.status(404).json({ error: 'Número não encontrado' });
     if (!pnid) return res.status(400).json({ error: 'Número sem Phone Number ID cadastrado.' });
-    const gr = await graphGet(`${pnid}?fields=display_phone_number,verified_name,name_status,new_name_status,code_verification_status,quality_rating,status,platform_type`);
+    const gr = await graphGet(`${pnid}?fields=display_phone_number,verified_name,name_status,new_name_status,code_verification_status,quality_rating,status,platform_type`, pnid, req.tenantId);
     res.json(await gr.json());
   } catch (err) {
     const msg = err.message || '';
@@ -52,7 +52,7 @@ router.post('/:id/registrar', exigirPapel('ADMIN'), async (req, res) => {
     });
     if (pnid === undefined) return res.status(404).json({ error: 'Número não encontrado' });
     if (!pnid) return res.status(400).json({ error: 'Número sem Phone Number ID cadastrado.' });
-    await graphPost(`${pnid}/register`, { messaging_product: 'whatsapp', pin });
+    await graphPost(`${pnid}/register`, { messaging_product: 'whatsapp', pin }, pnid, req.tenantId);
     res.json({ ok: true });
   } catch (err) {
     // Repassa a mensagem real da Meta (ex.: e-mail não verificado, PIN errado) p/ o admin.

@@ -645,13 +645,13 @@ router.post('/:id/arquivos', naoAuditor, (req, res, next) => {
 
       const mime = req.file.mimetype || 'application/octet-stream';
       const tipo = tipoPorMime(mime);
-      const mediaId = await uploadMedia(caminho, mime, cv.PHONE_NUMBER_ID || undefined);
+      const mediaId = await uploadMedia(caminho, mime, cv.PHONE_NUMBER_ID || undefined, req.tenantId);
 
       let resp;
-      if (tipo === 'image') resp = await sendImage(cv.TELEFONE, { id: mediaId }, cv.PHONE_NUMBER_ID || undefined);
-      else if (tipo === 'audio') resp = await sendAudio(cv.TELEFONE, { id: mediaId }, cv.PHONE_NUMBER_ID || undefined);
-      else if (tipo === 'video') resp = await sendVideo(cv.TELEFONE, { id: mediaId }, cv.PHONE_NUMBER_ID || undefined);
-      else resp = await sendDocument(cv.TELEFONE, { id: mediaId, filename: nomeOriginal }, cv.PHONE_NUMBER_ID || undefined);
+      if (tipo === 'image') resp = await sendImage(cv.TELEFONE, { id: mediaId }, cv.PHONE_NUMBER_ID || undefined, req.tenantId);
+      else if (tipo === 'audio') resp = await sendAudio(cv.TELEFONE, { id: mediaId }, cv.PHONE_NUMBER_ID || undefined, req.tenantId);
+      else if (tipo === 'video') resp = await sendVideo(cv.TELEFONE, { id: mediaId }, cv.PHONE_NUMBER_ID || undefined, req.tenantId);
+      else resp = await sendDocument(cv.TELEFONE, { id: mediaId, filename: nomeOriginal }, cv.PHONE_NUMBER_ID || undefined, req.tenantId);
       const wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
 
       const atendenteId = await getOrCreateAtendente(conn, req.user);
