@@ -524,7 +524,7 @@ async function processChange(conn, numero, value) {
     // Ajustes): encerra o atendimento em qualquer estado (bot/fila/humano).
     let encerrouPorComando = false;
     if (!optAcao && msg.type === 'text' && msg.text) {
-      const cfgZap = await lerConfig(conn);
+      const cfgZap = await lerConfig(numero.tenantId, conn);
       const comando = String(cfgZap.comando_encerrar || '').trim();
       if (comando && normalizar(msg.text.body) === normalizar(comando)) {
         await conn.execute(
@@ -577,7 +577,7 @@ async function processChange(conn, numero, value) {
     // bot de IA respondem 24/7, então ficam de fora. Também não em
     // opt-out/encerramento.
     if (conversa.criada && conversa.filaStatus !== 'bot' && conversa.filaStatus !== 'ia' && !optAcao && !encerrouPorComando) {
-      const cfgFH = await lerConfig(conn); // cache de 60s
+      const cfgFH = await lerConfig(numero.tenantId, conn); // cache de 60s
       if (foraDeHorario(cfgFH, ts) && String(cfgFH.fora_horario_msg || '').trim()) {
         await conn.execute(
           `UPDATE conversa SET aviso_fora_horario = 'S' WHERE id = :id`, { id: conversaId });
