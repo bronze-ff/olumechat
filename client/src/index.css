@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { -webkit-tap-highlight-color: transparent; }
+  body { @apply bg-paper-200 text-stone-900 antialiased; }
+  button, a, input, select, textarea { touch-action: manipulation; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide-up { animation: none; }
+}
+
+@layer utilities {
+  .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .input-field {
+    @apply w-full bg-stone-100 border border-black/[0.08] rounded px-4 py-3 text-sm
+           text-stone-900 placeholder:text-stone-400
+           focus:outline-none focus:ring-2 focus:ring-[#1B5E7B] focus:bg-white transition-colors;
+  }
+  .section-bar { @apply shrink-0 bg-bordeaux-700; width: 4px; height: 14px; }
+  .navy-gradient { background: linear-gradient(160deg, #1B5E7B 0%, #1A5276 100%); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  /* termina em `none` (não translateY(0)): com fill-mode `both` o transform
+     persiste, e um ancestral com transform vira o "containing block" de
+     position:fixed — o que jogava os modais (ex.: Histórico) pro meio do
+     conteúdo rolável em vez de centralizar na viewport. `none` é idêntico
+     visualmente e remove esse efeito colateral. */
+  to   { opacity: 1; transform: none; }
+}
+.animate-slide-up { animation: slide-up 0.4s ease both; }
