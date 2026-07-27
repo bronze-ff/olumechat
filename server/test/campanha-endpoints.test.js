@@ -1,4 +1,5 @@
-// Testes dos endpoints de campanha: permissão, preview (read-only), preparar (dedup).
+// Testes dos endpoints de campanha: permissão, tenant, preview (read-only),
+// preparar (dedup).
 'use strict';
 
 process.env.META_APP_SECRET = 'test_app_secret';
@@ -20,11 +21,19 @@ const campanhasRoutes = require('../api/campanhas');
 
 const TOKEN = jwt.sign({ jti: 'tc1', matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
 
-function startApp(conn, perfil) {
-  db.getConnection = async () => conn;
+// `db.comTenant` é mockado para rodar `fn(conn)` direto (sem BEGIN/COMMIT real)
+// — o contrato do comTenant() em si já tem prova própria em db-tenant.test.js.
+// Aqui capturamos o tenantId recebido para provar que a rota sempre repassa
+// req.tenantId (nunca inventa um, nunca ignora).
+function startApp(conn, perfil, { tenantId = 7, capturasTenant = [] } = {}) {
+  db.comTenant = async (tid, fn) => { capturasTenant.push(tid); return fn(conn); };
   const app = express();
   app.use('/api', express.json());
-  app.use('/api/campanhas', authMiddleware, (req, res, next) => { req.perfil = perfil; next(); }, campanhasRoutes);
+  app.use('/api/campanhas', authMiddleware, (req, res, next) => {
+    req.perfil = perfil;
+    req.tenantId = tenantId;
+    next();
+  }, campanhasRoutes);
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
   return new Promise((resolve) => { const s = app.listen(0, () => resolve({ server: s, port: s.address().port })); });
@@ -51,19 +60,28 @@ test('permissão: ATENDENTE recebe 403 em qualquer rota de campanha', async () =
   } finally { server.close(); }
 });
 
+test('tenant: toda chamada de banco roda dentro de db.comTenant(req.tenantId, ...)', async () => {
+  const capturasTenant = [];
+  const conn = { async execute() { return { rows: [] }; } };
+  const { server, port } = await startApp(conn, ADMIN, { tenantId: 42, capturasTenant });
+  try {
+    await req(port, 'GET', '/api/campanhas');
+    assert.deepEqual(capturasTenant, [42]);
+  } finally { server.close(); }
+});
+
 test('preview: roda o SELECT e devolve amostra+total, sem materializar (sem INSERT)', async () => {
   const capturas = [];
   const conn = {
     async execute(sql, binds) {
       capturas.push({ sql, binds });
-      if (sql.includes('SELECT SEGMENTO FROM MC_ZAP_CAMPANHA')) {
-        return { rows: [{ SEGMENTO: JSON.stringify({ sql: 'SELECT telefone, nome FROM dev', telefoneCol: 'telefone', variaveis: ['nome'] }) }] };
+      if (sql.includes('SELECT SEGMENTO FROM campanha')) {
+        return { rows: [{ SEGMENTO: { sql: 'SELECT telefone, nome FROM dev', telefoneCol: 'telefone', variaveis: ['nome'] } }] };
       }
       if (sql.includes('SELECT COUNT(*) AS QTD')) return { rows: [{ QTD: 1200 }] };
-      if (sql.includes('WHERE ROWNUM')) return { rows: [{ TELEFONE: '5562999990000', NOME: 'Fulano' }] };
+      if (sql.includes('LIMIT :mczap_lim')) return { rows: [{ TELEFONE: '5562999990000', NOME: 'Fulano' }] };
       return { rows: [] };
     },
-    commit: async () => {}, close: async () => {},
   };
   const { server, port } = await startApp(conn, ADMIN);
   try {
@@ -72,7 +90,26 @@ test('preview: roda o SELECT e devolve amostra+total, sem materializar (sem INSE
     assert.equal(r.body.total, 1200);
     assert.equal(r.body.custoEstimado, 1200 * 0.04);
     assert.equal(r.body.amostra[0].telefone, '5562999990000');
-    assert.equal(capturas.some((c) => c.sql.startsWith('INSERT INTO MC_ZAP_CAMPANHA_ITEM')), false);
+    assert.equal(capturas.some((c) => c.sql.startsWith('INSERT INTO campanha_item')), false);
+  } finally { server.close(); }
+});
+
+test('preview: SEGMENTO já vem parseado (jsonb) — não faz JSON.parse duplo', async () => {
+  const conn = {
+    async execute(sql) {
+      if (sql.includes('SELECT SEGMENTO FROM campanha')) {
+        return { rows: [{ SEGMENTO: { sql: 'SELECT telefone FROM dev', telefoneCol: 'telefone', variaveis: [] } }] };
+      }
+      if (sql.includes('SELECT COUNT(*) AS QTD')) return { rows: [{ QTD: 1 }] };
+      if (sql.includes('LIMIT :mczap_lim')) return { rows: [{ TELEFONE: '5562999990000' }] };
+      return { rows: [] };
+    },
+  };
+  const { server, port } = await startApp(conn, ADMIN);
+  try {
+    const r = await req(port, 'POST', '/api/campanhas/5/preview', {});
+    assert.equal(r.status, 200);
+    assert.equal(r.body.total, 1);
   } finally { server.close(); }
 });
 
@@ -82,10 +119,10 @@ test('preparar: dedup por telefone (2 linhas mesmo número → 1 item)', async (
     async execute(sql, binds) {
       capturas.push({ sql, binds });
       if (sql.includes('SELECT STATUS, SEGMENTO')) {
-        return { rows: [{ STATUS: 'rascunho', SEGMENTO: JSON.stringify({ sql: 'SELECT telefone, nome FROM dev', telefoneCol: 'telefone', variaveis: ['nome'] }) }] };
+        return { rows: [{ STATUS: 'rascunho', SEGMENTO: { sql: 'SELECT telefone, nome FROM dev', telefoneCol: 'telefone', variaveis: ['nome'] } }] };
       }
       // rodarCompleto: duas linhas, mesmo telefone (com e sem 9)
-      if (/^SELECT telefone, nome FROM dev$/.test(sql)) {
+      if (/^SELECT \* FROM \(SELECT telefone, nome FROM dev\) AS seg LIMIT :mczap_max$/.test(sql)) {
         return { rows: [
           { TELEFONE: '5562983423192', NOME: 'A' },
           { TELEFONE: '556283423192', NOME: 'A dup' },
@@ -93,7 +130,6 @@ test('preparar: dedup por telefone (2 linhas mesmo número → 1 item)', async (
       }
       return { rows: [], rowsAffected: 1, outBinds: {} };
     },
-    commit: async () => {}, rollback: async () => {}, close: async () => {},
   };
   const { server, port } = await startApp(conn, ADMIN);
   try {
@@ -101,7 +137,33 @@ test('preparar: dedup por telefone (2 linhas mesmo número → 1 item)', async (
     assert.equal(r.status, 200);
     assert.equal(r.body.inseridos, 1);  // as duas variantes do mesmo número = 1
     assert.equal(r.body.pulados, 1);
-    const inserts = capturas.filter((c) => c.sql.startsWith('INSERT INTO MC_ZAP_CAMPANHA_ITEM'));
+    const inserts = capturas.filter((c) => c.sql.startsWith('INSERT INTO campanha_item'));
     assert.equal(inserts.length, 1);
+  } finally { server.close(); }
+});
+
+test('preparar: violação de UNIQUE (código 23505 do Postgres) conta como duplicado, não propaga erro', async () => {
+  const conn = {
+    async execute(sql) {
+      if (sql.includes('SELECT STATUS, SEGMENTO')) {
+        return { rows: [{ STATUS: 'rascunho', SEGMENTO: { sql: 'SELECT telefone FROM dev', telefoneCol: 'telefone', variaveis: [] } }] };
+      }
+      if (/^SELECT \* FROM \(SELECT telefone FROM dev\) AS seg LIMIT :mczap_max$/.test(sql)) {
+        return { rows: [{ TELEFONE: '5562983423192' }] };
+      }
+      if (sql.startsWith('INSERT INTO campanha_item')) {
+        const e = new Error('duplicate key value violates unique constraint "uq_ci_camp_tel"');
+        e.code = '23505'; e.constraint = 'uq_ci_camp_tel';
+        throw e;
+      }
+      return { rows: [], rowsAffected: 1 };
+    },
+  };
+  const { server, port } = await startApp(conn, ADMIN);
+  try {
+    const r = await req(port, 'POST', '/api/campanhas/5/preparar', {});
+    assert.equal(r.status, 200);
+    assert.equal(r.body.inseridos, 0);
+    assert.equal(r.body.duplicados, 1);
   } finally { server.close(); }
 });
