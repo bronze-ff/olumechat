@@ -1,6 +1,9 @@
 -- ============================================================================
--- 002_indices_metricas.sql — índices que sustentam as agregações do dashboard
+-- 003_indices_metricas.sql — índices que sustentam as agregações do dashboard
 -- (server/api/metricas.js, ticket FIL-65).
+--
+-- Numerada 003 (não 002): 002_contato_generaliza.sql (PR #8) já ocupava o
+-- número seguinte à 001 quando este PR foi revisado — roda antes desta.
 --
 -- A migração 001 já cobre contato_id/status/atendente_id/fila+departamento em
 -- `conversa`, mas nenhum índice tem `criado_em` — e é exatamente o que toda
