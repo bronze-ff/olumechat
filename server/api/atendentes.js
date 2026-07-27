@@ -13,28 +13,27 @@ const router = express.Router();
 
 // GET /api/atendentes — lista com departamentos agregados (ADMIN/SUPERVISOR).
 router.get('/', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
-  let conn;
   try {
-    conn = await db.getConnection();
-    const r = await conn.execute(
-      `SELECT a.ID, a.MATRICULA, a.NOME, a.PAPEL, a.ATIVO, a.STATUS_PRESENCA, a.PODE_ATIVO,
-              (SELECT LISTAGG(ad.DEPARTAMENTO_ID, ',') WITHIN GROUP (ORDER BY ad.DEPARTAMENTO_ID)
-                 FROM MC_ZAP_ATENDENTE_DEPTO ad WHERE ad.ATENDENTE_ID = a.ID) AS DEPTO_IDS,
-              (SELECT LISTAGG(an.NUMERO_ID, ',') WITHIN GROUP (ORDER BY an.NUMERO_ID)
-                 FROM MC_ZAP_ATENDENTE_NUMERO an WHERE an.ATENDENTE_ID = a.ID) AS NUMERO_IDS
-         FROM MC_ZAP_ATENDENTE a
-        ORDER BY a.ATIVO DESC, a.NOME NULLS LAST`
-    );
-    const rows = mapRows(r.rows).map((a) => ({
+    const rows = await db.comTenant(req.tenantId, async (conn) => {
+      const r = await conn.execute(
+        `SELECT a.id, a.matricula, a.nome, a.papel, a.ativo, a.status_presenca, a.pode_ativo,
+                (SELECT STRING_AGG(ad.departamento_id::text, ',' ORDER BY ad.departamento_id)
+                   FROM atendente_depto ad WHERE ad.atendente_id = a.id) AS depto_ids,
+                (SELECT STRING_AGG(an.numero_id::text, ',' ORDER BY an.numero_id)
+                   FROM atendente_numero an WHERE an.atendente_id = a.id) AS numero_ids
+           FROM atendente a
+          ORDER BY a.ativo DESC, a.nome NULLS LAST`
+      );
+      return mapRows(r.rows);
+    });
+    const out = rows.map((a) => ({
       ...a,
       deptoIds: a.deptoIds ? a.deptoIds.split(',').map(Number) : [],
       numeroIds: a.numeroIds ? a.numeroIds.split(',').map(Number) : [],
     }));
-    res.json(rows);
+    res.json(out);
   } catch (err) {
     next(err);
-  } finally {
-    if (conn) await conn.close().catch(() => {});
   }
 });
 
@@ -47,95 +46,98 @@ router.put('/:id', exigirPapel('ADMIN'), async (req, res, next) => {
     return res.status(400).json({ error: `Papel inválido (use: ${PAPEIS.join(', ')})` });
   }
 
-  let conn;
   try {
-    conn = await db.getConnection();
-    const sel = await conn.execute(
-      `SELECT MATRICULA, PAPEL, ATIVO FROM MC_ZAP_ATENDENTE WHERE ID = :id`, { id }
-    );
-    if (!sel.rows.length) return res.status(404).json({ error: 'Atendente não encontrado' });
-    const matricula = sel.rows[0].MATRICULA;
-
-    // Trava do ÚLTIMO admin: se a alteração rebaixa (papel != ADMIN) ou desativa
-    // um ADMIN ativo e não sobra NENHUM outro admin ativo, recusa — senão ninguém
-    // mais consegue administrar o sistema (e o force-promote de diretor foi removido).
-    const eraAdminAtivo = sel.rows[0].PAPEL === 'ADMIN' && sel.rows[0].ATIVO !== 'N';
-    const novoPapel = b.papel || sel.rows[0].PAPEL;
-    const novoAtivo = (b.ativo === 'S' || b.ativo === 'N') ? b.ativo : sel.rows[0].ATIVO;
-    const deixaDeSerAdminAtivo = !(novoPapel === 'ADMIN' && novoAtivo !== 'N');
-    if (eraAdminAtivo && deixaDeSerAdminAtivo) {
-      const outros = await conn.execute(
-        `SELECT COUNT(*) AS QTD FROM MC_ZAP_ATENDENTE WHERE PAPEL = 'ADMIN' AND ATIVO = 'S' AND ID <> :id`,
-        { id }
+    const resultado = await db.comTenant(req.tenantId, async (conn) => {
+      const sel = await conn.execute(
+        `SELECT matricula, papel, ativo FROM atendente WHERE id = :id`, { id }
       );
-      if (Number(outros.rows[0].QTD) === 0) {
-        return res.status(400).json({ error: 'Este é o último ADMIN ativo. Promova outro atendente a ADMIN antes de rebaixar ou desativar este.' });
-      }
-    }
+      if (!sel.rows.length) return { naoEncontrado: true };
+      const matricula = sel.rows[0].MATRICULA;
 
-    await conn.execute(
-      `UPDATE MC_ZAP_ATENDENTE
-          SET PAPEL = COALESCE(:p, PAPEL),
-              ATIVO = COALESCE(:a, ATIVO),
-              PODE_ATIVO = COALESCE(:pa, PODE_ATIVO)
-        WHERE ID = :id`,
-      {
-        p: b.papel || null,
-        a: b.ativo === 'S' || b.ativo === 'N' ? b.ativo : null,
-        pa: b.podeAtivo === 'S' || b.podeAtivo === 'N' ? b.podeAtivo : null,
-        id,
-      }
-    );
-
-    // Departamentos: substituição completa (DELETE + INSERT no N:N).
-    if (Array.isArray(b.deptoIds)) {
-      const ids = b.deptoIds.map(Number).filter(Number.isInteger);
-      await conn.execute(`DELETE FROM MC_ZAP_ATENDENTE_DEPTO WHERE ATENDENTE_ID = :id`, { id });
-      for (const dep of ids) {
-        await conn.execute(
-          `INSERT INTO MC_ZAP_ATENDENTE_DEPTO (ATENDENTE_ID, DEPARTAMENTO_ID) VALUES (:a, :d)`,
-          { a: id, d: dep }
+      // Trava do ÚLTIMO admin: se a alteração rebaixa (papel != ADMIN) ou desativa
+      // um ADMIN ativo e não sobra NENHUM outro admin ativo, recusa — senão ninguém
+      // mais consegue administrar o sistema (e o force-promote de diretor foi removido).
+      const eraAdminAtivo = sel.rows[0].PAPEL === 'ADMIN' && sel.rows[0].ATIVO !== 'N';
+      const novoPapel = b.papel || sel.rows[0].PAPEL;
+      const novoAtivo = (b.ativo === 'S' || b.ativo === 'N') ? b.ativo : sel.rows[0].ATIVO;
+      const deixaDeSerAdminAtivo = !(novoPapel === 'ADMIN' && novoAtivo !== 'N');
+      if (eraAdminAtivo && deixaDeSerAdminAtivo) {
+        const outros = await conn.execute(
+          `SELECT COUNT(*) AS qtd FROM atendente WHERE papel = 'ADMIN' AND ativo = 'S' AND id <> :id`,
+          { id }
         );
+        if (Number(outros.rows[0].QTD) === 0) {
+          return { ultimoAdmin: true };
+        }
       }
+
+      await conn.execute(
+        `UPDATE atendente
+            SET papel = COALESCE(:p, papel),
+                ativo = COALESCE(:a, ativo),
+                pode_ativo = COALESCE(:pa, pode_ativo)
+          WHERE id = :id`,
+        {
+          p: b.papel || null,
+          a: b.ativo === 'S' || b.ativo === 'N' ? b.ativo : null,
+          pa: b.podeAtivo === 'S' || b.podeAtivo === 'N' ? b.podeAtivo : null,
+          id,
+        }
+      );
+
+      // Departamentos: substituição completa (DELETE + INSERT no N:N).
+      if (Array.isArray(b.deptoIds)) {
+        const ids = b.deptoIds.map(Number).filter(Number.isInteger);
+        await conn.execute(`DELETE FROM atendente_depto WHERE atendente_id = :id`, { id });
+        for (const dep of ids) {
+          await conn.execute(
+            `INSERT INTO atendente_depto (atendente_id, departamento_id) VALUES (:a, :d)`,
+            { a: id, d: dep }
+          );
+        }
+      }
+
+      // Números (canais que atende): substituição completa. Lista vazia = TODOS.
+      let numeroIds = null;
+      if (Array.isArray(b.numeroIds)) {
+        numeroIds = b.numeroIds.map(Number).filter(Number.isInteger);
+        await conn.execute(`DELETE FROM atendente_numero WHERE atendente_id = :id`, { id });
+        for (const n of numeroIds) {
+          await conn.execute(
+            `INSERT INTO atendente_numero (atendente_id, numero_id) VALUES (:a, :n)`,
+            { a: id, n }
+          );
+        }
+      }
+
+      await conn.execute(
+        `INSERT INTO auditoria (matricula, acao, entidade, entidade_id, detalhe)
+         VALUES (:m, 'atendente_update', 'atendente', :id, :det)`,
+        {
+          m: req.user && req.user.matricula,
+          id,
+          det: JSON.stringify({ papel: b.papel, ativo: b.ativo, deptoIds: b.deptoIds, numeroIds: b.numeroIds }),
+        }
+      );
+
+      return { matricula, numeroIds };
+    });
+
+    if (resultado.naoEncontrado) return res.status(404).json({ error: 'Atendente não encontrado' });
+    if (resultado.ultimoAdmin) {
+      return res.status(400).json({ error: 'Este é o último ADMIN ativo. Promova outro atendente a ADMIN antes de rebaixar ou desativar este.' });
     }
 
-    // Números (canais que atende): substituição completa. Lista vazia = TODOS.
-    let numeroIds = null;
-    if (Array.isArray(b.numeroIds)) {
-      numeroIds = b.numeroIds.map(Number).filter(Number.isInteger);
-      await conn.execute(`DELETE FROM MC_ZAP_ATENDENTE_NUMERO WHERE ATENDENTE_ID = :id`, { id });
-      for (const n of numeroIds) {
-        await conn.execute(
-          `INSERT INTO MC_ZAP_ATENDENTE_NUMERO (ATENDENTE_ID, NUMERO_ID) VALUES (:a, :n)`,
-          { a: id, n }
-        );
-      }
-    }
-
-    await conn.execute(
-      `INSERT INTO MC_ZAP_AUDITORIA (MATRICULA, ACAO, ENTIDADE, ENTIDADE_ID, DETALHE)
-       VALUES (:m, 'atendente_update', 'atendente', :id, :det)`,
-      {
-        m: req.user && req.user.matricula,
-        id,
-        det: JSON.stringify({ papel: b.papel, ativo: b.ativo, deptoIds: b.deptoIds, numeroIds: b.numeroIds }),
-      }
-    );
-    await conn.commit();
-
-    invalidar(matricula); // efeito imediato no RBAC
+    invalidar(resultado.matricula); // efeito imediato no RBAC
     // Sincroniza a presença em memória (se o atendente estiver online agora).
     presence.atualizarPerfil(id, {
       ...(Array.isArray(b.deptoIds) ? { deptoIds: b.deptoIds.map(Number).filter(Number.isInteger) } : {}),
-      ...(numeroIds !== null ? { numeroIds } : {}),
+      ...(resultado.numeroIds !== null ? { numeroIds: resultado.numeroIds } : {}),
     });
     res.json({ ok: true });
   } catch (err) {
-    if (conn) await conn.rollback().catch(() => {});
-    if (err.errorNum === 2291) return res.status(400).json({ error: 'Departamento ou número inexistente' });
+    if (err.code === '23503') return res.status(400).json({ error: 'Departamento ou número inexistente' });
     next(err);
-  } finally {
-    if (conn) await conn.close().catch(() => {});
   }
 });
 

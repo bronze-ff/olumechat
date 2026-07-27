@@ -1,11 +1,12 @@
-// api/config.js — Configurações gerais do painel (chave/valor em MC_ZAP_CONFIG).
+// api/config.js — Configurações gerais do painel (chave/valor em `config`).
 // Leitura: qualquer autenticado (o front usa p/ pré-preencher, ex. despedida).
-// Escrita: ADMIN. Upsert por chave (MERGE) — chave nova não exige DDL.
+// Escrita: ADMIN. Upsert por chave (INSERT ... ON CONFLICT) — chave nova não exige DDL.
 'use strict';
 
 const express = require('express');
 const db = require('../db/pool');
 const { exigirPapel } = require('../auth/rbac');
+const configCache = require('../utils/configCache');
 
 const router = express.Router();
 
@@ -15,17 +16,16 @@ const CHAVES = ['despedida_padrao', 'comando_encerrar', 'msg_encerrar_cliente',
 
 // GET /api/config — todas as configurações { chave: valor }.
 router.get('/', async (req, res, next) => {
-  let conn;
   try {
-    conn = await db.getConnection();
-    const r = await conn.execute(`SELECT CHAVE, VALOR FROM MC_ZAP_CONFIG`);
-    const out = {};
-    for (const row of r.rows) out[row.CHAVE] = row.VALOR;
+    const out = await db.comTenant(req.tenantId, async (conn) => {
+      const r = await conn.execute(`SELECT chave, valor FROM config`);
+      const acc = {};
+      for (const row of r.rows) acc[row.CHAVE] = row.VALOR;
+      return acc;
+    });
     res.json(out);
   } catch (err) {
     next(err);
-  } finally {
-    if (conn) await conn.close().catch(() => {});
   }
 });
 
@@ -35,31 +35,25 @@ router.put('/', exigirPapel('ADMIN'), async (req, res, next) => {
   const entradas = Object.entries(b).filter(([k]) => CHAVES.includes(k));
   if (!entradas.length) return res.status(400).json({ error: 'Nenhuma configuração válida no corpo' });
 
-  let conn;
   try {
-    conn = await db.getConnection();
-    for (const [chave, valor] of entradas) {
+    await db.comTenant(req.tenantId, async (conn) => {
+      for (const [chave, valor] of entradas) {
+        await conn.execute(
+          `INSERT INTO config (chave, valor) VALUES (:k, :v)
+           ON CONFLICT (tenant_id, chave) DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = now()`,
+          { k: chave, v: String(valor ?? '').slice(0, 2000) }
+        );
+      }
       await conn.execute(
-        `MERGE INTO MC_ZAP_CONFIG c USING (SELECT :k AS CHAVE FROM DUAL) n
-            ON (c.CHAVE = n.CHAVE)
-          WHEN MATCHED THEN UPDATE SET c.VALOR = :v, c.ATUALIZADO_EM = SYSTIMESTAMP
-          WHEN NOT MATCHED THEN INSERT (CHAVE, VALOR) VALUES (:k2, :v2)`,
-        { k: chave, v: String(valor ?? '').slice(0, 2000), k2: chave, v2: String(valor ?? '').slice(0, 2000) }
+        `INSERT INTO auditoria (matricula, acao, entidade, detalhe)
+         VALUES (:m, 'config_update', 'config', :det)`,
+        { m: req.user && req.user.matricula, det: JSON.stringify(Object.fromEntries(entradas)) }
       );
-    }
-    await conn.execute(
-      `INSERT INTO MC_ZAP_AUDITORIA (MATRICULA, ACAO, ENTIDADE, DETALHE)
-       VALUES (:m, 'config_update', 'config', :det)`,
-      { m: req.user && req.user.matricula, det: JSON.stringify(Object.fromEntries(entradas)) }
-    );
-    await conn.commit();
-    require('../utils/configCache').invalidar(); // webhook lê na hora
+    });
+    configCache.invalidar(req.tenantId); // webhook lê na hora
     res.json({ ok: true });
   } catch (err) {
-    if (conn) await conn.rollback().catch(() => {});
     next(err);
-  } finally {
-    if (conn) await conn.close().catch(() => {});
   }
 });
 
