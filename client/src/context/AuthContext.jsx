@@ -44,6 +44,12 @@ export function AuthProvider({ children }) {
   // quem manda no tenant é o `tenantId` assinado dentro do JWT.
   const login = useCallback(async (empresa, email, senha) => {
     const { data } = await api.post('/auth/login', { empresa, email, senha });
+    // Troca de identidade = cache velho não vale mais. `/login` é rota pública:
+    // dá para entrar em OUTRA empresa sem passar pelo logout, e as queryKeys
+    // não são qualificadas por tenant ('conversas', 'departamentos'...), então
+    // as telas do tenant novo renderizariam dado do anterior até o refetch.
+    // Mesma limpeza do logout, feita ANTES de publicar o novo usuário.
+    queryClient.clear();
     localStorage.setItem('token', data.token);
     localStorage.setItem('empresa', data.empresa || empresa);
     const p = parseJwt(data.token);
