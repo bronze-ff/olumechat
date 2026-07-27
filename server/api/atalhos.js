@@ -9,51 +9,37 @@ const { mapRows } = require('../utils/linhas');
 
 const router = express.Router();
 
-async function lerClob(v) {
-  if (v == null) return null;
-  return typeof v === 'string' ? v : v.getData();
-}
-
 // GET /api/atalhos — meus pessoais + os dos meus departamentos (ADMIN vê tudo).
 router.get('/', async (req, res, next) => {
   const perfil = req.perfil;
-  let conn;
   try {
-    conn = await db.getConnection();
-    const conds = [];
-    const binds = {};
-    if (perfil.papel !== 'ADMIN') {
-      const partes = [`(r.ESCOPO = 'pessoal' AND r.CRIADO_POR = :meuId)`];
-      binds.meuId = perfil.atendenteId;
-      if (perfil.deptoIds.length) {
-        const ms = perfil.deptoIds.map((d, i) => { binds[`dep${i}`] = d; return `:dep${i}`; });
-        partes.push(`(r.ESCOPO = 'departamento' AND r.DEPARTAMENTO_ID IN (${ms.join(',')}))`);
+    const rows = await db.comTenant(req.tenantId, async (conn) => {
+      const conds = [];
+      const binds = {};
+      if (perfil.papel !== 'ADMIN') {
+        const partes = [`(r.escopo = 'pessoal' AND r.criado_por = :meuId)`];
+        binds.meuId = perfil.atendenteId;
+        if (perfil.deptoIds.length) {
+          const ms = perfil.deptoIds.map((d, i) => { binds[`dep${i}`] = d; return `:dep${i}`; });
+          partes.push(`(r.escopo = 'departamento' AND r.departamento_id IN (${ms.join(',')}))`);
+        }
+        conds.push(`(${partes.join(' OR ')})`);
       }
-      conds.push(`(${partes.join(' OR ')})`);
-    }
-    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-    const r = await conn.execute(
-      `SELECT r.ID, r.ATALHO, r.TITULO, r.CONTEUDO, r.ESCOPO, r.DEPARTAMENTO_ID, r.CRIADO_POR,
-              d.NOME AS DEPARTAMENTO_NOME
-         FROM MC_ZAP_RESPOSTA_RAPIDA r
-         LEFT JOIN MC_ZAP_DEPARTAMENTO d ON d.ID = r.DEPARTAMENTO_ID
-        ${where}
-        ORDER BY r.ATALHO`,
-      binds
-    );
-    const rows = [];
-    for (const row of mapRows(r.rows)) {
-      rows.push({
-        ...row,
-        conteudo: await lerClob(row.conteudo),
-        meu: row.criadoPor === perfil.atendenteId,
-      });
-    }
-    res.json(rows);
+      const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+      const r = await conn.execute(
+        `SELECT r.id, r.atalho, r.titulo, r.conteudo, r.escopo, r.departamento_id, r.criado_por,
+                d.nome AS departamento_nome
+           FROM resposta_rapida r
+           LEFT JOIN departamento d ON d.id = r.departamento_id
+          ${where}
+          ORDER BY r.atalho`,
+        binds
+      );
+      return mapRows(r.rows);
+    });
+    res.json(rows.map((row) => ({ ...row, meu: row.criadoPor === perfil.atendenteId })));
   } catch (err) {
     next(err);
-  } finally {
-    if (conn) await conn.close().catch(() => {});
   }
 });
 
@@ -76,28 +62,23 @@ router.post('/', async (req, res, next) => {
     }
   }
 
-  let conn;
   try {
-    conn = await db.getConnection();
-    const { tipos } = db;
-    const ins = await conn.execute(
-      `INSERT INTO MC_ZAP_RESPOSTA_RAPIDA (ATALHO, TITULO, CONTEUDO, ESCOPO, DEPARTAMENTO_ID, CRIADO_POR)
-       VALUES (:a, :t, :c, :e, :d, :por) RETURNING ID INTO :id`,
-      {
-        a: atalho,
-        t: b.titulo ? String(b.titulo).trim().slice(0, 120) : null,
-        c: conteudo,
-        e: escopo, d: departamentoId, por: perfil.atendenteId,
-        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
-      }
-    );
-    await conn.commit();
-    res.status(201).json({ id: ins.outBinds.id[0], atalho });
+    const id = await db.comTenant(req.tenantId, async (conn) => {
+      const ins = await conn.execute(
+        `INSERT INTO resposta_rapida (atalho, titulo, conteudo, escopo, departamento_id, criado_por)
+         VALUES (:a, :t, :c, :e, :d, :por) RETURNING id`,
+        {
+          a: atalho,
+          t: b.titulo ? String(b.titulo).trim().slice(0, 120) : null,
+          c: conteudo,
+          e: escopo, d: departamentoId, por: perfil.atendenteId,
+        }
+      );
+      return ins.rows[0].ID;
+    });
+    res.status(201).json({ id, atalho });
   } catch (err) {
-    if (conn) await conn.rollback().catch(() => {});
     next(err);
-  } finally {
-    if (conn) await conn.close().catch(() => {});
   }
 });
 
@@ -106,22 +87,19 @@ router.delete('/:id', async (req, res, next) => {
   const perfil = req.perfil;
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
-  let conn;
   try {
-    conn = await db.getConnection();
-    const guarda = perfil.papel === 'ADMIN' ? '' : 'AND CRIADO_POR = :por';
-    const del = await conn.execute(
-      `DELETE FROM MC_ZAP_RESPOSTA_RAPIDA WHERE ID = :id ${guarda}`,
-      perfil.papel === 'ADMIN' ? { id } : { id, por: perfil.atendenteId }
-    );
-    if (!del.rowsAffected) return res.status(403).json({ error: 'Só quem criou (ou ADMIN) pode excluir' });
-    await conn.commit();
+    const apagou = await db.comTenant(req.tenantId, async (conn) => {
+      const guarda = perfil.papel === 'ADMIN' ? '' : 'AND criado_por = :por';
+      const del = await conn.execute(
+        `DELETE FROM resposta_rapida WHERE id = :id ${guarda}`,
+        perfil.papel === 'ADMIN' ? { id } : { id, por: perfil.atendenteId }
+      );
+      return del.rowsAffected > 0;
+    });
+    if (!apagou) return res.status(403).json({ error: 'Só quem criou (ou ADMIN) pode excluir' });
     res.json({ ok: true });
   } catch (err) {
-    if (conn) await conn.rollback().catch(() => {});
     next(err);
-  } finally {
-    if (conn) await conn.close().catch(() => {});
   }
 });
 
