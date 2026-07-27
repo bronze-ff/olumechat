@@ -9,13 +9,11 @@ process.env.DEV_META_FALLBACK = '0';
 const test = require('node:test');
 const assert = require('node:assert');
 const http = require('node:http');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const express = require('express');
 const db = require('../db/pool');
 const { criptografar, descriptografar } = require('../ia/crypto');
 const { guardar, resolver, CONTEXTO } = require('../meta/connection');
+const { storage } = require('../storage');
 
 const A = 101;
 const B = 202;
@@ -152,7 +150,6 @@ test('Meta: envio usa token do tenant dono, nunca o token global', async () => {
 test('Meta: download de mídia usa o token do tenant dono', async () => {
   const oldGetConnection = db.getConnection;
   const oldFetch = global.fetch;
-  const mediaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-zap-media-'));
   db.getConnection = async () => ({
     async execute(_sql, binds) {
       assert.equal(binds.phone, 'PN-A');
@@ -173,15 +170,15 @@ test('Meta: download de mídia usa o token do tenant dono', async () => {
     delete require.cache[require.resolve('../graph/media')];
     delete require.cache[require.resolve('../graph/client')];
     const { downloadMedia } = require('../graph/media');
-    const { cfg } = require('../graph/client');
-    cfg.mediaDir = mediaDir;
-    const result = await downloadMedia({ id: 'media-A', mime_type: 'image/jpeg' }, 'PN-A', A);
+    const result = await downloadMedia({ id: 'media-A', mime_type: 'image/jpeg' }, {
+      phoneNumberId: 'PN-A', tenantId: A, conversaId: 7,
+    });
     assert.equal(result.size, 3);
     assert.deepEqual(authorizations, [`Bearer ${TOKEN_A}`, `Bearer ${TOKEN_A}`]);
+    await storage.remover(result.caminho);
   } finally {
     global.fetch = oldFetch;
     db.getConnection = oldGetConnection;
-    fs.rmSync(mediaDir, { recursive: true, force: true });
   }
 });
 

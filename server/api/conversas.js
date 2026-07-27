@@ -571,8 +571,7 @@ router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
 // WhatsApp: imagem/áudio/vídeo viram mídia nativa; o resto vai como documento).
 // Regra Meta: arquivo é mensagem livre → exige janela de 24h aberta.
 const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
+const { storage, storageKey } = require('../storage');
 // Allowlist de MIME aceitos no upload (tipos suportados pela Cloud API).
 const MIME_PERMITIDOS = new Set([
   'image/jpeg', 'image/png', 'image/webp',
@@ -611,8 +610,6 @@ router.post('/:id/arquivos', naoAuditor, (req, res, next) => {
   if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado' });
 
   const { uploadMedia, sendDocument, sendImage, sendAudio, sendVideo, tipoPorMime } = require('../graph/media');
-  const { cfg: cfgGraph } = require('../graph/client');
-
   let caminho = null;
   try {
     const resultado = await db.comTenant(req.tenantId, async (conn) => {
@@ -636,16 +633,15 @@ router.post('/:id/arquivos', naoAuditor, (req, res, next) => {
         throw new RespostaHttp(409, { error: 'Janela de 24h fechada — envio de arquivo indisponível.' });
       }
 
-      // Grava no MEDIA_DIR (mesmo lugar dos recebidos) e sobe pra Meta.
+      // Persiste no storage configurado e sobe o binário pra Meta.
       const nomeOriginal = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-      fs.mkdirSync(cfgGraph.mediaDir, { recursive: true });
       const nomeArquivo = `out_${Date.now()}_${nomeOriginal.replace(/[^\w.\-]+/g, '_')}`;
-      caminho = path.join(cfgGraph.mediaDir, nomeArquivo);
-      fs.writeFileSync(caminho, req.file.buffer);
+      caminho = storageKey(req.tenantId, cv.ID, nomeArquivo);
+      await storage.salvar(req.file.buffer, caminho, req.file.mimetype);
 
       const mime = req.file.mimetype || 'application/octet-stream';
       const tipo = tipoPorMime(mime);
-      const mediaId = await uploadMedia(caminho, mime, cv.PHONE_NUMBER_ID || undefined, req.tenantId);
+      const mediaId = await uploadMedia(req.file.buffer, mime, cv.PHONE_NUMBER_ID || undefined, req.tenantId);
 
       let resp;
       if (tipo === 'image') resp = await sendImage(cv.TELEFONE, { id: mediaId }, cv.PHONE_NUMBER_ID || undefined, req.tenantId);
@@ -689,7 +685,7 @@ router.post('/:id/arquivos', naoAuditor, (req, res, next) => {
     });
     res.status(201).json({ id: resultado.id, tipo: resultado.tipo, nomeArquivo: resultado.nomeArquivo, wamid: resultado.wamid });
   } catch (err) {
-    if (caminho) fs.unlink(caminho, () => {}); // não deixa lixo se falhou
+    if (caminho) storage.remover(caminho).catch(() => {}); // não deixa lixo se falhou
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
     if (err.isGraphError) {
       return res.status(502).json({ error: err.message, codigo: err.graphCode });

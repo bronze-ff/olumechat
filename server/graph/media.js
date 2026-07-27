@@ -7,7 +7,8 @@
 // ENVIAR: upload do arquivo (gera media_id) ou envio por link hospedado.
 const fs = require('fs');
 const path = require('path');
-const { graphGet, sendMessage, credenciais, cfg, BASE } = require('./client');
+const { graphGet, sendMessage, BASE, credenciais } = require('./client');
+const { storage, storageKey } = require('../storage');
 
 const EXT_BY_MIME = {
   'image/jpeg': '.jpg',
@@ -30,17 +31,13 @@ function extFromMime(mime) {
   return EXT_BY_MIME[base] || '';
 }
 
-function ensureDir(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 /**
  * Baixa uma mídia recebida para o disco.
  * @param {object} mediaObj  Objeto da mídia no webhook (image/document/audio/...).
  *   Espera { id, mime_type, sha256, filename?, caption? }.
  * @returns {Promise<object>} Metadados para gravar em MC_ZAP_MIDIA.
  */
-async function downloadMedia(mediaObj, phoneNumberId, tenantId) {
+async function downloadMedia(mediaObj, { tenantId, conversaId, phoneNumberId } = {}) {
   const mediaId = mediaObj.id;
 
   // 1) Resolve a URL temporária do arquivo.
@@ -51,23 +48,17 @@ async function downloadMedia(mediaObj, phoneNumberId, tenantId) {
   const fileRes = await graphGet(meta.url, phoneNumberId, tenantId);
   const buf = Buffer.from(await fileRes.arrayBuffer());
 
-  // 3) Define caminho e grava no servidor de arquivos.
+  // 3) Define a chave tenant-prefixed e grava no storage configurado.
   // SEGURANÇA: o nome do arquivo NUNCA é derivado do filename do remetente
   // (controlado por terceiro → path traversal). O caminho usa só o mediaId
   // (validado pela Graph) + a extensão do MIME. O nome original fica só para
   // EXIBIÇÃO (sanitizado com basename), gravado na coluna NOME_ARQUIVO.
-  ensureDir(cfg.mediaDir);
   const mime = meta.mime_type || mediaObj.mime_type;
   const original = mediaObj.filename ? path.basename(String(mediaObj.filename)) : null;
   const ext = extFromMime(mime) || (original ? path.extname(original) : '') || '';
   const fileName = `${String(mediaId).replace(/[^\w.-]/g, '')}${ext}`;
-  const fullPath = path.join(cfg.mediaDir, fileName);
-  // Defesa em profundidade: garante que o caminho final ficou dentro do mediaDir.
-  const base = path.resolve(cfg.mediaDir);
-  if (path.resolve(fullPath) !== base && !path.resolve(fullPath).startsWith(base + path.sep)) {
-    throw new Error('Caminho de mídia inválido');
-  }
-  fs.writeFileSync(fullPath, buf);
+  const caminho = storageKey(tenantId, conversaId, fileName);
+  await storage.salvar(buf, caminho, mime);
 
   return {
     mediaId,
@@ -75,7 +66,7 @@ async function downloadMedia(mediaObj, phoneNumberId, tenantId) {
     sha256: meta.sha256 || mediaObj.sha256,
     size: meta.file_size || buf.length,
     filename: original || fileName,
-    caminho: fullPath,
+    caminho,
     caption: mediaObj.caption || null,
   };
 }
@@ -89,11 +80,11 @@ async function downloadMedia(mediaObj, phoneNumberId, tenantId) {
 async function uploadMedia(filePath, mime, phoneNumberId, tenantId) {
   const c = await credenciais(phoneNumberId, tenantId);
   const from = c.phoneNumberId;
-  const data = fs.readFileSync(filePath);
+  const data = Buffer.isBuffer(filePath) ? filePath : fs.readFileSync(filePath);
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
   form.append('type', mime);
-  form.append('file', new Blob([data], { type: mime }), path.basename(filePath));
+  form.append('file', new Blob([data], { type: mime }), Buffer.isBuffer(filePath) ? 'arquivo' : path.basename(filePath));
 
   const res = await fetch(`${BASE}/${from}/media`, {
     method: 'POST',

@@ -5,24 +5,14 @@ import Spinner from '../../components/ui/Spinner';
 import Confirmar from '../../components/ui/Confirmar';
 import { formatPhone } from '../../utils/formatters';
 
-const SQL_EXEMPLO = `-- Exemplo (devedores em aberto). Celular primeiro p/ WhatsApp:
-SELECT COALESCE(c.TELCELENT, c.TELCOB, c.TELCOM, c.TELENT) telefone,
-       c.CLIENTE nome,
-       COUNT(*) qtd,
-       TO_CHAR(SUM(p.VALOR),'FM999G999G990D00') total,
-       TO_CHAR(MIN(p.DTVENC),'DD/MM/YYYY') venc
-  FROM MCCANAL.PCPREST p
-  JOIN MCCANAL.PCCLIENT c ON c.CODCLI = p.CODCLI
- WHERE p.DTPAG IS NULL AND p.DTVENC < TRUNC(SYSDATE)
- GROUP BY COALESCE(c.TELCELENT, c.TELCOB, c.TELCOM, c.TELENT), c.CLIENTE`;
-
 export default function CampanhaEditor({ campanhaId, onClose, onSaved }) {
   const [nome, setNome] = useState('');
   const [numeroId, setNumeroId] = useState('');
   const [templateNome, setTemplateNome] = useState('');
   const [lang, setLang] = useState('pt_BR');
-  const [sql, setSql] = useState(SQL_EXEMPLO);
-  const [telefoneCol, setTelefoneCol] = useState('telefone');
+  const [tipoSegmento, setTipoSegmento] = useState('csv');
+  const [arquivo, setArquivo] = useState(null);
+  const [filtros, setFiltros] = useState({ optin: 'S' });
   const [variaveis, setVariaveis] = useState([]); // coluna por {{n}}
   const [ratePorSeg, setRatePorSeg] = useState(10);
   const [janelaInicio, setJanelaInicio] = useState('08:00');
@@ -49,7 +39,7 @@ export default function CampanhaEditor({ campanhaId, onClose, onSaved }) {
       setLang(data.lang || 'pt_BR'); setRatePorSeg(data.ratePorSeg || 10);
       setJanelaInicio(data.janelaInicio || '08:00'); setJanelaFim(data.janelaFim || '20:00');
       const seg = data.segmento || {};
-      setSql(seg.sql || SQL_EXEMPLO); setTelefoneCol(seg.telefoneCol || 'telefone'); setVariaveis(seg.variaveis || []);
+      setTipoSegmento(seg.tipo || 'csv'); setFiltros(seg.filtros || { optin: 'S' }); setVariaveis(seg.variaveis || []);
       setId(data.id); setCarregando(false);
     }).catch(() => setCarregando(false));
   }, [campanhaId]);
@@ -65,7 +55,7 @@ export default function CampanhaEditor({ campanhaId, onClose, onSaved }) {
   const corpo = () => ({
     nome: nome.trim(), numeroId: numeroId || null, templateNome, lang,
     ratePorSeg: Number(ratePorSeg), janelaInicio, janelaFim,
-    segmento: { sql, telefoneCol: telefoneCol.trim().toLowerCase(), variaveis },
+    segmento: { tipo: tipoSegmento, filtros, variaveis },
   });
 
   async function salvar() {
@@ -86,6 +76,13 @@ export default function CampanhaEditor({ campanhaId, onClose, onSaved }) {
       setPreview(data);
     } catch (e) { setErro(e.response?.data?.error || 'Erro no preview.'); }
     finally { setPrevLoading(false); }
+  }
+
+  async function importar() {
+    if (!arquivo || !(await salvar())) return;
+    const form = new FormData(); form.append('arquivo', arquivo);
+    try { const { data } = await api.post(`/campanhas/${id}/import`, form); setPrepInfo({ inseridos: data.aceitas, invalidos: data.rejeitadas, duplicados: data.relatorio.filter((x) => x.motivo === 'duplicado').length, relatorio: data.relatorio }); }
+    catch (e) { setErro(e.response?.data?.error || 'Falha ao importar CSV.'); }
   }
 
   async function preparar() {
@@ -174,18 +171,18 @@ export default function CampanhaEditor({ campanhaId, onClose, onSaved }) {
               <span className="section-bar" />
               <h3 className="font-display font-bold text-sm text-stone-800 flex-1">Segmento — quem recebe</h3>
             </div>
-            <div>
-              <Rotulo>SELECT (devolve telefone + colunas das variáveis)</Rotulo>
-              <textarea rows={8} value={sql} onChange={(e) => setSql(e.target.value)}
-                className="input-field !py-2 !text-xs font-mono resize-y" />
-              <p className="font-mono text-[9px] text-stone-400 mt-0.5">Só SELECT, sem ";". Cada tabela do WinThor precisa de GRANT SELECT pro MCLABS.</p>
+            <div className="flex gap-2">
+              <button type="button" className={`px-3 py-1.5 rounded-lg text-sm ${tipoSegmento === 'csv' ? 'bg-brand-100 text-brand-800' : 'bg-paper-50'}`} onClick={() => setTipoSegmento('csv')}>Importar CSV</button>
+              <button type="button" className={`px-3 py-1.5 rounded-lg text-sm ${tipoSegmento === 'atributos' ? 'bg-brand-100 text-brand-800' : 'bg-paper-50'}`} onClick={() => setTipoSegmento('atributos')}>Filtros de contato</button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Rotulo>Coluna do telefone</Rotulo>
-                <input className="input-field !py-2 !text-sm font-mono" value={telefoneCol} onChange={(e) => setTelefoneCol(e.target.value)} placeholder="telefone" />
-              </div>
-            </div>
+            {tipoSegmento === 'csv' ? <div>
+              <Rotulo>CSV (telefone + colunas das variáveis)</Rotulo>
+              <input type="file" accept=".csv,text/csv" className="input-field !py-2 text-sm" onChange={(e) => setArquivo(e.target.files?.[0] || null)} />
+              <p className="font-mono text-[9px] text-stone-400 mt-0.5">A validação rejeita linhas inválidas e duplicadas individualmente, sem abortar o arquivo.</p>
+            </div> : <div className="grid grid-cols-2 gap-3">
+              <div><Rotulo>Opt-in</Rotulo><select className="input-field !py-2 !text-sm" value={filtros.optin || ''} onChange={(e) => setFiltros({ ...filtros, optin: e.target.value || undefined })}><option value="S">Com opt-in</option><option value="N">Sem opt-in</option><option value="">Qualquer</option></select></div>
+              <div><Rotulo>Tag</Rotulo><input className="input-field !py-2 !text-sm" value={filtros.tag || ''} onChange={(e) => setFiltros({ ...filtros, tag: e.target.value })} placeholder="ex.: vip" /></div>
+            </div>}
             {/* Mapeamento das variáveis do template */}
             {tpl && tpl.varCount > 0 && (
               <div>
@@ -196,7 +193,7 @@ export default function CampanhaEditor({ campanhaId, onClose, onSaved }) {
                       <span className="font-mono text-xs text-stone-500 w-10">{`{{${i + 1}}}`}</span>
                       <input className="input-field !py-1.5 !text-sm font-mono flex-1" value={variaveis[i] || ''}
                         onChange={(e) => setVariaveis((v) => { const n = [...v]; n[i] = e.target.value; return n; })}
-                        placeholder="nome da coluna do SELECT (ex.: nome)" />
+                        placeholder="nome da coluna do CSV (ex.: nome)" />
                     </div>
                   ))}
                 </div>
@@ -211,6 +208,8 @@ export default function CampanhaEditor({ campanhaId, onClose, onSaved }) {
               className="px-4 py-2 rounded-xl border border-black/15 text-stone-700 text-sm font-semibold hover:bg-paper-50 disabled:opacity-50">
               {prevLoading ? 'Rodando…' : '🔍 Pré-visualizar'}
             </button>
+            {tipoSegmento === 'csv' && <button onClick={importar}
+              className="px-4 py-2 rounded-xl border border-brand-300 text-brand-700 text-sm font-semibold hover:bg-brand-50">📥 Importar e validar CSV</button>}
             <button onClick={preparar}
               className="px-4 py-2 rounded-xl border border-brand-300 text-brand-700 text-sm font-semibold hover:bg-brand-50">
               📋 Preparar destinatários
@@ -237,10 +236,7 @@ export default function CampanhaEditor({ campanhaId, onClose, onSaved }) {
                   Exemplos rejeitados: {prepInfo.exemplosInvalidos.join(' · ')}
                 </p>
               )}
-              <p className="text-xs">
-                Telefone válido precisa de DDD (10-11 dígitos) ou DDI completo. Se o WinThor guarda sem DDD,
-                complete no SELECT — ex.: <span className="font-mono">CASE WHEN LENGTH(tel) &lt;= 9 THEN '62' || tel ELSE tel END</span>.
-              </p>
+              <p className="text-xs">Telefone válido precisa de DDD (10-11 dígitos) ou DDI completo.</p>
             </div>
           )}
 
