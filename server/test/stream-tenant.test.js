@@ -94,9 +94,12 @@ test('SSE: evento publicado para OUTRO tenant nunca chega ao assinante', async (
   }
 });
 
-test('SSE: evento sem tenantId (publicador ainda não portado) é descartado (fail-closed)', async () => {
+test('SSE: evento sem tenantId (publicador ainda não portado) é descartado E LOGADO (fail-closed, não silencioso)', async () => {
   presence._reset();
   const { server, port } = await startApp();
+  const avisos = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => avisos.push(args.join(' '));
   try {
     const ticket = await getTicket(port);
     const recebido = [];
@@ -113,7 +116,9 @@ test('SSE: evento sem tenantId (publicador ainda não portado) é descartado (fa
     cliente.destroy();
 
     assert.equal(recebido.join('').includes('"conversaId":333'), false);
+    assert.ok(avisos.some((a) => /sem tenantId descartado/.test(a)), 'esperava aviso no log — descarte não pode ser silencioso');
   } finally {
+    console.warn = originalWarn;
     server.close();
   }
 });

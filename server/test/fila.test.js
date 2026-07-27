@@ -90,9 +90,11 @@ function fakeConnFila({ fila = [], cargas = {}, capturas = [], falhaUpdate = fal
       validarBinds(sql, binds);
       capturas.push({ sql, binds });
 
-      // Resolução de tenant a partir do departamento (fora de comTenant).
+      // Resolução de tenant a partir do departamento (caminho privilegiado,
+      // fora de comTenant). tenantId null simula RLS bloqueando essa leitura
+      // (ex.: DB_APP_ROLE apontando pra um role sem BYPASSRLS) — zero linhas.
       if (sql.includes('FROM departamento WHERE id')) {
-        return { rows: [{ TENANT_ID: tenantId }] };
+        return tenantId == null ? { rows: [] } : { rows: [{ TENANT_ID: tenantId }] };
       }
       // SET LOCAL ROLE / set_config (comTenant) — não precisam de simulação real.
       if (sql.startsWith('SET LOCAL ROLE') || sql.includes('set_config')) {
@@ -251,4 +253,32 @@ test('distribuidor: isolamento de tenant — nunca escolhe atendente de OUTRO te
   // o atendente do tenant 2 nunca entra nem no bind da consulta de carga.
   const cargasCall = capturas.find((c) => c.sql.startsWith('SELECT atendente_id'));
   assert.equal(Object.values(cargasCall.binds).includes(72), false);
+});
+
+test('distribuidor: modo app-role (bypass de RLS desligado) — tenantDoDepartamento vazio não trava e AVISA no log', async () => {
+  presence._reset();
+  presence.conectar({ atendenteId: 81, tenantId: 1, deptoIds: [30] }); // gente online alegando o depto 30
+  const capturas = [];
+  // tenantId: null → fakeConnFila simula a leitura crua de `departamento`
+  // devolvendo ZERO linhas, como aconteceria se DB_APP_ROLE apontasse a
+  // conexão pra um role SEM bypass de RLS (ver cabeçalho de distribuidor.js).
+  const conn = fakeConnFila({ fila: [901], capturas, tenantId: null });
+  db.getConnection = async () => conn;
+
+  const avisos = [];
+  const originalError = console.error;
+  console.error = (...args) => avisos.push(args.join(' '));
+  try {
+    await distribuidor.atribuir(30);
+  } finally {
+    console.error = originalError;
+  }
+
+  // Não travou, não jogou exceção pra fora (atribuir engole erro e loga) —
+  // e, principalmente, NÃO ficou em silêncio: alguém teria como notar em prod.
+  assert.equal(capturas.some((c) => c.sql.startsWith('UPDATE conversa')), false);
+  assert.ok(
+    avisos.some((a) => /tenantDoDepartamento\(30\)/.test(a) && /DB_APP_ROLE/.test(a)),
+    'esperava aviso explicando a causa provável (depto removido OU bypass de RLS desligado)'
+  );
 });

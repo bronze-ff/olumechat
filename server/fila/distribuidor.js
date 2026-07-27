@@ -11,15 +11,22 @@
 // (lastAssignedAt) = round-robin de fato. Ninguém online -> fica 'aguardando'
 // (re-disparado quando alguém ficar online — presence.setAoFicarOnline).
 //
-// MULTI-TENANT: `atribuir(departamentoId)` mantém a assinatura de sempre —
-// conversas.js, webhook e bot chamam por aí sem saber de tenant. O tenantId é
-// resolvido AQUI a partir do departamentoId (globalmente único — toda tabela
-// do schema usa IDENTITY de coluna única, não composta), com uma consulta
-// direta fora de comTenant() (mesmo raciocínio da resolução de tenant por
-// phone_number_id no webhook: um identificador global aponta para UM tenant
-// só). A partir daí a query de negócio roda dentro de comTenant(tenantId,
-// ...), onde a RLS já isola tudo — sem precisar repetir tenant_id nos WHERE
-// (mesmo padrão do exemplo canônico em db/pool.js).
+// ── MULTI-TENANT (FIL-64, porte da fundação FIL-58) ─────────────────────────
+// `atribuir(departamentoId)` mantém a assinatura de sempre — conversas.js,
+// webhook e bot chamam por aí sem saber de tenant. A query de NEGÓCIO roda
+// dentro de comTenant(tenantId, ...), onde a RLS já isola tudo — sem precisar
+// repetir tenant_id nos WHERE (mesmo padrão do exemplo canônico em db/pool.js).
+//
+// O tenantId em si é resolvido em tenantDoDepartamento(), abaixo — e ESSE é um
+// caminho privilegiado deliberado, não uma query "normal": ela lê `departamento`
+// com getConnection() cru, SEM SET LOCAL ROLE, contando com o dono da conexão
+// no Neon ter BYPASSRLS (mesmo raciocínio documentado no cabeçalho de
+// campanha/dispatcher.js, FIL-61/PR#6, e na resolução de tenant por
+// phone_number_id no webhook — nenhum desses tem "tenant da vez" de uma
+// requisição HTTP pra usar). Se DB_APP_ROLE algum dia apontar essa conexão
+// para um role SEM bypass, a leitura crua devolve zero linhas por causa da
+// RLS — tenantDoDepartamento loga um aviso nesse caso (ver função) em vez de
+// falhar em silêncio como "departamento não existe".
 'use strict';
 
 const db = require('../db/pool');
@@ -28,8 +35,9 @@ const { publish } = require('../realtime/hub');
 
 const cadeias = new Map(); // departamentoId -> Promise (fila de execução)
 
-/** Descobre a qual tenant um departamento pertence (fora de comTenant — é
-    justamente o dado que falta para saber qual tenant usar). */
+/** Descobre a qual tenant um departamento pertence — caminho privilegiado
+    (bypass de RLS via role dono da conexão), não uma query de negócio. Ver
+    nota MULTI-TENANT no topo do arquivo. */
 async function tenantDoDepartamento(departamentoId) {
   let conn;
   try {
@@ -61,7 +69,20 @@ async function rodada(departamentoId, tentativa = 0) {
   if (!presence.onlineDoDepto(departamentoId).length) return;
 
   const tenantId = await tenantDoDepartamento(departamentoId);
-  if (!tenantId) return; // departamento inexistente/removido
+  if (!tenantId) {
+    // Chegamos aqui com gente online alegando esse departamento (checagem
+    // acima) — resolução vazia não é "departamento não existe", é RUÍDO: ou o
+    // departamento sumiu entre o connect e agora (raro), ou a leitura crua de
+    // tenantDoDepartamento parou de enxergar por causa da RLS (ver cabeçalho
+    // do arquivo — DB_APP_ROLE apontando pra um role sem bypass). Não
+    // silencia: loga pra alguém investigar em vez de a fila simplesmente
+    // parar de distribuir sem explicação.
+    console.error(
+      `[fila] tenantDoDepartamento(${departamentoId}) não achou tenant com atendente(s) online — ` +
+      `depto removido ou bypass de RLS desligado (ver DB_APP_ROLE)`
+    );
+    return;
+  }
 
   // Defesa em profundidade: só considera candidatos do MESMO tenant do
   // departamento (departamentoId já é por si só escopado a um tenant via FK,
@@ -169,10 +190,11 @@ async function rodada(departamentoId, tentativa = 0) {
 
 /** Boot do serviço: varre departamentos com conversas aguardando (recuperação).
     Roda ANTES de qualquer cliente reconectar via SSE — ainda não há tenant de
-    contexto, então a varredura é entre tenants por natureza (conexão direta,
-    fora de comTenant, como a resolução de tenant por phone_number_id no
-    webhook). Cada departamento encontrado passa por atribuir(), que resolve
-    o tenant dele e segue no caminho normal. */
+    contexto, então a varredura é entre tenants por natureza. Mesmo caminho
+    privilegiado de tenantDoDepartamento (getConnection cru, bypass de RLS via
+    role dono da conexão — ver nota MULTI-TENANT no topo do arquivo). Cada
+    departamento encontrado passa por atribuir(), que resolve o tenant dele e
+    segue no caminho normal (comTenant). */
 async function varrerPendentes() {
   let conn;
   try {
