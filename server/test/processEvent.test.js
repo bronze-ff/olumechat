@@ -131,7 +131,7 @@ function fakeConnRedelivery(capturas = []) {
         // pro WAMID que já existe, 1 pro novo — nunca lança.
         return { rowsAffected: binds.wamid === 'wamid.DUP' ? 0 : 1 };
       }
-      if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260610100088' }] };
+      if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100088' }] };
       if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [70] } };
       if (sql.includes('FROM conversa')) return { rows: [] };
       return { rows: [], outBinds: {}, rowsAffected: 1 };
@@ -194,7 +194,7 @@ function fakeConnBot({ conversaExistente = null, capturas = [] } = {}) {
       }
       if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
       if (sql.includes('FROM conversa')) return { rows: conversaExistente ? [conversaExistente] : [] };
-      if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260610100077' }] };
+      if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100077' }] };
       if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [88] } };
       return { rows: [], outBinds: { id: [1] }, rowsAffected: 1 };
     },
