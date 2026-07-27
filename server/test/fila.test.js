@@ -81,7 +81,7 @@ function validarBinds(sql, binds = {}) {
   for (const k of noSql) if (!noObj.includes(k)) throw new Error(`bind :${k} sem valor`);
 }
 
-function fakeConnFila({ fila = [], cargas = {}, capturas = [], falhaUpdate = false, tenantId = TENANT }) {
+function fakeConnFila({ fila = [], cargas = {}, capturas = [], falhaUpdate = false, tenantId = TENANT, lockAdquirido = true }) {
   // fila: IDs (sem número) OU objetos { id, numeroId }.
   const itens = fila.map((f) => (typeof f === 'object' ? f : { id: f, numeroId: null }));
   let idx = 0;
@@ -99,6 +99,9 @@ function fakeConnFila({ fila = [], cargas = {}, capturas = [], falhaUpdate = fal
       // SET LOCAL ROLE / set_config (comTenant) — não precisam de simulação real.
       if (sql.startsWith('SET LOCAL ROLE') || sql.includes('set_config')) {
         return { rows: [], outBinds: {} };
+      }
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        return { rows: [{ ADQUIRIDO: lockAdquirido }] };
       }
 
       if (sql.includes(`fila_status = 'aguardando' AND departamento_id = :d`) && sql.includes('SELECT id')) {
@@ -233,6 +236,43 @@ test('distribuidor: perdeu a corrida (rowsAffected=0) → não publica atribuiç
   off();
 
   assert.equal(evento, null);
+});
+
+test('distribuidor: perde lock do tenant e re-tenta no próximo tick', async () => {
+  presence._reset();
+  presence.conectar({ atendenteId: 32, tenantId: TENANT, deptoIds: [14] });
+  let tentativas = 0;
+  const fila = [802];
+  const conn = {
+    async execute(sql, binds = {}) {
+      validarBinds(sql, binds);
+      if (sql.includes('FROM departamento WHERE id')) return { rows: [{ TENANT_ID: TENANT }] };
+      if (sql.startsWith('SET LOCAL ROLE') || sql.includes('set_config')) return { rows: [] };
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        tentativas++;
+        return { rows: [{ ADQUIRIDO: tentativas > 1 }] };
+      }
+      if (sql.includes("fila_status = 'aguardando' AND departamento_id = :d") && sql.includes('SELECT id')) {
+        return { rows: fila.length ? [{ ID: fila.shift(), NUMERO_ID: null }] : [] };
+      }
+      if (sql.includes('COUNT(*) AS qtd') && sql.includes('em_atendimento')) return { rows: [] };
+      if (sql.startsWith('UPDATE conversa')) return { rowsAffected: 1 };
+      if (sql.includes('SELECT COUNT(*) AS qtd')) return { rows: [{ QTD: 0 }] };
+      return { rows: [] };
+    },
+    commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+  db.getConnection = async () => conn;
+  let evento;
+  const off = subscribe((e) => { if (e.tipo === 'atribuicao') evento = e; });
+  try {
+    await distribuidor.atribuir(14);
+    await new Promise((r) => setTimeout(r, 120));
+    assert.ok(tentativas >= 2);
+    assert.equal(evento.conversaId, 802);
+  } finally {
+    off();
+  }
 });
 
 test('distribuidor: isolamento de tenant — nunca escolhe atendente de OUTRO tenant', async () => {
