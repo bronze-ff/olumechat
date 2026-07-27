@@ -1,8 +1,9 @@
 // webhook/optOut.js — Opt-out/opt-in automático por palavra-chave (LGPD).
 // Quando o cliente manda "PARAR" (ou similar), registramos o opt-out; "VOLTAR"
-// reativa. O estado atual fica em MC_ZAP_CONTATO.OPTIN ('S'/'N') e a trilha
-// completa em MC_ZAP_AUDITORIA (ACAO='optin'/'optout'). A checagem de cobrança
-// (api/conversas.js) lê a ação MAIS RECENTE, então re-opt-in funciona.
+// reativa. O estado atual fica em contato.optin ('S'/'N') e a trilha completa
+// em auditoria (acao='optin'/'optout'). A checagem de cobrança (api/conversas.js)
+// lê a ação MAIS RECENTE, então re-opt-in funciona. Roda dentro da transação
+// comTenant() do chamador — não abre conexão própria.
 'use strict';
 
 // Frases exatas (já normalizadas) que disparam cada ação.
@@ -39,18 +40,18 @@ function classificar(txt) {
 async function registrarOpt(conn, { contatoId, telefone, acao, origem }) {
   if (acao === 'optin') {
     await conn.execute(
-      `UPDATE MC_ZAP_CONTATO SET OPTIN = 'S', OPTIN_ORIGEM = :o, OPTIN_EM = SYSTIMESTAMP
-        WHERE ID = :id`,
+      `UPDATE contato SET optin = 'S', optin_origem = :o, optin_em = now()
+        WHERE id = :id`,
       { o: origem, id: contatoId }
     );
   } else {
     await conn.execute(
-      `UPDATE MC_ZAP_CONTATO SET OPTIN = 'N' WHERE ID = :id`,
+      `UPDATE contato SET optin = 'N' WHERE id = :id`,
       { id: contatoId }
     );
   }
   await conn.execute(
-    `INSERT INTO MC_ZAP_AUDITORIA (ACAO, ENTIDADE, ENTIDADE_ID, DETALHE)
+    `INSERT INTO auditoria (acao, entidade, entidade_id, detalhe)
      VALUES (:acao, 'contato', :id, :det)`,
     { acao, id: contatoId, det: JSON.stringify({ origem, telefone }) }
   );

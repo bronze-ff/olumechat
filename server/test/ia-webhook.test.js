@@ -5,17 +5,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const db = require('../db/pool');
 const iaRuntime = require('../ia/runtime');
-const configCache = require('../utils/configCache');
-// webhook/processEvent.js (FIL-60, fora deste ticket) ainda chama
-// lerConfig(conn) com um único argumento — sob o contrato pós-FIL-66
-// (tenantId obrigatório, sem balde 'default') isso lança. Nenhum destes
-// testes depende do conteúdo real da config (o guard de fora-de-horário já
-// exclui filaStatus='ia' antes de chegar lá); stub equivale ao
-// comportamento anterior do fakeConn sem foraHorario ({} vazio) e evita
-// acoplar esta regressão ao rebase pendente do FIL-60.
-configCache.lerConfig = async () => ({});
 const { processPayload } = require('../webhook/processEvent');
-const { invalidar: invalidarConfigCache } = configCache;
+const { invalidar: invalidarConfigCache } = require('../utils/configCache');
 
 function payload(texto) {
   return { entry: [{ changes: [{ value: {
@@ -28,12 +19,12 @@ function fakeConn(conversaExistente, opts) {
   const foraHorario = opts && opts.foraHorario;
   return { cap: [], async execute(sql, binds) {
     this.cap.push({ sql, binds });
-    if (sql.includes('FROM MC_ZAP_NUMERO')) return { rows: [{ ID: 2, DEPARTAMENTO_PADRAO_ID: null, FLUXO_ID: null, MODO: 'ia' }] };
+    if (sql.includes('FROM numero')) return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: null, FLUXO_ID: null, MODO: 'ia' }] };
     if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Gestor' }] };
-    if (sql.includes('FROM MC_ZAP_CONVERSA')) return { rows: conversaExistente ? [conversaExistente] : [] };
+    if (sql.includes('FROM conversa')) return { rows: conversaExistente ? [conversaExistente] : [] };
     if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260701100001' }] };
-    if (sql.startsWith('INSERT INTO MC_ZAP_CONVERSA')) return { outBinds: { id: [88] } };
-    if (sql.includes('FROM MC_ZAP_CONFIG')) {
+    if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [88] } };
+    if (sql.includes('FROM config')) {
       if (!foraHorario) return { rows: [] };
       return { rows: [
         { CHAVE: 'fora_horario_ativo', VALOR: 'S' },
@@ -48,22 +39,25 @@ const aguardar = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 
 test('conversa nova em número MODO=ia entra em FILA_STATUS=ia e JÁ chama o runtime na 1ª msg', async () => {
   const conn = fakeConn(null); db.getConnection = async () => conn;
-  let chamado = null; iaRuntime.processarEntrada = async (id, texto) => { chamado = { id, texto }; };
+  // FIL-63: ia/runtime.processarEntrada passa a receber (tenantId, conversaId, texto).
+  let chamado = null; iaRuntime.processarEntrada = async (tenantId, id, texto) => { chamado = { tenantId, id, texto }; };
   await processPayload(payload('vendas de ontem?'));
   await aguardar();
-  const ins = conn.cap.find((c) => c.sql.startsWith('INSERT INTO MC_ZAP_CONVERSA'));
+  const ins = conn.cap.find((c) => c.sql.startsWith('INSERT INTO conversa'));
   assert.equal(ins.binds.fst, 'ia');
   // A 1ª mensagem já é a pergunta — o runtime TEM que ser acionado (regressão:
   // antes exigia !conversa.criada e engolia a primeira mensagem, sem resposta).
+  assert.equal(chamado && chamado.tenantId, 1);
   assert.equal(chamado && chamado.id, 88);
   assert.match(chamado.texto, /vendas/);
 });
 
 test('mensagem em conversa ia chama o runtime de IA', async () => {
   const conn = fakeConn({ ID: 88, DEPARTAMENTO_ID: null, FILA_STATUS: 'ia' }); db.getConnection = async () => conn;
-  let chamado = null; iaRuntime.processarEntrada = async (id, texto) => { chamado = { id, texto }; };
+  let chamado = null; iaRuntime.processarEntrada = async (tenantId, id, texto) => { chamado = { tenantId, id, texto }; };
   await processPayload(payload('inadimplência da filial 2'));
   await aguardar();
+  assert.equal(chamado.tenantId, 1);
   assert.equal(chamado.id, 88);
   assert.match(chamado.texto, /inadimpl/);
 });
@@ -76,11 +70,11 @@ test('conversa nova MODO=ia fora do horário de atendimento NÃO recebe aviso de
   await aguardar();
 
   // A conversa foi criada como 'ia' (MODO=ia no número).
-  const ins = conn.cap.find((c) => c.sql.startsWith('INSERT INTO MC_ZAP_CONVERSA'));
+  const ins = conn.cap.find((c) => c.sql.startsWith('INSERT INTO conversa'));
   assert.equal(ins.binds.fst, 'ia');
 
   // O guard de fora-de-horário nunca deve marcar/disparar para filaStatus='ia':
   // a marcação (AVISO_FORA_HORARIO='S') só acontece dentro do branch do aviso.
-  const marcouAviso = conn.cap.some((c) => c.sql.includes("AVISO_FORA_HORARIO = 'S'"));
+  const marcouAviso = conn.cap.some((c) => c.sql.includes("aviso_fora_horario = 'S'"));
   assert.equal(marcouAviso, false);
 });

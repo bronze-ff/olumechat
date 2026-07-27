@@ -16,7 +16,7 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
   const [aba, setAba] = useState('cliente'); // 'cliente' | 'manual'
   const [busca, setBusca] = useState('');
   const [telefone, setTelefone] = useState(contatoInicial?.telefone || '');
-  const [codcli, setCodcli] = useState(contatoInicial?.codcli || null);
+  const [codigoExterno, setCodigoExterno] = useState(contatoInicial?.codigoExterno || null);
   const [clienteNome, setClienteNome] = useState(contatoInicial?.nome || '');
   const [templateName, setTemplateName] = useState('');
   // No modo Reabrir o número NÃO é fixado no canal da conversa: conversas que
@@ -70,7 +70,7 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
     mutationFn: () =>
       api.post('/conversas', {
         telefone,
-        codcli,
+        codigoExterno,
         templateName,
         numeroId: numeroEscolhido ? Number(numeroEscolhido) : undefined,
         departamentoId: precisaDepto && departamentoId ? Number(departamentoId) : undefined,
@@ -89,7 +89,9 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
   }
   function selecionarCliente(c) {
     setTelefone(c.telefone || '');
-    setCodcli(c.cod || c.codcli || null);
+    // `/clientes` ainda não foi portado (fora do escopo do FIL-60) — aceita o
+    // formato novo (codigoExterno) e o antigo (cod/codcli) como fallback.
+    setCodigoExterno(c.codigoExterno ?? c.cod ?? c.codcli ?? null);
     setClienteNome(c.cliente || '');
   }
 
@@ -134,11 +136,11 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
               {clientes.isError && <p className="text-xs text-red-600 mt-1">{clientes.error.response?.data?.error || 'Erro na busca.'}</p>}
               <div className="mt-2 max-h-40 overflow-y-auto divide-y divide-black/[0.05]">
                 {(clientes.data || []).map((c) => (
-                  <button key={c.cod || c.codcli} onClick={() => selecionarCliente(c)}
+                  <button key={c.codigoExterno ?? c.cod ?? c.codcli} onClick={() => selecionarCliente(c)}
                     className={`w-full text-left px-2 py-2 text-sm rounded hover:bg-paper-50
-                      ${codcli === (c.cod || c.codcli) ? 'bg-brand-50' : ''}`}>
+                      ${codigoExterno === (c.codigoExterno ?? c.cod ?? c.codcli) ? 'bg-brand-50' : ''}`}>
                     <div className="font-medium text-stone-800 truncate">{c.cliente}</div>
-                    <div className="text-xs text-stone-500 font-mono">#{c.cod || c.codcli} · {formatPhone(c.telefone)}</div>
+                    <div className="text-xs text-stone-500 font-mono">#{c.codigoExterno ?? c.cod ?? c.codcli} · {formatPhone(c.telefone)}</div>
                   </button>
                 ))}
               </div>
@@ -151,7 +153,7 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
           ) : (
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Telefone (com DDD)</label>
-              <input className="input-field font-mono" value={telefone} onChange={(e) => { setTelefone(e.target.value); setCodcli(null); }}
+              <input className="input-field font-mono" value={telefone} onChange={(e) => { setTelefone(e.target.value); setCodigoExterno(null); }}
                 placeholder="62 99999-9999" inputMode="numeric" />
             </div>
           )}

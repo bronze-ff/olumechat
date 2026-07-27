@@ -24,13 +24,13 @@ function fakeConn({ optout = false, numero = { ID: 2 }, depExiste = true, captur
   return {
     async execute(sql, binds) {
       if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: null }] };
-      if (sql.includes('FROM MC_ZAP_AUDITORIA')) return { rows: optout ? [{ ACAO: 'optout' }] : [] };
-      if (sql.includes('FROM MC_ZAP_NUMERO')) return { rows: numero ? [numero] : [] };
-      if (sql.includes('FROM MC_ZAP_DEPARTAMENTO')) return { rows: depExiste ? [{ ID: binds && binds.id }] : [] };
+      if (sql.includes('FROM auditoria')) return { rows: optout ? [{ ACAO: 'optout' }] : [] };
+      if (sql.includes('FROM numero')) return { rows: numero ? [numero] : [] };
+      if (sql.includes('FROM departamento')) return { rows: depExiste ? [{ ID: binds && binds.id }] : [] };
       if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260611100001' }] };
-      if (sql.includes('FROM MC_ZAP_CONVERSA')) return { rows: [] };
-      if (sql.startsWith('INSERT INTO MC_ZAP_CONVERSA')) { capture.insert = binds; return { outBinds: { id: [7] } }; }
-      if (sql.includes('FROM MC_ZAP_ATENDENTE')) return { rows: [{ ID: 9 }] };
+      if (sql.includes('FROM conversa')) return { rows: [] };
+      if (sql.startsWith('INSERT INTO conversa')) { capture.insert = binds; return { outBinds: { id: [7] } }; }
+      if (sql.includes('FROM atendente')) return { rows: [{ ID: 9 }] };
       return { rows: [], outBinds: {} };
     },
     commit: async () => {}, rollback: async () => {}, close: async () => {},
@@ -41,7 +41,7 @@ function startApp(conn, perfil = { atendenteId: 9, papel: 'ADMIN', deptoIds: [],
   db.getConnection = async () => conn;
   const app = express();
   app.use('/api', express.json());
-  app.use('/api/conversas', authMiddleware, (req, res, next) => { req.perfil = perfil; next(); }, conversasRoutes);
+  app.use('/api/conversas', authMiddleware, (req, res, next) => { req.perfil = perfil; req.tenantId = 1; next(); }, conversasRoutes);
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
   return new Promise((resolve) => {

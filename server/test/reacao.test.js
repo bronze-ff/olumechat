@@ -31,11 +31,11 @@ function fakeConnReacao({ capturas, aberta }) {
     capturas,
     async execute(sql, binds) {
       capturas.push({ sql, binds });
-      if (sql.includes('FROM MC_ZAP_NUMERO')) return { rows: [{ ID: 2, DEPARTAMENTO_PADRAO_ID: 4, FLUXO_ID: null }] };
+      if (sql.includes('FROM numero')) return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: 4, MODO: 'padrao', FLUXO_ID: null }] };
       // Guarda da reação (SELECT 1 ...) — vem ANTES do select genérico de conversa.
-      if (sql.includes('SELECT 1 FROM MC_ZAP_CONVERSA')) return { rows: aberta ? [{ '1': 1 }] : [] };
+      if (sql.includes('SELECT 1 FROM conversa')) return { rows: aberta ? [{ '1': 1 }] : [] };
       if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
-      if (sql.includes('FROM MC_ZAP_CONVERSA')) {
+      if (sql.includes('FROM conversa')) {
         return { rows: aberta ? [{ ID: 70, DEPARTAMENTO_ID: 4, FILA_STATUS: 'em_atendimento', PROTOCOLO: 'P1', AVISO_FORA_HORARIO: 'N' }] : [] };
       }
       return { rows: [], outBinds: { id: [99] }, rowsAffected: 1 };
@@ -50,8 +50,8 @@ test('reação SEM conversa aberta é ignorada (não cria atendimento nem grava 
   db.getConnection = async () => fakeConnReacao({ capturas, aberta: false });
   await processPayload(payloadReacao());
   const sqls = capturas.map((c) => c.sql);
-  assert.ok(!sqls.some((s) => /INSERT INTO MC_ZAP_MENSAGEM/.test(s)), 'não grava a reação');
-  assert.ok(!sqls.some((s) => /INSERT INTO MC_ZAP_CONVERSA/.test(s)), 'não cria conversa');
+  assert.ok(!sqls.some((s) => /INSERT INTO mensagem/.test(s)), 'não grava a reação');
+  assert.ok(!sqls.some((s) => /INSERT INTO conversa/.test(s)), 'não cria conversa');
 });
 
 test('reação COM conversa aberta é registrada (sem criar conversa)', async () => {
@@ -60,6 +60,6 @@ test('reação COM conversa aberta é registrada (sem criar conversa)', async ()
   db.getConnection = async () => fakeConnReacao({ capturas, aberta: true });
   await processPayload(payloadReacao());
   const sqls = capturas.map((c) => c.sql);
-  assert.ok(sqls.some((s) => /INSERT INTO MC_ZAP_MENSAGEM/.test(s)), 'registra a reação na conversa aberta');
-  assert.ok(!sqls.some((s) => /INSERT INTO MC_ZAP_CONVERSA/.test(s)), 'reaproveita a conversa, não cria nova');
+  assert.ok(sqls.some((s) => /INSERT INTO mensagem/.test(s)), 'registra a reação na conversa aberta');
+  assert.ok(!sqls.some((s) => /INSERT INTO conversa/.test(s)), 'reaproveita a conversa, não cria nova');
 });

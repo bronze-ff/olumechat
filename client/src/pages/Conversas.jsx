@@ -329,8 +329,8 @@ function ContatoModal({ conversa, onClose, onDone }) {
   const qc = useQueryClient();
   const cid = conversa.contatoId;
   const [nomeInterno, setNomeInterno] = useState('');
-  const [cgcent, setCgcent] = useState('');
-  const [codcli, setCodcli] = useState(null);
+  const [documento, setDocumento] = useState('');
+  const [codigoExterno, setCodigoExterno] = useState(null);
   const [observacoes, setObservacoes] = useState('');
   const [tags, setTags] = useState([]);
   const [busca, setBusca] = useState('');
@@ -345,8 +345,8 @@ function ContatoModal({ conversa, onClose, onDone }) {
   useEffect(() => {
     if (ficha.data && !pronto) {
       setNomeInterno(ficha.data.nomeInterno || '');
-      setCgcent(ficha.data.cgcent || '');
-      setCodcli(ficha.data.codcli || null);
+      setDocumento(ficha.data.documento || '');
+      setCodigoExterno(ficha.data.codigoExterno || null);
       setObservacoes(ficha.data.observacoes || '');
       setTags(ficha.data.tags || []);
       setPronto(true);
@@ -360,14 +360,14 @@ function ContatoModal({ conversa, onClose, onDone }) {
     enabled: busca.trim().length >= 2,
   });
   const cobranca = useQuery({
-    queryKey: ['cobranca', cid, codcli],
+    queryKey: ['cobranca', cid, codigoExterno],
     queryFn: () => api.get(`/contatos/${cid}/cobranca`).then((r) => r.data),
-    enabled: !!cid && !!codcli,
+    enabled: !!cid && !!codigoExterno,
   });
 
   const salvar = useMutation({
     mutationFn: () => api.put(`/contatos/${cid}`, {
-      nomeInterno: nomeInterno.trim(), cgcent, codcli,
+      nomeInterno: nomeInterno.trim(), documento, codigoExterno,
       observacoes: observacoes.trim(), tags,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['contato', cid] }); onDone({ nomeInterno: nomeInterno.trim() || null }); },
@@ -375,8 +375,10 @@ function ContatoModal({ conversa, onClose, onDone }) {
   });
 
   function vincular(c) {
-    setCodcli(c.codcli ?? c.cod ?? null);
-    if (c.cgcent) setCgcent(c.cgcent);
+    // `/clientes` ainda não foi portado (fora do escopo do FIL-60) — aceita o
+    // formato novo (codigoExterno/documento) e o antigo (codcli/cod/cgcent).
+    setCodigoExterno(c.codigoExterno ?? c.codcli ?? c.cod ?? null);
+    if (c.documento || c.cgcent) setDocumento(c.documento || c.cgcent);
     if (!nomeInterno.trim() && c.cliente) setNomeInterno(c.cliente);
     setBusca('');
   }
@@ -399,10 +401,10 @@ function ContatoModal({ conversa, onClose, onDone }) {
           </p>
 
           {/* Sugestão automática pelo telefone (contatos ainda sem cliente) */}
-          {!codcli && sug && (
+          {!codigoExterno && sug && (
             <div className="p-2.5 rounded-lg bg-brand-50 border border-brand-100 text-xs text-stone-700 flex items-center gap-2">
-              <span className="flex-1">Parece ser <b>{sug.nome}</b> <span className="font-mono text-stone-400">#{sug.codcli}</span></span>
-              <button onClick={() => vincular({ codcli: sug.codcli, cliente: sug.nome, cgcent: sug.cgcent })}
+              <span className="flex-1">Parece ser <b>{sug.nome}</b> <span className="font-mono text-stone-400">#{sug.codigoExterno}</span></span>
+              <button onClick={() => vincular({ codigoExterno: sug.codigoExterno, cliente: sug.nome, documento: sug.documento })}
                 className="px-2 py-1 rounded bg-brand-700 text-white text-[11px] font-semibold">Vincular</button>
             </div>
           )}
@@ -414,13 +416,13 @@ function ContatoModal({ conversa, onClose, onDone }) {
             <p className="text-[11px] text-stone-400 mt-1">Aparece no lugar do nome do WhatsApp no inbox e no topo do chat.</p>
           </div>
 
-          {/* Vínculo com o cliente (WinThor) */}
+          {/* Vínculo com o cliente no sistema do tenant (seam clienteLookup) */}
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Cliente vinculado</label>
-            {codcli ? (
+            {codigoExterno ? (
               <div className="flex items-center gap-2 text-sm">
-                <span className="px-2 py-1 rounded bg-stone-100 font-mono text-stone-600">#{codcli}</span>
-                <button onClick={() => { setCodcli(null); }} className="text-[11px] text-red-600 hover:underline">desvincular</button>
+                <span className="px-2 py-1 rounded bg-stone-100 font-mono text-stone-600">#{codigoExterno}</span>
+                <button onClick={() => { setCodigoExterno(null); }} className="text-[11px] text-red-600 hover:underline">desvincular</button>
               </div>
             ) : (
               <>
@@ -429,10 +431,10 @@ function ContatoModal({ conversa, onClose, onDone }) {
                 {clientes.isFetching && <p className="text-xs text-stone-400 mt-1">Buscando…</p>}
                 <div className="mt-1 max-h-32 overflow-y-auto divide-y divide-black/[0.05]">
                   {(clientes.data || []).map((c) => (
-                    <button key={c.codcli ?? c.cod} onClick={() => vincular(c)}
+                    <button key={c.codigoExterno ?? c.codcli ?? c.cod} onClick={() => vincular(c)}
                       className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-paper-50">
                       <div className="font-medium text-stone-800 truncate">{c.cliente}</div>
-                      <div className="text-[11px] text-stone-500 font-mono">#{c.codcli ?? c.cod}{c.cgcent ? ` · ${c.cgcent}` : ''}</div>
+                      <div className="text-[11px] text-stone-500 font-mono">#{c.codigoExterno ?? c.codcli ?? c.cod}{(c.documento || c.cgcent) ? ` · ${c.documento || c.cgcent}` : ''}</div>
                     </button>
                   ))}
                 </div>
@@ -442,7 +444,7 @@ function ContatoModal({ conversa, onClose, onDone }) {
 
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">CNPJ / CPF</label>
-            <input className="input-field font-mono" value={cgcent} onChange={(e) => setCgcent(e.target.value)} placeholder="Só números" inputMode="numeric" />
+            <input className="input-field font-mono" value={documento} onChange={(e) => setDocumento(e.target.value)} placeholder="Só números" inputMode="numeric" />
           </div>
 
           {/* Tags do contato (reusa o catálogo) */}
@@ -470,27 +472,28 @@ function ContatoModal({ conversa, onClose, onDone }) {
               placeholder="Anotações internas sobre o contato…" />
           </div>
 
-          {/* Dados do cliente no WinThor (vendedor / supervisor / telefones) */}
-          {codcli && ficha.data?.winthor && (ficha.data.winthor.vendedor || ficha.data.winthor.supervisor || (ficha.data.winthor.telefonesCliente || []).length > 0) && (
+          {/* Dados do cliente no sistema do tenant (vendedor / supervisor / telefones) —
+              vem do seam clienteLookup (dadosDoCliente), null sem provedor registrado. */}
+          {codigoExterno && ficha.data?.dadosExternos && (ficha.data.dadosExternos.vendedor || ficha.data.dadosExternos.supervisor || (ficha.data.dadosExternos.telefonesCliente || []).length > 0) && (
             <div className="rounded-lg border border-black/[0.07] overflow-hidden">
-              <div className="px-3 py-2 bg-paper-50 text-xs font-semibold text-stone-600 border-b border-black/[0.06]">Dados do cliente (WinThor)</div>
+              <div className="px-3 py-2 bg-paper-50 text-xs font-semibold text-stone-600 border-b border-black/[0.06]">Dados do cliente</div>
               <div className="p-3 space-y-1.5 text-xs">
-                {ficha.data.winthor.vendedor && (
+                {ficha.data.dadosExternos.vendedor && (
                   <div className="flex justify-between gap-3">
-                    <span className="text-stone-500 shrink-0">Vendedor <span className="font-mono">#{ficha.data.winthor.vendedor.cod}</span></span>
-                    <span className="text-stone-700 text-right">{ficha.data.winthor.vendedor.nome || '—'}{ficha.data.winthor.vendedor.telefone ? ` · ${ficha.data.winthor.vendedor.telefone}` : ''}</span>
+                    <span className="text-stone-500 shrink-0">Vendedor <span className="font-mono">#{ficha.data.dadosExternos.vendedor.cod}</span></span>
+                    <span className="text-stone-700 text-right">{ficha.data.dadosExternos.vendedor.nome || '—'}{ficha.data.dadosExternos.vendedor.telefone ? ` · ${ficha.data.dadosExternos.vendedor.telefone}` : ''}</span>
                   </div>
                 )}
-                {ficha.data.winthor.supervisor && (
+                {ficha.data.dadosExternos.supervisor && (
                   <div className="flex justify-between gap-3">
-                    <span className="text-stone-500 shrink-0">Supervisor <span className="font-mono">#{ficha.data.winthor.supervisor.cod}</span></span>
-                    <span className="text-stone-700 text-right">{ficha.data.winthor.supervisor.nome || '—'}{ficha.data.winthor.supervisor.telefone ? ` · ${ficha.data.winthor.supervisor.telefone}` : ''}</span>
+                    <span className="text-stone-500 shrink-0">Supervisor <span className="font-mono">#{ficha.data.dadosExternos.supervisor.cod}</span></span>
+                    <span className="text-stone-700 text-right">{ficha.data.dadosExternos.supervisor.nome || '—'}{ficha.data.dadosExternos.supervisor.telefone ? ` · ${ficha.data.dadosExternos.supervisor.telefone}` : ''}</span>
                   </div>
                 )}
-                {(ficha.data.winthor.telefonesCliente || []).length > 0 && (
+                {(ficha.data.dadosExternos.telefonesCliente || []).length > 0 && (
                   <div className="flex justify-between gap-3">
                     <span className="text-stone-500 shrink-0">Telefones do cadastro</span>
-                    <span className="text-stone-700 text-right font-mono">{ficha.data.winthor.telefonesCliente.join(' · ')}</span>
+                    <span className="text-stone-700 text-right font-mono">{ficha.data.dadosExternos.telefonesCliente.join(' · ')}</span>
                   </div>
                 )}
               </div>
@@ -498,7 +501,7 @@ function ContatoModal({ conversa, onClose, onDone }) {
           )}
 
           {/* Mini-painel de cobrança */}
-          {codcli && (
+          {codigoExterno && (
             <div className="rounded-lg border border-black/[0.07] overflow-hidden">
               <div className="px-3 py-2 bg-paper-50 text-xs font-semibold text-stone-600 border-b border-black/[0.06]">Títulos em aberto</div>
               <div className="p-3">
@@ -1049,7 +1052,7 @@ export default function Conversas() {
         <NovaConversa
           contatoInicial={{
             telefone: sel.telefone,
-            codcli: sel.codcli,
+            codigoExterno: sel.codigoExterno,
             nome: sel.nomeInterno || sel.nomePerfil,
           }}
           onClose={() => setReabrir(false)}
