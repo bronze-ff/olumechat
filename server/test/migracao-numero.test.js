@@ -35,29 +35,29 @@ function fakeConnMig({ capturas, contatoNovoExiste = false }) {
     capturas,
     async execute(sql, binds) {
       capturas.push({ sql, binds });
-      if (sql.includes('FROM MC_ZAP_NUMERO')) return { rows: [{ ID: 2, DEPARTAMENTO_PADRAO_ID: null, FLUXO_ID: null }] };
+      if (sql.includes('FROM numero')) return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: null, MODO: 'padrao', FLUXO_ID: null }] };
       if (sql.includes('FROM MC_ZAP_CONTATO') && sql.includes('TELEFONE IN')) {
         const vals = Object.values(binds || {}).join(',');
         if (vals.includes('8888')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] }; // antigo
         return { rows: contatoNovoExiste ? [{ ID: 9, NOME_PERFIL: 'Outro' }] : [] };      // novo
       }
-      if (sql.includes('FROM MC_ZAP_CONVERSA')) return { rows: [{ ID: 70 }] };
+      if (sql.includes('FROM conversa')) return { rows: [{ ID: 70 }] };
       return { rows: [], outBinds: {}, rowsAffected: 1 };
     },
     commit: async () => {}, rollback: async () => {}, close: async () => {},
   };
 }
 
-test('user_changed_number migra o contato (UPDATE TELEFONE + auditoria + nota) e não grava a system como inbound', async () => {
+test('user_changed_number migra o contato (UPDATE telefone + auditoria + nota) e não grava a system como inbound', async () => {
   presence._reset();
   const capturas = [];
   db.getConnection = async () => fakeConnMig({ capturas });
   await processPayload(payloadSystem());
   const sqls = capturas.map((c) => c.sql);
-  assert.ok(sqls.some((s) => /UPDATE MC_ZAP_CONTATO SET TELEFONE/.test(s)), 'deve migrar o TELEFONE');
+  assert.ok(sqls.some((s) => /UPDATE contato SET telefone/.test(s)), 'deve migrar o telefone');
   assert.ok(sqls.some((s) => /migracao_numero'/.test(s)), 'deve auditar a migração');
-  assert.ok(sqls.some((s) => /INSERT INTO MC_ZAP_MENSAGEM/.test(s) && /'nota'/.test(s)), 'deve registrar nota na conversa');
-  assert.ok(!sqls.some((s) => /INSERT INTO MC_ZAP_MENSAGEM/.test(s) && /'in'/.test(s)), 'não grava a system como mensagem inbound');
+  assert.ok(sqls.some((s) => /INSERT INTO mensagem/.test(s) && /'nota'/.test(s)), 'deve registrar nota na conversa');
+  assert.ok(!sqls.some((s) => /INSERT INTO mensagem/.test(s) && /'in'/.test(s)), 'não grava a system como mensagem inbound');
 });
 
 test('número novo já existe em outro contato → conflito auditado, sem sobrescrever', async () => {
@@ -67,5 +67,5 @@ test('número novo já existe em outro contato → conflito auditado, sem sobres
   await processPayload(payloadSystem());
   const sqls = capturas.map((c) => c.sql);
   assert.ok(sqls.some((s) => /migracao_numero_conflito/.test(s)), 'deve auditar o conflito');
-  assert.ok(!sqls.some((s) => /UPDATE MC_ZAP_CONTATO SET TELEFONE/.test(s)), 'não sobrescreve o telefone no conflito');
+  assert.ok(!sqls.some((s) => /UPDATE contato SET telefone/.test(s)), 'não sobrescreve o telefone no conflito');
 });
