@@ -72,6 +72,10 @@ module.exports = async function autenticarOperador(req, res, next) {
   // Assinado com o segredo do operador, mas sem cara de sessão de operador.
   // Cobre também o caso de OPERADOR_JWT_SECRET ter sido configurado igual ao
   // JWT_SECRET: um token de tenant passaria na assinatura e morre aqui.
+  if (!Number.isFinite(decoded.exp)) {
+    return res.status(401).json({ error: MSG_401 });
+  }
+
   const operadorId = idValido(decoded.operadorId);
   if (decoded.escopo !== 'operador' || !operadorId) {
     return ehTokenDeTenant(token)
@@ -84,14 +88,13 @@ module.exports = async function autenticarOperador(req, res, next) {
   if (decoded.tenantId !== undefined && decoded.tenantId !== null) {
     return res.status(403).json({ error: MSG_403 });
   }
-  if (decoded.jti && blacklist.has(decoded.jti)) {
-    return res.status(401).json({ error: 'Sessão encerrada. Faça login novamente.' });
-  }
-
   try {
+    if (decoded.jti && await blacklist.has(decoded.jti, { operador: true })) {
+      return res.status(401).json({ error: 'Sessão encerrada. Faça login novamente.' });
+    }
     const operador = await contas.buscarAtivoPorId(operadorId);
     if (!operador) return res.status(401).json({ error: MSG_401 });
-    req.operador = { ...operador, jti: decoded.jti };
+    req.operador = { ...operador, jti: decoded.jti, exp: decoded.exp };
     next();
   } catch (err) {
     next(err);

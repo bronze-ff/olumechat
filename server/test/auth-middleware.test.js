@@ -119,8 +119,14 @@ test('token expirado → 401', async () => {
   assert.equal(r.status, 401);
 });
 
+test('JWT sem exp rejeitado antes da blacklist', async () => {
+  const tok = jwt.sign({ jti: 'sem-exp', tenantId: 7, matricula: 10 }, SECRET);
+  const r = await req(ctx.port, '/eco', { tok });
+  assert.equal(r.status, 401);
+});
+
 test('jti na blacklist → 401 mesmo com tenantId válido', async () => {
-  blacklist.add('revogado');
+  await blacklist.add('revogado', Math.floor(Date.now() / 1000) + 3600, { tenantId: 7 });
   const r = await req(ctx.port, '/eco', { tok: token({ jti: 'revogado', tenantId: 7, matricula: 10 }) });
   assert.equal(r.status, 401);
 });

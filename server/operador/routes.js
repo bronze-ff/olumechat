@@ -175,7 +175,7 @@ router.post('/tenants/:id/meta/signup/exchange', async (req, res, next) => {
 // ---------------------------------------------------------------------------
 router.post('/logout', async (req, res, next) => {
   try {
-    if (req.operador.jti) blacklist.add(req.operador.jti);
+    if (req.operador.jti) await blacklist.add(req.operador.jti, req.operador.exp, { operador: true });
     await comOperador((conn) => auditoria.registrar(conn, {
       operador: req.operador, acao: 'logout', entidade: 'operador',
       entidadeId: req.operador.id, ip: auditoria.ipDaRequisicao(req),
