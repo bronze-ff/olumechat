@@ -175,4 +175,39 @@ cd client && npm install && npm run dev
 Os testes de RLS contra Postgres real só rodam com `TEST_DATABASE_URL` no
 ambiente; sem ela são pulados e a suíte segue verde.
 
+## Deploy (Render + Neon)
+
+O serviço de produção roda no Render como um container persistente (`starter`),
+necessário para manter SSE e os workers com `setInterval`. O blueprint está em
+[`render.yaml`](render.yaml), inclui `/health`, coleta logs no painel do Render
+e mantém deliberadamente **uma única instância**. FIL-72/73/74 (barramento,
+locks e blacklist distribuídos) precisam estar prontos antes de aumentar esse
+limite; com o desenho atual, duas instâncias duplicariam campanhas e poderiam
+dividir conexões SSE.
+
+### Subir do zero
+
+1. Crie um projeto Neon de produção e uma branch Neon separada para
+   desenvolvimento/testes descartáveis. Use a URL pooled da produção em
+   `DATABASE_URL` e a URL direta (sem `-pooler`) em `MIGRATION_DATABASE_URL`.
+2. No Render, crie um Blueprint a partir deste repositório e preencha os
+   segredos marcados `sync: false` em `render.yaml`, incluindo as credenciais
+   da Meta e os segredos JWT. Não coloque valores reais no repositório.
+3. O deploy constrói o `Dockerfile`; o entrypoint executa `npm run migrar`, que
+   aplica todas as migrações versionadas em ordem e só então executa `node
+   app.js`. Uma falha de migração impede o app de subir.
+4. Configure o webhook da Meta para a URL pública do Render e valide
+   `https://SEU_HOST/health`. O painel do Render expõe logs do processo e do
+   deploy.
+
+Para desenvolvimento local, copie `server/.env.example` para `server/.env` e
+aponte as URLs para a branch Neon descartável. O CI executa `cd server && npm
+test` em todo push para `main` e em todo pull request.
+
+### Proteção do GitHub
+
+No repositório `bronze-ff/falatta`, o administrador deve proteger `main`, exigir
+pull request, exigir o check `test` deste workflow e bloquear push direto. O
+merge continua sendo feito manualmente após o CI verde.
+
 Convenções de branch, commit, PR e review: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
