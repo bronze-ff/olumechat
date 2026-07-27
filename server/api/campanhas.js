@@ -10,6 +10,7 @@
 'use strict';
 
 const express = require('express');
+const multer = require('multer');
 const db = require('../db/pool');
 const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
@@ -18,6 +19,7 @@ const segmento = require('../campanha/segmento');
 const dispatcher = require('../campanha/dispatcher');
 
 const router = express.Router();
+const uploadCsv = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 // Campanha é disparo PAGO em massa e o comprovante expõe PII de clientes (nome,
 // telefone, custo) entre departamentos. Sem escopo por depto no schema, fica
 // restrita a ADMIN — evita um SUPERVISOR ler/disparar/exportar campanha alheia.
@@ -73,9 +75,8 @@ function validarCorpo(b) {
   const nome = String(b.nome || '').trim();
   if (!nome) return { erro: 'Dê um nome à campanha.' };
   const seg = b.segmento || {};
-  if (!seg.sql) return { erro: 'Escreva o SELECT do segmento.' };
-  if (!seg.telefoneCol) return { erro: 'Indique a coluna do telefone.' };
-  try { segmento.validarSql(seg.sql); } catch (e) { return { erro: e.message }; }
+  if (!['csv', 'atributos'].includes(seg.tipo)) return { erro: 'Escolha importação CSV ou filtros por atributo.' };
+  if (seg.tipo === 'atributos' && seg.filtros && typeof seg.filtros !== 'object') return { erro: 'Filtros inválidos.' };
   return { nome, seg };
 }
 
@@ -135,7 +136,80 @@ router.put('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /:id/import — valida e guarda o CSV; ainda não cria campanha_item.
+router.post('/:id/import', uploadCsv.single('arquivo'), async (req, res, next) => {
+  const id = Number(req.params.id);
+  const texto = req.file ? req.file.buffer.toString('utf8') : (req.body && (req.body.csv || req.body.conteudo));
+  if (!texto) return res.status(400).json({ error: 'Envie um arquivo CSV.' });
+  try {
+    const resultado = await db.comTenant(req.tenantId, async (conn) => {
+      const c = await conn.execute(`SELECT STATUS, SEGMENTO FROM campanha WHERE ID = :id`, { id });
+      if (!c.rows.length) return { notFound: true };
+      if (!['rascunho', 'pausada'].includes(c.rows[0].STATUS)) return { conflito: true };
+      const seg = parseSegmento(c.rows[0].SEGMENTO);
+      const variaveis = Array.isArray(seg.variaveis) ? seg.variaveis : [];
+      const importado = segmento.validarImportacao(texto, variaveis);
+      await conn.execute(`DELETE FROM campanha_import_linha WHERE CAMPANHA_ID = :id`, { id });
+      for (const l of [...importado.aceitas.map((x) => ({ ...x, status: 'aceita', motivo: null })), ...importado.rejeitadas.map((x) => ({ ...x, status: 'rejeitada' }))]) {
+        await conn.execute(
+          `INSERT INTO campanha_import_linha (CAMPANHA_ID, NUMERO_LINHA, TELEFONE, VARIAVEIS, STATUS, MOTIVO)
+           VALUES (:id, :linha, :tel, :vars, :status, :motivo)`,
+          { id, linha: l.linha, tel: l.telefone ? String(l.telefone) : null, vars: JSON.stringify(l.variaveis || []), status: l.status, motivo: l.motivo || null }
+        );
+      }
+      await conn.execute(`UPDATE campanha SET SEGMENTO = :seg, TOTAL = 0, ATUALIZADO_EM = now() WHERE ID = :id`,
+        { seg: JSON.stringify({ tipo: 'csv', variaveis, colunas: importado.headers }), id });
+      return { aceitas: importado.aceitas.length, rejeitadas: importado.rejeitadas.length, relatorio: importado.rejeitadas };
+    });
+    if (resultado.notFound) return res.status(404).json({ error: 'Campanha não encontrada' });
+    if (resultado.conflito) return res.status(409).json({ error: 'Só dá para importar em campanha rascunho ou pausada.' });
+    res.json(resultado);
+  } catch (err) { next(err); }
+});
+
 const CUSTO_ESTIMADO = 0.04; // R$/msg utility (alinhe ao dispatcher)
+
+function linhasDoSegmento(conn, seg, limite) {
+  switch (seg.tipo) {
+    case 'atributos': {
+      const consulta = segmento.filtroAtributos(seg.filtros || {});
+      const texto = `${consulta.texto} LIMIT :segmento_limite`;
+      return conn.execute(texto, { ...consulta.binds, segmento_limite: limite || 100000 }).then((r) => r.rows.map((row) => ({ telefone: row.TELEFONE, variaveis: [row.NOME || ''] })));
+    }
+    case 'csv':
+      return conn.execute(
+        `SELECT TELEFONE, VARIAVEIS FROM campanha_import_linha
+          WHERE CAMPANHA_ID = :id AND STATUS = 'aceita' ORDER BY NUMERO_LINHA LIMIT :segmento_limite`,
+        { id: seg.id, segmento_limite: limite || 100000 }
+      ).then((r) => r.rows.map((row) => ({ telefone: row.TELEFONE, variaveis: row.VARIAVEIS || [] })));
+    default:
+      throw new segmento.SegmentoInvalido('Tipo de segmento inválido: esperado "csv" ou "atributos".');
+  }
+}
+
+function totalDoSegmento(conn, seg) {
+  switch (seg.tipo) {
+    case 'csv':
+      return conn.execute(`SELECT COUNT(*) AS QTD FROM campanha_import_linha WHERE CAMPANHA_ID = :id AND STATUS = 'aceita'`, { id: seg.id });
+    case 'atributos': {
+      const consulta = segmento.filtroAtributos(seg.filtros || {});
+      return conn.execute(`${consulta.texto.replace(/^SELECT /, 'SELECT COUNT(*) OVER () AS QTD, ')}`, consulta.binds);
+    }
+    default:
+      throw new segmento.SegmentoInvalido('Tipo de segmento inválido: esperado "csv" ou "atributos".');
+  }
+}
+
+async function optoutAtual(conn, telefone) {
+  const vs = variantes(telefone); const binds = {};
+  const marks = vs.map((v, i) => { binds[`ot${i}`] = v; return `:ot${i}`; });
+  const r = await conn.execute(
+    `SELECT ct.OPTIN, a.ACAO FROM contato ct LEFT JOIN auditoria a
+       ON a.ENTIDADE = 'contato' AND a.ENTIDADE_ID = ct.ID AND a.ACAO IN ('optin','optout')
+      WHERE ct.TELEFONE IN (${marks.join(',')})
+      ORDER BY a.CRIADO_EM DESC NULLS LAST, a.ID DESC NULLS LAST FETCH FIRST 1 ROWS ONLY`, binds);
+  return r.rows.length && (r.rows[0].OPTIN === 'N' || r.rows[0].ACAO === 'optout');
+}
 
 // POST /api/campanhas/:id/preview — amostra + total + custo (NÃO materializa).
 router.post('/:id/preview', async (req, res, next) => {
@@ -145,19 +219,19 @@ router.post('/:id/preview', async (req, res, next) => {
       const r = await conn.execute(`SELECT SEGMENTO FROM campanha WHERE ID = :id`, { id });
       if (!r.rows.length) return { notFound: true };
       const seg = parseSegmento(r.rows[0].SEGMENTO);
-      const amostra = await segmento.rodarPreview(conn, seg.sql, {}, 50);
-      const total = await segmento.contarTotal(conn, seg.sql, {});
+      seg.id = id;
+      const amostra = await linhasDoSegmento(conn, seg, 50);
+      const totalR = await totalDoSegmento(conn, seg);
+      const total = seg.tipo === 'csv' ? Number(totalR.rows[0].QTD) : Number(totalR.rows[0]?.QTD || 0);
       return { seg, amostra, total };
     });
     if (resultado.notFound) return res.status(404).json({ error: 'Campanha não encontrada' });
     const { seg, amostra, total } = resultado;
     const avisos = [];
-    if (!amostra.length) avisos.push('O SELECT não retornou nenhuma linha.');
-    else if (!(seg.telefoneCol in amostra[0])) avisos.push(`A coluna de telefone "${seg.telefoneCol}" não está no resultado.`);
+    if (!amostra.length) avisos.push('O segmento não retornou nenhum contato.');
     res.json({ amostra, colunas: amostra.length ? Object.keys(amostra[0]) : [], total, custoEstimado: total * CUSTO_ESTIMADO, avisos });
   } catch (err) {
-    // Erro de SQL (ex.: tabela sem GRANT) volta cru pra o DBA enxergar.
-    res.status(400).json({ error: 'Erro ao rodar o SELECT: ' + err.message });
+    res.status(400).json({ error: 'Erro ao gerar o preview: ' + err.message });
   }
 });
 
@@ -169,8 +243,8 @@ router.post('/:id/preparar', async (req, res, next) => {
       const r = await conn.execute(`SELECT STATUS, SEGMENTO FROM campanha WHERE ID = :id`, { id });
       if (!r.rows.length) return { notFound: true };
       if (!['rascunho', 'pausada'].includes(r.rows[0].STATUS)) return { conflito: true };
-      const seg = parseSegmento(r.rows[0].SEGMENTO);
-      const linhas = await segmento.rodarCompleto(conn, seg.sql, {});
+      const seg = parseSegmento(r.rows[0].SEGMENTO); seg.id = id;
+      const linhas = await linhasDoSegmento(conn, seg);
 
       // Limpa itens anteriores (re-preparar) e re-insere.
       await conn.execute(`DELETE FROM campanha_item WHERE CAMPANHA_ID = :id`, { id });
@@ -179,7 +253,7 @@ router.post('/:id/preparar', async (req, res, next) => {
       const exemplosInvalidos = []; // amostra crua p/ o DBA ver O QUE veio errado (ex.: sem DDD)
       const vistos = new Set();
       for (const linha of linhas) {
-        const bruto = linha[seg.telefoneCol];
+        const bruto = linha.telefone;
         const tel = normalizar(bruto);
         if (tel.length < 12) {
           invalidos++;
@@ -191,7 +265,8 @@ router.post('/:id/preparar', async (req, res, next) => {
         const chave = variantes(tel).slice().sort().join('|');
         if (vistos.has(chave)) { duplicados++; continue; }
         vistos.add(chave);
-        const vars = (seg.variaveis || []).map((col) => String(linha[col] ?? ''));
+        if (await optoutAtual(conn, tel)) { invalidos++; if (exemplosInvalidos.length < 5) exemplosInvalidos.push(`${bruto} (opt-out)`); continue; }
+        const vars = linha.variaveis || [];
         // ON CONFLICT DO NOTHING em vez de catch(23505): um catch aqui deixaria
         // a transação ABORTADA (Postgres exige ROLLBACK/savepoint depois de um
         // erro) — o UPDATE campanha e o INSERT auditoria logo abaixo, na MESMA
