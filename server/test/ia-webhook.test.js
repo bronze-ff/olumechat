@@ -5,8 +5,17 @@ const test = require('node:test');
 const assert = require('node:assert');
 const db = require('../db/pool');
 const iaRuntime = require('../ia/runtime');
+const configCache = require('../utils/configCache');
+// webhook/processEvent.js (FIL-60, fora deste ticket) ainda chama
+// lerConfig(conn) com um único argumento — sob o contrato pós-FIL-66
+// (tenantId obrigatório, sem balde 'default') isso lança. Nenhum destes
+// testes depende do conteúdo real da config (o guard de fora-de-horário já
+// exclui filaStatus='ia' antes de chegar lá); stub equivale ao
+// comportamento anterior do fakeConn sem foraHorario ({} vazio) e evita
+// acoplar esta regressão ao rebase pendente do FIL-60.
+configCache.lerConfig = async () => ({});
 const { processPayload } = require('../webhook/processEvent');
-const { invalidar: invalidarConfigCache } = require('../utils/configCache');
+const { invalidar: invalidarConfigCache } = configCache;
 
 function payload(texto) {
   return { entry: [{ changes: [{ value: {

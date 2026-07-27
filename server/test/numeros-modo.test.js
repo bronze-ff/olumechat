@@ -25,7 +25,7 @@ function startApp(conn, perfil) {
   db.getConnection = async () => conn;
   const app = express();
   app.use('/api', express.json());
-  app.use('/api/numeros', authMiddleware, (req, res, next) => { req.perfil = perfil; next(); }, numerosRoutes);
+  app.use('/api/numeros', authMiddleware, (req, res, next) => { req.perfil = perfil; req.tenantId = 1; next(); }, numerosRoutes);
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
   return new Promise((resolve) => {
@@ -62,8 +62,8 @@ test('PUT /numeros/:id aceita modo=ia e grava MODO', async () => {
   try {
     const r = await req(port, 'PUT', '/api/numeros/7', { modo: 'ia' });
     assert.equal(r.status, 200);
-    const upd = capturas.find((c) => c.sql.includes('UPDATE MC_ZAP_NUMERO'));
-    assert.match(upd.sql, /MODO\s+=\s+COALESCE\(:modo, MODO\)/);
+    const upd = capturas.find((c) => c.sql.includes('UPDATE numero'));
+    assert.match(upd.sql, /modo\s+=\s+COALESCE\(:modo, modo\)/);
     assert.equal(upd.binds.modo, 'ia');
   } finally { server.close(); }
 });
@@ -74,7 +74,7 @@ test('PUT /numeros/:id volta pra modo=padrao', async () => {
   try {
     const r = await req(port, 'PUT', '/api/numeros/7', { modo: 'padrao' });
     assert.equal(r.status, 200);
-    const upd = capturas.find((c) => c.sql.includes('UPDATE MC_ZAP_NUMERO'));
+    const upd = capturas.find((c) => c.sql.includes('UPDATE numero'));
     assert.equal(upd.binds.modo, 'padrao');
   } finally { server.close(); }
 });
@@ -85,7 +85,7 @@ test('PUT /numeros/:id ignora modo invalido (bind vira null, nao altera coluna)'
   try {
     const r = await req(port, 'PUT', '/api/numeros/7', { modo: 'qualquer' });
     assert.equal(r.status, 200);
-    const upd = capturas.find((c) => c.sql.includes('UPDATE MC_ZAP_NUMERO'));
+    const upd = capturas.find((c) => c.sql.includes('UPDATE numero'));
     assert.equal(upd.binds.modo, null);
   } finally { server.close(); }
 });

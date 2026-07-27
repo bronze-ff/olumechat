@@ -24,7 +24,7 @@ function startApp(rotas, conn, perfil) {
   const app = express();
   app.use('/api', express.json());
   for (const [caminho, router] of rotas) {
-    app.use(caminho, authMiddleware, (req, res, next) => { req.perfil = perfil; next(); }, router);
+    app.use(caminho, authMiddleware, (req, res, next) => { req.perfil = perfil; req.tenantId = 1; next(); }, router);
   }
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
@@ -133,22 +133,33 @@ test('historico: export CSV audita e manda BOM + cabeçalho', async () => {
 });
 
 test('config: GET devolve mapa e PUT (ADMIN) faz upsert auditado', async () => {
+  // App isolado (não usa o startApp compartilhado): api/config.js roda dentro
+  // de comTenant(), que abre SET LOCAL ROLE + set_config antes da query real —
+  // o fakeConn precisa reconhecer esses comandos de setup sem quebrar as
+  // asserções sobre a query de negócio.
   const capturas = [];
   const conn = {
     async execute(sql, binds) {
       capturas.push({ sql, binds });
-      if (sql.includes('SELECT CHAVE, VALOR')) {
+      if (sql.includes('SELECT chave, valor')) {
+        // Mock representa a saída já passada pelo wrapClient (chaves MAIÚSCULAS
+        // — ver linhaMaiuscula em db/pool.js), como o resto da suíte faz.
         return { rows: [{ CHAVE: 'despedida_padrao', VALOR: 'Tchau {{protocolo}}' }] };
       }
       return { rows: [], rowsAffected: 1 };
     },
     commit: async () => {}, rollback: async () => {}, close: async () => {},
   };
-  const { server, port } = await startApp(
-    [['/api/config', require('../api/config')]],
-    conn,
-    { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true }
-  );
+  const app = express();
+  app.use('/api', express.json());
+  app.use('/api/config', authMiddleware,
+    (req, res, next) => { req.perfil = { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true }; req.tenantId = 1; next(); },
+    require('../api/config'));
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
+  db.getConnection = async () => conn;
+  const server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
+  const port = server.address().port;
   try {
     const g = await get(port, '/api/config');
     assert.equal(JSON.parse(g.body).despedida_padrao, 'Tchau {{protocolo}}');
@@ -163,9 +174,9 @@ test('config: GET devolve mapa e PUT (ADMIN) faz upsert auditado', async () => {
       rq.on('error', reject); rq.write(body); rq.end();
     });
     assert.equal(r.status, 200);
-    const merges = capturas.filter((c) => c.sql.startsWith('MERGE INTO MC_ZAP_CONFIG'));
-    assert.equal(merges.length, 1); // chave fora da whitelist NÃO gravou
-    assert.equal(merges[0].binds.v, 'Novo texto');
+    const upserts = capturas.filter((c) => c.sql.startsWith('INSERT INTO config'));
+    assert.equal(upserts.length, 1); // chave fora da whitelist NÃO gravou
+    assert.equal(upserts[0].binds.v, 'Novo texto');
     assert.ok(capturas.some((c) => c.sql.includes(`'config_update'`)));
   } finally { server.close(); }
 });
@@ -195,11 +206,11 @@ test('fluxos: PUT atualiza DEFINICAO por atribuição direta (sem COALESCE no CL
       rq.on('error', reject); rq.write(body); rq.end();
     });
     assert.equal(r.status, 200);
-    const upd = capturas.find((c) => c.sql.startsWith('UPDATE MC_ZAP_FLUXO'));
+    const upd = capturas.find((c) => c.sql.startsWith('UPDATE fluxo'));
     assert.ok(upd, 'deve executar o UPDATE');
-    // ORA-00932: bind VARCHAR2 dentro de COALESCE com coluna CLOB — proibido.
+    // Atribuição direta — nunca dentro de COALESCE com a coluna jsonb.
     assert.equal(/COALESCE\([^)]*:def/i.test(upd.sql), false);
-    assert.match(upd.sql, /DEFINICAO = :def/);
+    assert.match(upd.sql, /definicao = :def/);
     assert.match(upd.binds.def, /menu|encerrar/);
     assert.equal(upd.binds.num, 2);
   } finally { server.close(); }
