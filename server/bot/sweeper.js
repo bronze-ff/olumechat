@@ -1,6 +1,14 @@
 // bot/sweeper.js — Timeout de inatividade do bot. A cada 60s procura conversas
-// em FILA_STATUS='bot' paradas além do timeoutMin do fluxo e executa a
+// em fila_status='bot' paradas além do timeoutMin do fluxo e executa a
 // acaoTimeout (encerrar/transferir). Estado no banco ⇒ sobrevive a restart.
+//
+// Shared-schema multi-tenant: sem contexto de tenant a RLS devolve ZERO
+// linhas (não existe "varredura sem tenant" nas tabelas de dado). Por isso o
+// tick varre tenant por tenant, cada um dentro do seu próprio comTenant().
+// Isso NÃO é o item de escala do FIL-73 (lock de liderança contra disparo
+// duplicado em N instâncias) — é só o que já é preciso para o tick achar
+// alguma linha com uma única instância. `varrer()` continua isolada numa
+// função nomeada de propósito: é o ponto de entrada onde o lock entra depois.
 'use strict';
 
 const db = require('../db/pool');
@@ -9,28 +17,57 @@ const runtime = require('./runtime');
 const INTERVALO_MS = 60_000;
 let timer = null;
 
-async function varrer() {
+/** Ids dos tenants ativos. Lê `tenant` com a conexão crua (dono do banco,
+    BYPASSRLS) só para enumerar — é o mesmo caso de uso que a policy
+    `tenant_operador` da migração 001 prevê para operador/provisionamento.
+    Nenhuma outra tabela é tocada por esta conexão; os dados de cada tenant só
+    são lidos dentro do comTenant() de varrerTenant(). */
+async function tenantsAtivos() {
   let conn;
   try {
     conn = await db.getConnection();
-    // Pega o timeout de cada fluxo direto do JSON (volume baixo: poucas conversas em bot).
-    const r = await conn.execute(
-      `SELECT c.ID,
-              NVL(JSON_VALUE(f.DEFINICAO, '$.config.timeoutMin'), 30) AS TIMEOUT_MIN,
-              (CAST(SYSTIMESTAMP AS DATE) - CAST(c.BOT_ULTIMA_INTERACAO AS DATE)) * 1440 AS PARADA_MIN
-         FROM MC_ZAP_CONVERSA c
-         JOIN MC_ZAP_FLUXO f ON f.ID = c.BOT_FLUXO_ID
-        WHERE c.FILA_STATUS = 'bot' AND c.BOT_ULTIMA_INTERACAO IS NOT NULL`
-    );
-    for (const row of r.rows) {
-      if (Number(row.PARADA_MIN) >= Number(row.TIMEOUT_MIN)) {
-        runtime.expirar(row.ID); // async, isolado
-      }
-    }
-  } catch (err) {
-    console.error('[bot] sweeper falhou:', err.message);
+    const r = await conn.execute(`SELECT id FROM tenant WHERE status = 'ativo'`);
+    return r.rows.map((row) => row.ID);
   } finally {
     if (conn) await conn.close().catch(() => {});
+  }
+}
+
+/** Verifica os fluxos parados além do timeout para UM tenant e dispara o expirar. */
+async function varrerTenant(tenantId) {
+  const expirados = await db.comTenant(tenantId, async (conn) => {
+    const r = await conn.execute(
+      `SELECT c.id,
+              COALESCE((f.definicao -> 'config' ->> 'timeoutMin')::int, 30) AS timeout_min,
+              EXTRACT(EPOCH FROM (now() - c.bot_ultima_interacao)) / 60 AS parada_min
+         FROM conversa c
+         JOIN fluxo f ON f.id = c.bot_fluxo_id
+        WHERE c.fila_status = 'bot' AND c.bot_ultima_interacao IS NOT NULL
+          AND c.tenant_id = :tid`,
+      { tid: tenantId }
+    );
+    return r.rows
+      .filter((row) => Number(row.PARADA_MIN) >= Number(row.TIMEOUT_MIN))
+      .map((row) => row.ID);
+  });
+  for (const id of expirados) runtime.expirar(tenantId, id); // async, isolado
+}
+
+/** Um tick do sweeper. */
+async function varrer() {
+  let tenants;
+  try {
+    tenants = await tenantsAtivos();
+  } catch (err) {
+    console.error('[bot] sweeper: falha ao listar tenants:', err.message);
+    return;
+  }
+  for (const tenantId of tenants) {
+    try {
+      await varrerTenant(tenantId);
+    } catch (err) {
+      console.error(`[bot] sweeper falhou (tenant ${tenantId}):`, err.message);
+    }
   }
 }
 
