@@ -31,7 +31,7 @@ const authMiddleware = require('../auth/middleware');
 const { criarTicket, consumirTicket } = require('../auth/sseTicket');
 const { subscribe } = require('../realtime/hub');
 const presence = require('../realtime/presence');
-const { carregarPerfil } = require('../auth/rbac');
+const { carregarPerfil, PERFIL_SUPORTE } = require('../auth/rbac');
 
 const router = express.Router();
 
@@ -67,13 +67,21 @@ router.get('/', async (req, res) => {
   if (!user.tenantId) return res.status(401).json({ error: 'Ticket sem tenant associado' });
   const tenantId = user.tenantId;
 
-  // Perfil para filtrar eventos + registrar presença.
+  // Sessão de SUPORTE do operador (FIL-70): não tem matrícula (não é gente do
+  // cliente), então não passa por carregarPerfil — que criaria um `atendente`
+  // lazy com matrícula nula. Perfil fixo de leitura, o mesmo que
+  // auth/rbac.js::anexarPerfil dá às rotas REST.
+  const ehSuporte = user.suporte === true;
   let perfil;
-  try {
-    perfil = await carregarPerfil(tenantId, user.matricula, user.nome);
-  } catch (err) {
-    console.error('[stream] falha ao carregar perfil:', err.message);
-    return res.status(500).json({ error: 'Falha ao carregar perfil' });
+  if (ehSuporte) {
+    perfil = PERFIL_SUPORTE;
+  } else {
+    try {
+      perfil = await carregarPerfil(tenantId, user.matricula, user.nome);
+    } catch (err) {
+      console.error('[stream] falha ao carregar perfil:', err.message);
+      return res.status(500).json({ error: 'Falha ao carregar perfil' });
+    }
   }
 
   res.writeHead(200, {
@@ -99,7 +107,9 @@ router.get('/', async (req, res) => {
   const cancelar = subscribe(enviar);
 
   // Presença: conexão SSE conta como "online" (pausa persistida no banco).
-  presence.conectar({
+  // O suporte NÃO entra na presença: o operador não pode aparecer como
+  // atendente disponível no monitor do cliente (nem receber conversa da fila).
+  if (!ehSuporte) presence.conectar({
     atendenteId: perfil.atendenteId,
     tenantId,
     deptoIds: perfil.deptoIds,
@@ -116,7 +126,7 @@ router.get('/', async (req, res) => {
   req.on('close', () => {
     clearInterval(hb);
     cancelar();
-    presence.desconectar(perfil.atendenteId);
+    if (!ehSuporte) presence.desconectar(perfil.atendenteId);
   });
 });
 

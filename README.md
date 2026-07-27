@@ -129,6 +129,35 @@ sessão vazaria o tenant para a requisição seguinte. Detalhes e a armadilha
 completa no topo de [`server/db/pool.js`](server/db/pool.js); o isolamento tem
 teste dedicado em `server/test/db-tenant.test.js`.
 
+## Painel do operador
+
+O super-admin do SaaS (nós) vive **fora** do RBAC de tenant, em `/api/operador/*`
+e `/operador` no front: provisiona clientes, suspende, reativa, renomeia,
+acompanha o uso e entra num tenant para dar suporte. Não é um `ADMIN` com flag —
+é outra sessão, com outro segredo de JWT e middleware próprio
+([`server/operador/`](server/operador/)).
+
+```bash
+cd server
+npm run migrar                                   # aplica a 005_operador.sql
+OPERADOR_SENHA='...' npm run criar-operador -- --email=voce@falatta.com --nome="Seu Nome"
+```
+
+Não há auto-cadastro de operador: a primeira conta nasce por esse script, rodado
+por quem já tem acesso ao banco.
+
+Como este painel **enxerga todos os tenants**, ele não usa `comTenant()`: as
+queries passam por `comOperador()` (contexto de tenant nulo, explícito — ver o
+topo de [`server/operador/db.js`](server/operador/db.js)), e as tabelas
+`operador`/`operador_auditoria` são fechadas para o role de tenant na própria
+migração. Toda ação de operador gera trilha em `operador_auditoria`; o acesso de
+suporte é registrado **também** na `auditoria` do cliente, que ele lê no painel
+dele.
+
+Enquanto não houver envio de e-mail, o provisionamento **devolve o link do
+convite na resposta da API** para o operador repassar ao cliente — decisão
+provisória, registrada no PR do FIL-70.
+
 ## Referência
 
 `docs/referencia/schema-oracle/` guarda a DDL Oracle original do fork. **Não é
