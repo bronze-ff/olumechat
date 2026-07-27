@@ -11,7 +11,9 @@
 //      webhook da Meta resolve o tenant a partir dele): o segundo tenant que
 //      tentar cadastrar o mesmo phoneNumberId recebe 409, e api/numeros.js
 //      mapeia a violação (código 23505, constraint uq_num_pnid) corretamente.
-//   3) configCache não vaza config de um tenant para outro dentro do TTL.
+//   3) configCache exige tenantId (sem balde 'default'), não vaza config de
+//      um tenant para outro dentro do TTL, e invalidar(tenantId) não afeta
+//      outros tenants.
 //
 // (1) e (2) rodam contra um Postgres DE MENTIRA fiel ao suficiente (BEGIN/
 // COMMIT, SET LOCAL ROLE, set_config transaction-scoped, violação de
@@ -204,22 +206,51 @@ test('cadastros: phone_number_id é único GLOBAL — segundo tenant recebe 409,
 // ---------------------------------------------------------------------------
 // configCache: isolamento por tenant (utils/configCache.js).
 // ---------------------------------------------------------------------------
+test('configCache: lerConfig sem tenantId lança (não existe mais balde default)', async () => {
+  const conn = { execute: async () => { throw new Error('não deveria nem tentar ler sem tenantId válido'); } };
+  await assert.rejects(configCache.lerConfig(undefined, conn), /tenantId inválido/);
+  await assert.rejects(configCache.lerConfig(null, conn), /tenantId inválido/);
+  await assert.rejects(configCache.lerConfig('abc', conn), /tenantId inválido/);
+  await assert.rejects(configCache.lerConfig(0, conn), /tenantId inválido/);
+  await assert.rejects(configCache.lerConfig(-1, conn), /tenantId inválido/);
+});
+
 test('configCache: config do tenant A não vaza para o tenant B dentro do TTL', async () => {
   configCache.invalidar();
   const connA = { execute: async () => ({ rows: [{ CHAVE: 'despedida_padrao', VALOR: 'Tchau do A' }] }) };
   const connB = { execute: async () => ({ rows: [{ CHAVE: 'despedida_padrao', VALOR: 'Tchau do B' }] }) };
 
-  const cfgA = await configCache.lerConfig(connA, 1);
+  const cfgA = await configCache.lerConfig(1, connA);
   assert.equal(cfgA.despedida_padrao, 'Tchau do A');
 
   // Se a chave do cache ignorasse o tenant, esta chamada devolveria (do cache)
   // o valor do tenant A em vez de reler connB.
-  const cfgB = await configCache.lerConfig(connB, 2);
+  const cfgB = await configCache.lerConfig(2, connB);
   assert.equal(cfgB.despedida_padrao, 'Tchau do B', 'tenant B recebeu config cacheada do tenant A — VAZAMENTO');
 
   // 2ª leitura do tenant A dentro do TTL: continua vendo o próprio valor (cache por tenant, não global).
-  const cfgA2 = await configCache.lerConfig({ execute: async () => { throw new Error('não deveria reler — devia vir do cache'); } }, 1);
+  const cfgA2 = await configCache.lerConfig(1, { execute: async () => { throw new Error('não deveria reler — devia vir do cache'); } });
   assert.equal(cfgA2.despedida_padrao, 'Tchau do A');
+
+  configCache.invalidar();
+});
+
+test('configCache: invalidar(tenantId) não afeta o cache de outros tenants', async () => {
+  configCache.invalidar();
+  const connA = { execute: async () => ({ rows: [{ CHAVE: 'k', VALOR: 'valor do A' }] }) };
+  const connB = { execute: async () => ({ rows: [{ CHAVE: 'k', VALOR: 'valor do B' }] }) };
+  await configCache.lerConfig(1, connA);
+  await configCache.lerConfig(2, connB);
+
+  configCache.invalidar(1); // só o tenant 1
+
+  const cfgB = await configCache.lerConfig(2, { execute: async () => { throw new Error('tenant B não deveria reler — invalidar(1) vazou pro B'); } });
+  assert.equal(cfgB.k, 'valor do B');
+
+  let releu = false;
+  const cfgA2 = await configCache.lerConfig(1, { execute: async () => { releu = true; return { rows: [{ CHAVE: 'k', VALOR: 'valor novo do A' }] }; } });
+  assert.equal(releu, true, 'tenant A deveria reler após invalidar(1)');
+  assert.equal(cfgA2.k, 'valor novo do A');
 
   configCache.invalidar();
 });
