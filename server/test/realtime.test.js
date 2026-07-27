@@ -3,7 +3,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { EventEmitter } = require('node:events');
 const { publish, subscribe } = require('../realtime/hub');
+const { createHub } = require('../realtime/hub');
 const { criarTicket, consumirTicket } = require('../auth/sseTicket');
 
 test('hub: subscribe recebe o evento publicado e cancela depois', () => {
@@ -26,4 +28,49 @@ test('sseTicket: ticket válido é consumido uma única vez', () => {
 
 test('sseTicket: ticket inexistente retorna null', () => {
   assert.equal(consumirTicket('naoexiste'), null);
+});
+
+test('hub: duas instâncias propagam evento pelo canal do tenant', async () => {
+  const clients = new Set();
+  class FakeClient extends EventEmitter {
+    async connect() { clients.add(this); }
+    async query(sql, values) {
+      if (sql.startsWith('LISTEN ')) { this.canais = this.canais || new Set(); this.canais.add(sql.slice(7)); return; }
+      if (sql.includes('pg_notify')) {
+        for (const c of clients) if (c.canais?.has(values[0])) c.emit('notification', { channel: values[0], payload: values[1] });
+      }
+    }
+    async end() { clients.delete(this); }
+  }
+  const factory = () => new FakeClient();
+  const a = createHub({ directUrl: 'direct', clientFactory: factory });
+  const b = createHub({ directUrl: 'direct', clientFactory: factory });
+  const recebidos = [];
+  b.subscribe((evento) => recebidos.push(evento), 7);
+  a.start(); b.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  a.publish({ tipo: 'mensagem', tenantId: 7, conversaId: 42 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(recebidos.map((e) => e.conversaId), [42]);
+  a.publish({ tipo: 'mensagem', tenantId: 8, conversaId: 99 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(recebidos.length, 1);
+  // B só assinou o canal do tenant 7: o evento do tenant 8 nem chega a B.
+  await Promise.all([a.stop(), b.stop()]);
+});
+
+test('hub: queda da conexão não propaga erro ao processo e tenta reconectar', async () => {
+  const clients = [];
+  class FakeClient extends EventEmitter {
+    async connect() { clients.push(this); }
+    async query() {}
+    async end() {}
+  }
+  const hub = createHub({ directUrl: 'direct', clientFactory: () => new FakeClient(), retryMs: 1 });
+  hub.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  clients[0].emit('error', new Error('queda simulada'));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(clients.length >= 3); // listener + publisher e pelo menos uma tentativa nova
+  await hub.stop();
 });

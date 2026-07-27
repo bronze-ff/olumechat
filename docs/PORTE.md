@@ -80,7 +80,7 @@ instâncias. Precisa ser resolvido antes de escalar.
 
 | Componente | Hoje | Problema com N instâncias |
 |---|---|---|
-| `realtime/hub.js` | `EventEmitter` local | mensagem que chega na instância A não aparece no SSE de quem está na B |
+| `realtime/hub.js` | LISTEN/NOTIFY direto por tenant | resolvido no FIL-72; sem Redis |
 | `fila/distribuidor` | `setInterval` in-process | N instâncias distribuem a mesma conversa |
 | `bot/sweeper` | `setInterval` in-process | timeout disparado N vezes |
 | `campanha/dispatcher` | `setInterval` in-process | **mensagem duplicada pro cliente final, cobrada pela Meta** |
@@ -88,8 +88,12 @@ instâncias. Precisa ser resolvido antes de escalar.
 
 Caminhos:
 
-- **Barramento:** Postgres `LISTEN/NOTIFY` — mas ⚠️ **não funciona** no pooler
-  em transaction mode; exige conexão direta (session mode). Alternativa: Redis.
+- **Barramento (FIL-72):** Postgres `LISTEN/NOTIFY`, sem Redis. O hub usa uma
+  conexão `DATABASE_URL_DIRECT` dedicada em session mode, separada do pool
+  `DATABASE_URL` pooled: o PgBouncer em transaction mode não suporta LISTEN.
+  Cada tenant tem seu próprio canal (`falatta_realtime_tenant_<id>`), e a
+  ausência ou queda do barramento degrada as atualizações SSE e dispara
+  reconexão automática; não derruba o processo.
 - **Workers:** eleição por `pg_advisory_xact_lock` (só uma instância roda o
   tick) — funciona no pooler e não adiciona dependência.
 - **Blacklist:** move para tabela com TTL, ou Redis.

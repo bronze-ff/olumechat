@@ -4,8 +4,8 @@
 //                            FILTRADOS pelo perfil (departamentos/papel) e
 //                            registra a PRESENÇA do atendente (Fase 5B).
 //
-// MULTI-TENANT: o hub (realtime/hub.js) continua um EventEmitter local sem
-// noção de tenant — quem publica evento tageia `evento.tenantId` na origem
+// MULTI-TENANT: o hub (realtime/hub.js) usa um canal LISTEN/NOTIFY dedicado por
+// tenant — quem publica evento ainda deve tagear `evento.tenantId` na origem
 // (fila/distribuidor.js, realtime/presence.js) e o filtro aqui é o gate final
 // e OBRIGATÓRIO: evt.tenantId !== tenantId do assinante → descarta, sempre,
 // antes de qualquer outra regra de escopo (inclusive antes do bypass de
@@ -104,7 +104,7 @@ router.get('/', async (req, res) => {
     if (evt.tenantId !== tenantId) return; // outro tenant — tráfego normal do hub compartilhado, não loga
     if (podeReceber(perfil, evt)) res.write(`data: ${JSON.stringify(evt)}\n\n`);
   };
-  const cancelar = subscribe(enviar);
+  const cancelar = subscribe(enviar, tenantId);
 
   // Presença: conexão SSE conta como "online" (pausa persistida no banco).
   // O suporte NÃO entra na presença: o operador não pode aparecer como

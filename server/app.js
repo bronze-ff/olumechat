@@ -13,6 +13,7 @@ const db = require('./db/pool');
 const { buildWebhookRouter } = require('./webhook/routes');
 
 const cfg = loadConfig();
+const hub = require('./realtime/hub');
 
 const app = express();
 // 1 hop confiável (o IIS/ARR na frente). Não usar `true` (confia em qualquer
@@ -157,6 +158,7 @@ function versaoApp() {
 async function start() {
   try {
     await db.initPool();
+    hub.start();
     // Recuperação pós-restart: redistribui conversas que ficaram aguardando.
     require('./fila/distribuidor').varrerPendentes();
     // Timeout de inatividade do bot (autoatendimento).
@@ -176,6 +178,7 @@ async function start() {
     function shutdown() {
       console.log('[mc-zap] Encerrando...');
       server.close(async () => {
+        await hub.stop();
         await db.closePool();
         process.exit(0);
       });
