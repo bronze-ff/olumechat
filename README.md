@@ -152,7 +152,8 @@ topo de [`server/operador/db.js`](server/operador/db.js)), e as tabelas
 `operador`/`operador_auditoria` são fechadas para o role de tenant na própria
 migração. Toda ação de operador gera trilha em `operador_auditoria`; o acesso de
 suporte é registrado **também** na `auditoria` do cliente, que ele lê no painel
-dele.
+dele — e é somente-leitura, imposto no middleware de tenant (qualquer método que
+não seja de leitura vira 403 para uma sessão de suporte).
 
 Enquanto não houver envio de e-mail, o provisionamento **devolve o link do
 convite na resposta da API** para o operador repassar ao cliente — decisão

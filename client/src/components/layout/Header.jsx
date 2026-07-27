@@ -72,7 +72,11 @@ export default function Header({ title }) {
   const { logout, user, isGestor } = useAuth();
   const { pathname } = useLocation();
   const emAdmin = pathname.startsWith('/admin');
-  const pres = usePresenca(!emAdmin);
+  // Sessão de suporte do operador (FIL-70) fica FORA da presença: ela é
+  // somente-leitura (o servidor recusa o PUT /presenca) e o operador não entra
+  // na distribuição de conversas do cliente — mostrar "Disponível" para ele
+  // seria mentira, e a auto-pausa ficaria batendo num 403 a cada 30 min.
+  const pres = usePresenca(!emAdmin && !user?.suporte);
 
   return (
     <>
@@ -80,6 +84,12 @@ export default function Header({ title }) {
         <div className="flex items-center h-14 px-4 md:px-6 gap-2 min-w-0">
           <span className="section-bar" />
           <h1 className="min-w-0 flex-1 font-display font-bold text-base tracking-tight truncate">{title}</h1>
+          {user?.suporte && (
+            <span title="Acesso de suporte do operador do Falatta — somente leitura, registrado na auditoria desta empresa"
+              className="shrink-0 bg-bordeaux-700 font-mono text-[10px] uppercase tracking-widest px-2 py-1 rounded">
+              suporte · leitura
+            </span>
+          )}
           <div className="flex items-center gap-2">
             {!emAdmin && pres.pausado !== null && (
               <button onClick={pres.alternar}

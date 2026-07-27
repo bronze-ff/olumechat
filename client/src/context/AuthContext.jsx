@@ -24,8 +24,12 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem('token');
     if (isTokenValid(token)) {
       const p = parseJwt(token);
+      // `suporte` = sessão do operador dentro deste tenant (FIL-70): entra
+      // pelo mesmo caminho, mas é somente-leitura (o servidor recusa qualquer
+      // mutação) e a UI precisa saber para se marcar como tal.
       setUser({ usuarioId: p.usuarioId, matricula: p.matricula, nome: p.nome, email: p.email,
-                tenantId: p.tenantId, papel: 'ATENDENTE', deptoIds: [], podeAtivo: false });
+                tenantId: p.tenantId, papel: 'ATENDENTE', deptoIds: [], podeAtivo: false,
+                suporte: p.suporte === true });
       // Papel/departamentos não vivem no JWT (podem mudar sem relogin) — busca no
       // servidor. loading só cai DEPOIS do perfil chegar: senão o app pinta como
       // ATENDENTE por um instante (esconde menu de admin / redireciona no 1º paint).

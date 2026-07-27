@@ -114,13 +114,21 @@ export default function Operador() {
   // Acesso de suporte: troca a sessão de operador por uma sessão CURTA e
   // somente-leitura dentro do tenant, e vai para o painel do cliente. Fica
   // registrado na auditoria que o próprio cliente lê.
+  //
+  // ⚠️ A troca é feita com uma NAVEGAÇÃO DE VERDADE (window.location), não com
+  // navigate() do router. O AuthProvider do painel do cliente lê o token do
+  // localStorage UMA VEZ, na montagem: quando esta página carregou, não havia
+  // sessão de tenant, então `user` é null. Um navigate() cairia no
+  // ProtectedRoute com user null e jogaria o operador no /login do cliente —
+  // o fluxo de suporte simplesmente não funcionaria. Recarregar remonta o app
+  // com a sessão nova e ainda descarta o cache de queries da sessão anterior.
   const suporte = useMutation({
     mutationFn: ({ id }) => apiOperador.post(`/tenants/${id}/acesso-suporte`).then((r) => r.data),
     onSuccess: (data) => {
       localStorage.setItem('token', data.token);
       localStorage.setItem('empresa', data.tenant.slug);
       setConfirmacao(null);
-      navigate('/conversas', { replace: true });
+      window.location.assign('/conversas');
     },
     onError: (e) => { setConfirmacao(null); setErro(e.response?.data?.error || 'Não foi possível abrir o suporte.'); },
   });

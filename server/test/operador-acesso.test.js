@@ -29,6 +29,7 @@ const db = require('../db/pool');
 const senhas = require('../auth/senha');
 const rbac = require('../auth/rbac');
 const authMiddleware = require('../auth/middleware');
+const authRoutes = require('../auth/routes');
 const streamRoutes = require('../api/stream');
 const presence = require('../realtime/presence');
 const { publish } = require('../realtime/hub');
@@ -77,6 +78,12 @@ function instalarBanco() {
       }
       if (/FROM operador_auditoria/i.test(s)) return { rows: [] };
       if (/FROM tenant t/i.test(s)) return { rows: [] };
+      // Perfil RBAC de um usuário LEGÍTIMO do tenant (o do suporte não passa
+      // por aqui — é justamente o que o teste do /perfil guarda).
+      if (/^SELECT id, papel, ativo, status_presenca, pode_ativo FROM atendente/i.test(s)) {
+        return { rows: [{ ID: 7, PAPEL: 'ADMIN', ATIVO: 'S', STATUS_PRESENCA: 'offline', PODE_ATIVO: 'S' }] };
+      }
+      if (/FROM atendente_depto|FROM atendente_numero/i.test(s)) return { rows: [] };
       throw new Error(`SQL não previsto no banco de teste: ${s}`);
     },
     async commit() {}, async rollback() {}, async close() {},
@@ -99,6 +106,15 @@ function startApp() {
     res.json({ tenantId: req.tenantId, papel: req.perfil.papel, atendenteId: req.perfil.atendenteId }));
   app.post('/api/atendentes/1', authMiddleware, rbac.anexarPerfil, rbac.exigirPapel('ADMIN'), (req, res) =>
     res.json({ ok: true }));
+  // Rotas de mutação SEM guarda de papel — existem de verdade no repo
+  // (api/atalhos.js, api/presenca.js). São elas que provam que o
+  // somente-leitura do suporte não pode depender de cada rota lembrar.
+  const executou = (req, res) => { mutacoesExecutadas.push(`${req.method} ${req.originalUrl}`); res.json({ ok: true }); };
+  app.post('/api/atalhos', authMiddleware, rbac.anexarPerfil, executou);
+  app.delete('/api/atalhos/1', authMiddleware, rbac.anexarPerfil, executou);
+  app.put('/api/presenca', authMiddleware, rbac.anexarPerfil, executou);
+  app.get('/api/atalhos', authMiddleware, rbac.anexarPerfil, (req, res) => res.json([]));
+  app.use('/api/auth', authRoutes);
   app.use('/api/stream', streamRoutes);
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
@@ -151,19 +167,27 @@ function rotasDoOperador() {
     .filter((r) => r.caminho !== '/login'); // login é por credencial, não por token
 }
 
+let mutacoesExecutadas = [];
 let ctx;
 let HASH;
 test.before(async () => {
   HASH = await senhas.gerarHash(SENHA_OPERADOR);
-  // O perfil de ADMIN de tenant vem do RBAC; aqui ele só não pode ir ao banco.
-  rbac.carregarPerfil = async () => ({ atendenteId: 7, papel: 'ADMIN', ativo: true, deptoIds: [], numeroIds: [], pausado: false, podeAtivo: true });
   ctx = await startApp();
 });
 test.after(() => ctx && ctx.server.close());
 test.beforeEach(() => {
   instalarBanco();
+  rbac.invalidar(); // o perfil tem cache de 30s e os testes reusam a matrícula
+  mutacoesExecutadas = [];
   estado.operadores.push({ ID: 1, EMAIL: 'op@falatta.test', NOME: 'Operador', SENHA_HASH: HASH, ATIVO: 'S' });
 });
+
+/** Abre uma sessão de suporte no tenant e devolve o token dela. */
+async function tokenDeSuporte() {
+  const r = await req(ctx.port, 'POST', `/api/operador/tenants/${TENANT_ID}/acesso-suporte`, { tok: tokenOperador() });
+  assert.equal(r.status, 200, r.texto);
+  return r.body.token;
+}
 
 // ===========================================================================
 // AC: JWT de ADMIN de tenant → 403 em TODA rota /api/operador/*.
@@ -268,6 +292,63 @@ test('acesso de suporte devolve sessão do tenant escolhido, somente-leitura e a
   // ...e NÃO volta a valer no painel do operador.
   const volta = await req(ctx.port, 'GET', '/api/operador/tenants', { tok: r.body.token });
   assert.equal(volta.status, 403, 'a sessão de suporte não pode reabrir a porta do operador');
+});
+
+// ---------------------------------------------------------------------------
+// Somente-leitura do suporte: imposto CENTRALMENTE, não rota a rota.
+// ---------------------------------------------------------------------------
+test('suporte é bloqueado em mutação de rota SEM guarda de papel (o deny é central)', async () => {
+  const tok = await tokenDeSuporte();
+  // Estas três não têm exigirPapel nem o guarda de AUDITOR no repo real —
+  // se o bloqueio dependesse da rota, passariam.
+  const casos = [
+    ['POST', '/api/atalhos', { atalho: 'oi', conteudo: 'texto' }],
+    ['DELETE', '/api/atalhos/1', undefined],
+    ['PUT', '/api/presenca', { estado: 'online' }],
+  ];
+  for (const [metodo, rota, body] of casos) {
+    const r = await req(ctx.port, metodo, rota, { tok, body });
+    assert.equal(r.status, 403, `${metodo} ${rota} devolveu ${r.status} para uma sessão somente-leitura`);
+  }
+  assert.deepEqual(mutacoesExecutadas, [], 'a mutação chegou a EXECUTAR com sessão de suporte');
+});
+
+test('o mesmo bloqueio não atinge o usuário legítimo do tenant', async () => {
+  const r = await req(ctx.port, 'POST', '/api/atalhos', { tok: tokenTenant(), body: { atalho: 'oi' } });
+  assert.equal(r.status, 200, 'o deny do suporte não pode pegar quem é do cliente');
+  assert.equal(mutacoesExecutadas.length, 1);
+});
+
+test('suporte lê normalmente e mantém o plumbing da própria sessão (logout e ticket de SSE)', async () => {
+  const tok = await tokenDeSuporte();
+  assert.equal((await req(ctx.port, 'GET', '/api/atalhos', { tok })).status, 200, 'suporte existe para LER');
+  assert.equal((await req(ctx.port, 'POST', '/api/stream/ticket', { tok })).status, 200, 'sem ticket não há SSE para diagnosticar');
+  assert.equal((await req(ctx.port, 'POST', '/api/auth/logout', { tok })).status, 200, 'encerrar a própria sessão tem que continuar possível');
+});
+
+test('a allowlist do suporte não abre por prefixo, query string ou barra final', async () => {
+  const tok = await tokenDeSuporte();
+  for (const rota of ['/api/atalhos?url=/api/auth/logout', '/api/atalhos/../atalhos']) {
+    const r = await req(ctx.port, 'POST', rota, { tok, body: {} });
+    assert.ok(r.status === 403 || r.status === 404, `${rota} devolveu ${r.status}`);
+  }
+  assert.deepEqual(mutacoesExecutadas, []);
+});
+
+// ---------------------------------------------------------------------------
+// Perfil: o reload da página do cliente durante o suporte não pode dar 500.
+// ---------------------------------------------------------------------------
+test('GET /api/auth/perfil com token de suporte responde AUDITOR sem criar atendente', async () => {
+  const tok = await tokenDeSuporte();
+  const r = await req(ctx.port, 'GET', '/api/auth/perfil', { tok });
+  // 500 aqui = o endpoint mandou a sessão de suporte para carregarPerfil, que
+  // tentaria criar um `atendente` com matrícula indefinida (o banco de teste
+  // estoura em SQL não previsto justamente para denunciar isso).
+  assert.equal(r.status, 200, r.texto);
+  assert.equal(r.body.papel, 'AUDITOR');
+  assert.equal(r.body.atendenteId, null);
+  assert.equal(r.body.suporte, true, 'o front precisa saber que está em sessão de suporte para se marcar');
+  assert.equal(r.body.podeAtivo, false);
 });
 
 test('no SSE, a sessão de suporte não vira atendente nem entra na presença do cliente', async () => {

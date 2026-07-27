@@ -114,6 +114,13 @@ não há rede de segurança: toda query nomeia `tenant_id`. As tabelas `operador
 e `operador_auditoria` não são tabelas de tenant e são fechadas para o role
 `falatta_app` (REVOKE + policy `USING (false)`, migração 005).
 
+A sessão de suporte é **somente-leitura imposto no middleware de tenant**
+(`auth/middleware.js`), não papel por papel: token com `suporte: true` só passa
+em método de leitura, fora uma allowlist mínima (`/api/auth/logout`,
+`/api/stream/ticket`). O papel `AUDITOR` continua valendo para o escopo de
+leitura, mas não é ele que segura a porta — havia mutação sem guarda de papel
+(`POST /api/atalhos`, `PUT /api/presenca`), e rota nova nasceria igual.
+
 Suspender um tenant reusa `tenant.status`, que o resto do sistema já
 consultava: bloqueia o login (`auth/routes.js::resolverTenant` só resolve slug
 de tenant `ativo`) e pausa os disparos (`campanha/dispatcher.js` só acorda
