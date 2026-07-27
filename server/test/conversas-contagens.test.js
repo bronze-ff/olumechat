@@ -25,7 +25,7 @@ function startApp(conn, perfil) {
   db.getConnection = async () => conn;
   const app = express();
   app.use('/api', express.json());
-  app.use('/api/conversas', authMiddleware, (req, res, next) => { req.perfil = perfil; next(); }, conversasRoutes);
+  app.use('/api/conversas', authMiddleware, (req, res, next) => { req.perfil = perfil; req.tenantId = 1; next(); }, conversasRoutes);
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
   return new Promise((resolve) => {
@@ -49,14 +49,14 @@ function fakeConn(capturas = []) {
   return {
     async execute(sql, binds) {
       capturas.push({ sql, binds });
-      if (sql.includes('GROUP BY NVL(DEPARTAMENTO_ID')) {
+      if (sql.includes('GROUP BY COALESCE(departamento_id')) {
         return { rows: [
           { DEP: 4, FILA_STATUS: 'em_atendimento', QTD: 100 },
           { DEP: 4, FILA_STATUS: 'aguardando', QTD: 3 },
           { DEP: 0, FILA_STATUS: 'em_atendimento', QTD: 18 },
         ] };
       }
-      if (sql.includes('GROUP BY ATENDENTE_ID')) {
+      if (sql.includes('GROUP BY atendente_id')) {
         return { rows: [{ ATD: 9, QTD: 73 }, { ATD: 11, QTD: 27 }] };
       }
       return { rows: [] };

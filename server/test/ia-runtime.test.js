@@ -10,11 +10,14 @@ const toolExec = require('../ia/toolExecutor');
 const auth = require('../ia/autorizacao');
 const runtime = require('../ia/runtime');
 
+const TENANT_A = 1;
+const TENANT_B = 2;
+
 function connConversa(fields = {}) {
   return { _ins: [], async execute(sql, binds) {
-    if (sql.includes('FROM MC_ZAP_CONVERSA')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
+    if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
     if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
-    if (sql.includes('FROM MC_ZAP_IA_TURNO')) return { rows: [] };
+    if (sql.includes('FROM ia_turno')) return { rows: [] };
     this._ins.push({ sql, binds }); return { rows: [] };
   }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} };
 }
@@ -31,9 +34,10 @@ test('pergunta autorizada: chama tool, responde e persiste', async () => {
   const enviados = [];
   global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) }; };
 
-  await runtime.processarEntrada(88, 'vendas de junho?');
+  await runtime.processarEntrada(TENANT_A, 88, 'vendas de junho?');
   assert.ok(enviados.some((e) => /70\.255\.176,46/.test(e.text.body)), 'deve enviar a resposta final');
-  assert.ok(conn._ins.some((i) => i.sql.includes('INSERT INTO MC_ZAP_MENSAGEM')), 'persiste msg visível');
+  assert.ok(conn._ins.some((i) => i.sql.includes('INSERT INTO mensagem')), 'persiste msg visível');
+  assert.ok(conn._ins.some((i) => i.sql.includes('INSERT INTO mensagem') && i.binds.tenantId === TENANT_A), 'msg gravada com o tenant_id certo');
 });
 
 test('não autorizado: recado e não chama o modelo', async () => {
@@ -41,7 +45,7 @@ test('não autorizado: recado e não chama o modelo', async () => {
   auth.autorizado = async () => false;
   let chamouModelo = false; client.chamar = async () => { chamouModelo = true; return {}; };
   const enviados = []; global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
-  await runtime.processarEntrada(88, 'oi');
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
   assert.equal(chamouModelo, false);
   assert.ok(enviados.length >= 1, 'manda um recado educado');
 });
@@ -50,7 +54,7 @@ test('sem provedor configurado: avisa e não quebra', async () => {
   const conn = connConversa(); db.getConnection = async () => conn;
   auth.autorizado = async () => true; store.carregar = async () => null;
   const enviados = []; global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
-  await runtime.processarEntrada(88, 'oi');
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
   assert.ok(enviados.some((e) => /indispon/i.test(e.text.body) || /configurad/i.test(e.text.body)));
 });
 
@@ -62,7 +66,26 @@ test('provedor lança erro (400/timeout): usuário recebe FALLBACK — nunca sil
   store.carregar = async () => ({ provider: 'openrouter', modelo: 'x/y', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'k' });
   client.chamar = async () => { throw new Error('Provedor openrouter 400: modelo inválido'); };
   const enviados = []; global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
-  await runtime.processarEntrada(88, 'vendas de ontem?');
+  await runtime.processarEntrada(TENANT_A, 88, 'vendas de ontem?');
   assert.ok(enviados.length >= 1, 'tem que enviar ALGO mesmo com o provedor falhando');
   assert.ok(enviados.some((e) => /indispon|não consegui|nao consegui/i.test(e.text.body)), 'envia o fallback');
+});
+
+test('tenantId inválido não toca o banco nem envia mensagem', async () => {
+  const conn = connConversa(); db.getConnection = async () => conn;
+  const enviados = []; global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+  await runtime.processarEntrada(null, 88, 'oi'); // comTenant recusa antes de abrir conexão
+  assert.equal(enviados.length, 0);
+});
+
+test('SEGURANÇA: toda leitura/gravação da conversa leva o tenant_id do chamador', async () => {
+  const conn = connConversa(); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  client.chamar = async () => ({ texto: 'ok', toolCalls: [] });
+  global.fetch = async (u, o) => ({ ok: true, json: async () => ({ messages: [{ id: 'w' }] }) });
+  await runtime.processarEntrada(TENANT_B, 88, 'oi');
+  const comBind = conn._ins.filter((i) => 'tenantId' in (i.binds || {}));
+  assert.ok(comBind.length > 0);
+  assert.ok(comBind.every((i) => i.binds.tenantId === TENANT_B), 'alguma query do runtime não levou o tenant_id do chamador');
 });
