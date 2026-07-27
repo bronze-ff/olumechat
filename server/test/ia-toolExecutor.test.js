@@ -63,6 +63,31 @@ test('corta em 100 linhas mesmo se o banco devolver mais (pool.js não implement
   assert.equal(r.linhas.length, 100);
 });
 
+test('SEGURANÇA (review PR #9): o teto vai no SQL — embrulha a query curada num subselect com LIMIT 100', async () => {
+  // Antes o corte era só .slice() DEPOIS do await: o pg materializava e
+  // trafegava TODAS as linhas antes do corte em JS. Agora o LIMIT tem que
+  // estar no texto enviado ao banco, não só aplicado ao resultado em memória.
+  const base = dirComSql('SELECT CODFILIAL, VL FROM V WHERE DATA BETWEEN :data_ini AND :data_fim');
+  let sqlVisto;
+  const conn = { async execute(sql) { sqlVisto = sql; return { rows: [] }; } };
+  await executar(conn, 'consultar_exemplo', { data_ini: '2026-06-01', data_fim: '2026-06-30' }, { conhecimentoDir: base });
+  assert.match(sqlVisto, /LIMIT\s+100\s*$/, 'query enviada ao banco não impõe o teto de linhas');
+  assert.match(sqlVisto, /SELECT\s+CODFILIAL,\s*VL\s+FROM\s+V/, 'query curada original tem que estar embrulhada, não substituída');
+});
+
+test('query curada terminando em comentário na última linha não quebra o embrulho do LIMIT', async () => {
+  // Regressão possível: se o LIMIT fosse colado sem quebra de linha depois de
+  // uma query terminando em "-- comentário", o ") LIMIT 100" cairia dentro do
+  // comentário e o SQL final ficaria com parêntese não fechado.
+  const sql = 'SELECT X FROM T WHERE D >= :data_ini AND D < :data_fim -- filtro de período';
+  const base = dirComSql(sql);
+  let sqlVisto;
+  const conn = { async execute(s) { sqlVisto = s; return { rows: [{ X: 1 }] }; } };
+  const r = await executar(conn, 'consultar_exemplo', { data_ini: '2026-06-01', data_fim: '2026-06-30' }, { conhecimentoDir: base });
+  assert.equal(r.linhas.length, 1);
+  assert.match(sqlVisto, /LIMIT\s+100\s*$/, 'LIMIT ficou preso dentro do comentário da última linha');
+});
+
 test('aceita .sql com cabeçalho comentado e NÃO passa bind que só existe em comentário', async () => {
   // Regressão: os .sql curados começam com comentário e binds em comentários viravam
   // binds fantasmas (ORA-01036). Aqui o :fantasma está só no comentário.

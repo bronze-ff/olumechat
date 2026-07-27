@@ -31,9 +31,15 @@ async function executar(conn, nomeTool, args = {}, opts = {}) {
   // maxRows: teto de linhas para não estourar contexto do modelo nem o texto
   // do histórico (ex.: inadimplência pode ter centenas de clientes). O
   // node-oracledb honrava a opção no driver; o wrapper `db/pool.js` (pg) não
-  // tem equivalente — por isso o corte é feito aqui, no cliente.
+  // tem equivalente. Cortar só no cliente (.slice depois do await) NÃO basta:
+  // o pg já materializou e trafegou TODAS as linhas antes do corte — se a
+  // query curada não filtrar o bastante, é memória/rede sem limite (achado de
+  // review do PR #9). Por isso o teto vai no próprio SQL: embrulha a query
+  // curada (que nunca muda) num subselect com LIMIT, que o Postgres respeita
+  // na execução — o corte em JS abaixo fica só como cinto e suspensório.
   const MAX_LINHAS = 100;
-  const r = await conn.execute(sql, binds, { maxRows: MAX_LINHAS });
+  const sqlComTeto = `SELECT * FROM (\n${sql}\n) tool_exec_sub LIMIT ${MAX_LINHAS}`;
+  const r = await conn.execute(sqlComTeto, binds, { maxRows: MAX_LINHAS });
   const linhas = (r.rows || []).slice(0, MAX_LINHAS);
   const colunas = linhas.length ? Object.keys(linhas[0]) : [];
   return { colunas, linhas };
