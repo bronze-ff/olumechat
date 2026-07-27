@@ -127,11 +127,10 @@ async function aplicar(conn, tenantId, cv, resultado) {
     // Handoff pra HUMANO fora do horário: o bot self-service roda 24/7, mas ao
     // passar pra fila avisa que o time está fora do expediente — senão o cliente
     // fica esperando achando que vão responder na hora. Isolado num SAVEPOINT:
-    // falha aqui (ex.: lerConfig ainda mira a tabela antiga — porte é o FIL-66,
-    // PR #3 em andamento; TODO adaptar para lerConfig(tenantId, conn) no rebase
-    // pós-merge) não pode abortar a transação inteira nem derrubar o transfer.
+    // falha aqui (ex.: config ainda sem linha pro tenant, ou erro de rede) não
+    // pode abortar a transação inteira nem derrubar o transfer.
     const { ok: cfgOk, erro: cfgErro } = await comSavepoint(conn, async () => {
-      const cfg = await lerConfig(conn);
+      const cfg = await lerConfig(tenantId, conn);
       const fora = foraDeHorario(cfg, new Date());
       if (fora && String(cfg.fora_horario_msg || '').trim()) {
         await enviarMensagens(conn, cv, [String(cfg.fora_horario_msg).trim()]);

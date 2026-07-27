@@ -175,6 +175,46 @@ test('iniciarFluxo: tenantId inválido não chega a abrir conexão nem a enviar 
   assert.equal(chamouFetch, false);
 });
 
+test('aplicar (transferir): falha ao ler config isola em SAVEPOINT — a transferência ainda se completa', async () => {
+  presence._reset();
+  invalidarConfigCache(); // força ida ao banco (senão pegaria o cache de outro teste)
+  const capturas = [];
+  const enviados = [];
+  global.fetch = async (url, opts) => {
+    enviados.push(JSON.parse(opts.body));
+    return { ok: true, json: async () => ({ messages: [{ id: 'wamid.C' + enviados.length }] }) };
+  };
+  const conn = fakeConnComAbort((sql, binds) => {
+    capturas.push({ sql, binds });
+    if (sql.includes('FROM conversa')) {
+      return {
+        rows: [{
+          ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, FILA_STATUS: 'bot', PROTOCOLO: '260610100077',
+          BOT_FLUXO_ID: 9, BOT_NO_ATUAL: 'menu', BOT_VARIAVEIS: {}, BOT_INVALIDAS: 0,
+          TELEFONE: '5562999990000', NOME_PERFIL: 'Cliente', PHONE_NUMBER_ID: '1112223334',
+          DEFINICAO: FLUXO_DEF,
+        }],
+      };
+    }
+    if (/FROM config\b/.test(sql)) {
+      return { __abortarAPartirDaqui: true, erro: new Error('conexão caiu ao ler config') };
+    }
+    return { rows: [], rowsAffected: 1 };
+  });
+  db.getConnection = async () => conn;
+
+  await runtime.processarEntrada(TENANT_ID, 88, '1');
+  await aguardar();
+
+  // Se o SAVEPOINT não isolasse a falha do lerConfig, a transferência inteira
+  // (nota interna + mover pra fila) seria perdida por causa do 25P02.
+  assert.match(enviados[0].text.body, /Encaminhando/);
+  const updFila = capturas.find((c) => c.sql.includes(`fila_status = 'aguardando'`) && c.sql.startsWith('UPDATE'));
+  assert.ok(updFila, 'a transferência deve se completar mesmo com a leitura de config falhando');
+  const nota = capturas.find((c) => c.sql.includes(`'nota'`));
+  assert.ok(nota, 'a nota interna ainda deve ser gravada');
+});
+
 test('executarConsulta: erro de SQL isola em SAVEPOINT — não aborta o resto da transação', async () => {
   presence._reset();
   const capturas = [];
