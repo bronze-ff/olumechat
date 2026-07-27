@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: falatta
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    preDeployCommand: cd server && npm run migrar
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    # FIL-72/73/74 precisam liberar barramento, locks e blacklist distribuídos
+    # antes de aumentar: SSE e workers atuais são in-process e duplicariam eventos.
+    numInstances: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: DATABASE_URL
+        sync: false
+      - key: MIGRATION_DATABASE_URL
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: OPERADOR_JWT_SECRET
+        sync: false
