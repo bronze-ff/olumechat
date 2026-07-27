@@ -3,8 +3,8 @@
 // order, etc.) e também contatos/localização. Centraliza a renderização usada no
 // recebimento (webhook) e no backfill, evitando gravar JSON cru no histórico.
 //
-// IMPORTANTE: devolve texto CRU (com emoji/acento). Quem grava no banco é que chama
-// codificar() — o charset do Oracle é cp1252 (ver utils/texto.js). Não codificar aqui.
+// Devolve texto CRU (com emoji/acento) e é gravado assim no banco: o Postgres é
+// UTF-8, sem o workaround de charset que o Oracle exigia.
 'use strict';
 
 /**

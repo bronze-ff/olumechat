@@ -3,12 +3,11 @@
 // conversa (multi-número via MC_ZAP_NUMERO) e persiste a saída no histórico.
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows, mapRow } = require('../utils/oracleHelper');
+const { mapRows, mapRow } = require('../utils/linhas');
 const { sendText } = require('../graph/sendText');
 const { sendTemplate } = require('../graph/sendTemplate');
 const { cfg } = require('../graph/client');
 const { publish } = require('../realtime/hub');
-const { codificar, decodificar } = require('../utils/texto');
 const { normalizar: normalizePhone, acharContato } = require('../utils/telefone');
 const { acharClientePorTelefone } = require('../utils/clienteLookup');
 const { exigirPapel } = require('../auth/rbac');
@@ -56,7 +55,7 @@ async function conversaNoEscopo(conn, id, perfil) {
 
 /** Acha/cria contato por telefone (casa variantes do 9º dígito); atualiza CODCLI. */
 async function getOrCreateContato(conn, telefone, codcli) {
-  const { oracledb } = db;
+  const { tipos } = db;
   const achado = await acharContato(conn, telefone);
   if (achado) {
     const id = achado.ID;
@@ -78,8 +77,8 @@ async function getOrCreateContato(conn, telefone, codcli) {
     { tel: telefone,
       cod: codcli || (cli ? cli.codcli : null),
       cgc: cli ? cli.cgcent : null,
-      ni: cli ? codificar(cli.nome) : null,
-      id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT } }
+      ni: cli ? cli.nome : null,
+      id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
   );
   return ins.outBinds.id[0];
 }
@@ -92,11 +91,11 @@ async function getOrCreateAtendente(conn, user) {
     { m: user.matricula }
   );
   if (sel.rows.length) return sel.rows[0].ID;
-  const { oracledb } = db;
+  const { tipos } = db;
   const ins = await conn.execute(
     `INSERT INTO MC_ZAP_ATENDENTE (MATRICULA, NOME) VALUES (:m, :n)
      RETURNING ID INTO :id`,
-    { m: user.matricula, n: user.nome || null, id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT } }
+    { m: user.matricula, n: user.nome || null, id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
   );
   return ins.outBinds.id[0];
 }
@@ -193,7 +192,7 @@ router.post('/', naoAuditor, async (req, res, next) => {
 
     // Conversa: reaproveita a aberta, senão cria como ATIVA (empresa iniciou),
     // com protocolo e atribuída a quem disparou.
-    const { oracledb } = db;
+    const { tipos } = db;
     let conversaId;
     const cv = await conn.execute(
       `SELECT ID FROM MC_ZAP_CONVERSA WHERE CONTATO_ID = :c AND STATUS <> 'resolvida'
@@ -222,11 +221,11 @@ router.post('/', naoAuditor, async (req, res, next) => {
          VALUES (:c, :n, :dep, :atd, 'aberta', 'em_atendimento', 'ativa', :prot,
             SYSTIMESTAMP, SYSTIMESTAMP) RETURNING ID INTO :id`,
         { c: contatoId, n: numeroId, dep: departamentoId, atd: atendenteId, prot: protocolo,
-          id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT } }
+          id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
       );
       conversaId = insC.outBinds.id[0];
     }
-    const conteudo = b.preview ? codificar(String(b.preview)) : `[template: ${templateName}]`;
+    const conteudo = b.preview ? String(b.preview) : `[template: ${templateName}]`;
     await conn.execute(
       `INSERT INTO MC_ZAP_MENSAGEM
          (CONVERSA_ID, CONTATO_ID, NUMERO_ID, ATENDENTE_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
@@ -374,9 +373,9 @@ router.get('/', async (req, res, next) => {
     const rows = mapRows(result.rows).map((r) => ({
       ...r,
       tags: r.tags ? JSON.parse(r.tags) : [],
-      ultimaMsg: decodificar(r.ultimaMsg),
-      nomePerfil: decodificar(r.nomePerfil),
-      nomeInterno: decodificar(r.nomeInterno),
+      ultimaMsg: r.ultimaMsg,
+      nomePerfil: r.nomePerfil,
+      nomeInterno: r.nomeInterno,
     }));
     res.json(rows);
   } catch (err) {
@@ -443,7 +442,7 @@ router.get('/:id/mensagens', async (req, res, next) => {
         ORDER BY TS ASC NULLS LAST, ID ASC`,
       { id }
     );
-    res.json(mapRows(result.rows).map((m) => ({ ...m, conteudo: decodificar(m.conteudo) })));
+    res.json(mapRows(result.rows));
   } catch (err) {
     next(err);
   } finally {
@@ -496,7 +495,7 @@ router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
 
     // Persiste a saída no histórico (status evolui via webhook: sent/delivered/read).
     const atendenteId = await getOrCreateAtendente(conn, req.user);
-    const { oracledb } = db;
+    const { tipos } = db;
     const ins = await conn.execute(
       `INSERT INTO MC_ZAP_MENSAGEM
          (CONVERSA_ID, CONTATO_ID, NUMERO_ID, ATENDENTE_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
@@ -504,8 +503,8 @@ router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
        RETURNING ID INTO :id`,
       {
         cv: cv.ID, ct: cv.CONTATO_ID, num: cv.NUMERO_ID, atd: atendenteId,
-        wamid: wamid || null, txt: codificar(texto),
-        id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+        wamid: wamid || null, txt: texto,
+        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
       }
     );
     await conn.execute(
@@ -626,7 +625,7 @@ router.post('/:id/arquivos', naoAuditor, (req, res, next) => {
     const wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
 
     const atendenteId = await getOrCreateAtendente(conn, req.user);
-    const { oracledb } = db;
+    const { tipos } = db;
     const ins = await conn.execute(
       `INSERT INTO MC_ZAP_MENSAGEM
          (CONVERSA_ID, CONTATO_ID, NUMERO_ID, ATENDENTE_ID, WAMID, DIRECAO, TIPO, STATUS, TS,
@@ -637,8 +636,8 @@ router.post('/:id/arquivos', naoAuditor, (req, res, next) => {
       {
         cv: cv.ID, ct: cv.CONTATO_ID, num: cv.NUMERO_ID, atd: atendenteId,
         wamid: wamid || null, tipo, mid: mediaId, mime,
-        nome: codificar(nomeOriginal), cam: caminho, tam: req.file.size,
-        id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+        nome: nomeOriginal, cam: caminho, tam: req.file.size,
+        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
       }
     );
     await conn.execute(
@@ -688,14 +687,14 @@ router.post('/:id/notas', naoAuditor, async (req, res, next) => {
     if (!cv.rows.length) return res.status(404).json({ error: 'Conversa não encontrada' });
 
     const atendenteId = await getOrCreateAtendente(conn, req.user);
-    const { oracledb } = db;
+    const { tipos } = db;
     const ins = await conn.execute(
       `INSERT INTO MC_ZAP_MENSAGEM (CONVERSA_ID, CONTATO_ID, ATENDENTE_ID, DIRECAO, TIPO, CONTEUDO, TS)
        VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, SYSTIMESTAMP)
        RETURNING ID INTO :id`,
       {
-        cv: id, ct: cv.rows[0].CONTATO_ID, atd: atendenteId, txt: codificar(texto),
-        id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+        cv: id, ct: cv.rows[0].CONTATO_ID, atd: atendenteId, txt: texto,
+        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
       }
     );
     await conn.commit();
@@ -800,7 +799,7 @@ router.post('/forcar-transferir', exigirPapel('ADMIN'), async (req, res, next) =
         await conn.execute(
           `INSERT INTO MC_ZAP_MENSAGEM (CONVERSA_ID, CONTATO_ID, ATENDENTE_ID, DIRECAO, TIPO, CONTEUDO, TS)
            VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, SYSTIMESTAMP)`,
-          { cv: id, ct: atual.CONTATO_ID, atd: autorId, txt: codificar(`Transferência forçada para ${destinoTxt} por ${(req.user && req.user.nome) || 'admin'}.`) });
+          { cv: id, ct: atual.CONTATO_ID, atd: autorId, txt: `Transferência forçada para ${destinoTxt} por ${(req.user && req.user.nome) || 'admin'}.` });
         await conn.execute(
           `INSERT INTO MC_ZAP_AUDITORIA (ATENDENTE_ID, MATRICULA, ACAO, ENTIDADE, ENTIDADE_ID, DETALHE)
            VALUES (:atd, :m, 'transferencia', 'conversa', :id, :det)`,
@@ -1000,7 +999,7 @@ router.post('/:id/transferir', naoAuditor, async (req, res, next) => {
        VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, SYSTIMESTAMP)`,
       {
         cv: id, ct: atual.CONTATO_ID, atd: autorId,
-        txt: codificar(`Transferida para ${destinoTxt} por ${(req.user && req.user.nome) || 'sistema'}.`),
+        txt: `Transferida para ${destinoTxt} por ${(req.user && req.user.nome) || 'sistema'}.`,
       }
     );
     await conn.execute(
@@ -1068,7 +1067,7 @@ router.post('/:id/encerrar', naoAuditor, async (req, res, next) => {
           `INSERT INTO MC_ZAP_MENSAGEM
              (CONVERSA_ID, CONTATO_ID, NUMERO_ID, ATENDENTE_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
            VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sent', SYSTIMESTAMP)`,
-          { cv: id, ct: cv.CONTATO_ID, num: cv.NUMERO_ID, atd: atendenteId, wamid: wamid || null, txt: codificar(despedida) }
+          { cv: id, ct: cv.CONTATO_ID, num: cv.NUMERO_ID, atd: atendenteId, wamid: wamid || null, txt: despedida }
         );
       } catch (e) {
         console.error('[conversas] despedida falhou (encerrando mesmo assim):', e.message);

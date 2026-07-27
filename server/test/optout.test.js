@@ -33,7 +33,7 @@ test('normalizar: remove acento e pontuação', () => {
 test('registrarOpt: optout atualiza contato e grava auditoria', async () => {
   const sqls = [];
   const conn = { async execute(sql, binds) { sqls.push({ sql, binds }); return {}; } };
-  await registrarOpt(conn, {}, { contatoId: 5, telefone: '5562999990000', acao: 'optout', origem: 'whatsapp_inbound' });
+  await registrarOpt(conn, { contatoId: 5, telefone: '5562999990000', acao: 'optout', origem: 'whatsapp_inbound' });
   assert.match(sqls[0].sql, /UPDATE MC_ZAP_CONTATO SET OPTIN = 'N'/);
   assert.equal(sqls[0].binds.id, 5);
   assert.match(sqls[1].sql, /INSERT INTO MC_ZAP_AUDITORIA/);
@@ -44,7 +44,7 @@ test('registrarOpt: optout atualiza contato e grava auditoria', async () => {
 test('registrarOpt: optin marca OPTIN=S com origem', async () => {
   const sqls = [];
   const conn = { async execute(sql, binds) { sqls.push({ sql, binds }); return {}; } };
-  await registrarOpt(conn, {}, { contatoId: 9, telefone: '5562988887777', acao: 'optin', origem: 'whatsapp_inbound' });
+  await registrarOpt(conn, { contatoId: 9, telefone: '5562988887777', acao: 'optin', origem: 'whatsapp_inbound' });
   assert.match(sqls[0].sql, /OPTIN = 'S'/);
   assert.equal(sqls[0].binds.o, 'whatsapp_inbound');
   assert.equal(sqls[1].binds.acao, 'optin');

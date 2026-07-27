@@ -2,7 +2,7 @@
 // (system, reaction, button, interactive, order, request_welcome, unsupported,
 // contacts, location) para o texto amigável, usando o MESMO helper do webhook
 // (descreverMensagem). NÃO migra número trocado — só corrige o TEXTO exibido.
-// Charset-safe: grava via codificar() (Oracle cp1252).
+// Charset-safe: grava via  (Oracle cp1252).
 //
 // Uso (dentro de server/):
 //   node scripts/backfill-mensagens.js            -> prévia (dry-run, não grava)
@@ -12,7 +12,6 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const db = require('../db/pool');
-const { codificar, decodificar } = require('../utils/texto');
 const { descreverMensagem } = require('../utils/descreverMensagem');
 
 // 'order' fica DE FORA de propósito: reescrever destruiria o JSON estruturado do
@@ -40,9 +39,9 @@ async function main() {
     let reescritos = 0, pulados = 0;
     for (const row of r.rows) {
       let dados;
-      // CONTEUDO foi gravado via codificar() (emoji vira \u{hex}, inválido p/ JSON).
+      // CONTEUDO foi gravado via  (emoji vira \u{hex}, inválido p/ JSON).
       // Decodifica primeiro pra recuperar o JSON original e poder parsear.
-      try { dados = JSON.parse(decodificar(row.CONTEUDO)); } catch { pulados++; continue; }
+      try { dados = JSON.parse(row.CONTEUDO); } catch { pulados++; continue; }
       const novo = descreverMensagem(row.TIPO, dados);
       // A idempotência real vem do filtro LIKE '{%'/'[%' do SELECT (depois de reescrito,
       // o conteúdo não casa mais). Aqui só pulamos quando o helper não devolveu nada.
@@ -50,7 +49,7 @@ async function main() {
       console.log(`#${row.ID} [${row.TIPO}]  ${String(row.CONTEUDO).slice(0, 60)}  ->  ${novo}`);
       if (commit) {
         await conn.execute(`UPDATE MC_ZAP_MENSAGEM SET CONTEUDO = :c WHERE ID = :id`,
-          { c: codificar(novo), id: row.ID });
+          { c: novo, id: row.ID });
       }
       reescritos++;
     }

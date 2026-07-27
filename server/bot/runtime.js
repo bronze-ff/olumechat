@@ -11,7 +11,6 @@ const engine = require('./engine');
 const { sendText } = require('../graph/sendText');
 const { publish } = require('../realtime/hub');
 const distribuidor = require('../fila/distribuidor');
-const { codificar, decodificar, jsonAscii } = require('../utils/texto');
 const { lerConfig } = require('../utils/configCache');
 const { foraDeHorario } = require('../utils/horario');
 const presence = require('../realtime/presence');
@@ -53,7 +52,7 @@ async function carregar(conn, conversaId) {
       variaveis: cv.BOT_VARIAVEIS ? JSON.parse(cv.BOT_VARIAVEIS) : {},
       invalidas: cv.BOT_INVALIDAS || 0,
     },
-    contexto: { nome: decodificar(cv.NOME_PERFIL) || 'cliente', protocolo: cv.PROTOCOLO || '' },
+    contexto: { nome: cv.NOME_PERFIL || 'cliente', protocolo: cv.PROTOCOLO || '' },
   };
 }
 
@@ -75,7 +74,7 @@ async function enviarMensagens(conn, cv, mensagens) {
       `INSERT INTO MC_ZAP_MENSAGEM
          (CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
        VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, SYSTIMESTAMP)`,
-      { cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt: codificar(txt), st: status }
+      { cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt, st: status }
     );
   }
 }
@@ -116,14 +115,14 @@ async function aplicar(conn, cv, resultado) {
     await conn.execute(
       `INSERT INTO MC_ZAP_MENSAGEM (CONVERSA_ID, CONTATO_ID, DIRECAO, TIPO, CONTEUDO, TS)
        VALUES (:cv, :ct, 'nota', 'text', :txt, SYSTIMESTAMP)`,
-      { cv: cv.conversaId, ct: cv.contatoId, txt: codificar(resumo) }
+      { cv: cv.conversaId, ct: cv.contatoId, txt: resumo }
     );
     await conn.execute(
       `UPDATE MC_ZAP_CONVERSA
           SET DEPARTAMENTO_ID = :dep, FILA_STATUS = 'aguardando', FILA_ENTROU_EM = SYSTIMESTAMP,
               BOT_NO_ATUAL = NULL, BOT_VARIAVEIS = :vars, BOT_ULTIMA_INTERACAO = SYSTIMESTAMP
         WHERE ID = :id AND FILA_STATUS = 'bot'`,
-      { dep, vars: jsonAscii(vars), id: cv.conversaId }
+      { dep, vars: JSON.stringify(vars), id: cv.conversaId }
     );
     // Entrou na fila sem ninguém online no depto → registra o motivo (timeline).
     if (presence.onlineDoDepto(dep).length === 0) {
@@ -157,7 +156,7 @@ async function aplicar(conn, cv, resultado) {
       WHERE ID = :id AND FILA_STATUS = 'bot'`,
     {
       no: resultado.estado.noAtual,
-      vars: jsonAscii(resultado.estado.variaveis || {}),
+      vars: JSON.stringify(resultado.estado.variaveis || {}),
       inv: resultado.estado.invalidas || 0,
       id: cv.conversaId,
     }

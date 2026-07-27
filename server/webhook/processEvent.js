@@ -3,11 +3,10 @@
 // mensagens/status, gerenciando a janela de 24h.
 // Dedup garantido pelo índice único MC_ZAP_MENSAGEM.WAMID. (PRD §5.3, RF-44/45/46)
 const db = require('../db/pool');
-const { oracledb } = db;
+const { tipos } = db;
 const { downloadMedia } = require('../graph/media');
 const { classificar, registrarOpt, normalizar } = require('./optOut');
 const { publish } = require('../realtime/hub');
-const { codificar } = require('../utils/texto');
 const { lerConfig } = require('../utils/configCache');
 const { acharContato, variantes, normalizar: normTel } = require('../utils/telefone');
 const { acharClientePorTelefone } = require('../utils/clienteLookup');
@@ -49,7 +48,7 @@ async function getOrCreateNumero(conn, phoneNumberId, displayPhone) {
     {
       p: phoneNumberId,
       d: displayPhone || null,
-      id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+      id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
     }
   );
   return { id: ins.outBinds.id[0], departamentoPadraoId: null, fluxoAtivoId: null, modo: 'padrao' };
@@ -64,7 +63,7 @@ async function getOrCreateContato(conn, { telefone, waId, nome }) {
     if (nome && !achado.NOME_PERFIL) {
       await conn.execute(
         `UPDATE MC_ZAP_CONTATO SET NOME_PERFIL = :n, WA_ID = COALESCE(WA_ID, :w) WHERE ID = :id`,
-        { n: codificar(nome), w: waId || null, id: achado.ID }
+        { n: nome, w: waId || null, id: achado.ID }
       );
     }
     return achado.ID;
@@ -82,11 +81,11 @@ async function getOrCreateContato(conn, { telefone, waId, nome }) {
     {
       tel: telefone,
       waId: waId || null,
-      nome: codificar(nome) || null, // nomes de perfil com emoji (charset 1252)
+      nome: nome || null,
       cod: cli ? cli.codcli : null,
       cgc: cli ? cli.cgcent : null,
-      ni: cli ? codificar(cli.nome) : null,
-      id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+      ni: cli ? cli.nome : null,
+      id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
     }
   );
   return ins.outBinds.id[0];
@@ -140,12 +139,12 @@ async function migrarNumeroContato(conn, { telefoneAntigo, telefoneNovo }) {
       { id: antigo.ID, det: JSON.stringify({ antigo: ant, novo }) }
     );
 
-    // Nota nas conversas ativas, pra ficar visível no chat (charset via codificar).
+    // Nota nas conversas ativas, pra ficar visível no chat.
     const cvs = await conn.execute(
       `SELECT ID FROM MC_ZAP_CONVERSA WHERE CONTATO_ID = :cid AND STATUS <> 'resolvida'`,
       { cid: antigo.ID }
     );
-    const txt = codificar(`📱 Cliente trocou de número: ${ant} → ${novo}`);
+    const txt = `📱 Cliente trocou de número: ${ant} → ${novo}`;
     const ids = [];
     for (const cv of cvs.rows) {
       await conn.execute(
@@ -180,7 +179,7 @@ async function openOrRenewConversa(conn, contatoId, numero, ts) {
       WHERE CONTATO_ID = :cid AND STATUS <> 'resolvida'
         AND NVL(NUMERO_ID, -1) = NVL(:num, -1)
       ORDER BY CRIADO_EM DESC FETCH FIRST 1 ROWS ONLY`,
-    { cid: contatoId, num: { type: oracledb.NUMBER, val: numero.id != null ? numero.id : null } }
+    { cid: contatoId, num: { type: tipos.NUMBER, val: numero.id != null ? numero.id : null } }
   );
 
   if (sel.rows.length) {
@@ -225,7 +224,7 @@ async function openOrRenewConversa(conn, contatoId, numero, ts) {
     {
       cid: contatoId, num: numero.id, exp: expira, ts,
       dep: departamentoId, fst: filaStatus, prot: protocolo, flx: fluxoId,
-      id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
+      id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
     }
   );
   return { id: ins.outBinds.id[0], criada: true, departamentoId, protocolo, filaStatus, avisoForaHorario: 'N' };
@@ -253,7 +252,7 @@ async function insertInbound(conn, m) {
           :mediaId, :mime, :nome, :cam, :tam, :sha)`,
       {
         cv: m.conversaId, ct: m.contatoId, num: m.numeroId,
-        wamid: m.wamid, tipo: m.tipo, cont: codificar(m.conteudo), ts: m.ts,
+        wamid: m.wamid, tipo: m.tipo, cont: m.conteudo, ts: m.ts,
         mediaId: media.mediaId || null, mime: media.mime || null,
         nome: media.filename || null, cam: media.caminho || null,
         tam: media.size || null, sha: media.sha256 || null,
@@ -317,7 +316,7 @@ async function confirmarEncerramento(evt) {
       `INSERT INTO MC_ZAP_MENSAGEM
          (CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
        VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', SYSTIMESTAMP)`,
-      { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: codificar(texto) }
+      { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: texto }
     );
     await conn.commit();
   } catch (err) {
@@ -350,7 +349,7 @@ async function enviarAvisoForaHorario(evt) {
       `INSERT INTO MC_ZAP_MENSAGEM
          (CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
        VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', SYSTIMESTAMP)`,
-      { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: codificar(evt.texto) }
+      { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: evt.texto }
     );
     await conn.commit();
     publish({ tipo: 'mensagem', direcao: 'out', conversaId: evt.conversaId, contatoId: evt.contatoId });
@@ -400,7 +399,7 @@ async function anotarRespostaCampanha(conn, { conversaId, contatoId, telefone })
     await conn.execute(
       `INSERT INTO MC_ZAP_MENSAGEM (CONVERSA_ID, CONTATO_ID, DIRECAO, TIPO, CONTEUDO, TS)
        VALUES (:cv, :ct, 'nota', 'text', :txt, :ts)`,
-      { cv: conversaId, ct: contatoId, txt: codificar(texto), ts: row.ENVIADO_EM || new Date() }
+      { cv: conversaId, ct: contatoId, txt: texto, ts: row.ENVIADO_EM || new Date() }
     );
   } catch (err) {
     if (err.errorNum === 942) return; // tabelas de campanha podem não existir
@@ -507,7 +506,7 @@ async function processPayload(payload) {
           if (msg.type === 'text' && msg.text && conversa.filaStatus !== 'ia') {
             optAcao = classificar(msg.text.body);
             if (optAcao) {
-              await registrarOpt(conn, oracledb, {
+              await registrarOpt(conn, {
                 contatoId, telefone: msg.from, acao: optAcao, origem: 'whatsapp_inbound',
               });
               console.log(`[webhook] ${optAcao} registrado p/ contato ${contatoId} (${msg.from})`);

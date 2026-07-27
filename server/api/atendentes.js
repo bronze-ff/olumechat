@@ -5,7 +5,7 @@
 
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows } = require('../utils/oracleHelper');
+const { mapRows } = require('../utils/linhas');
 const { exigirPapel, invalidar, PAPEIS } = require('../auth/rbac');
 const presence = require('../realtime/presence');
 

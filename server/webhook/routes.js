@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { rawBodyJson } = require('./rawBody');
 const { isValidSignature } = require('./verifySignature');
 const { processPayload } = require('./processEvent');
-const { getConnection } = require('../db/pool');
+const { getConnection, tipos } = require('../db/pool');
 
 /** Comparação de strings em tempo constante (anti timing attack). */
 function igualSeguro(a, b) {
@@ -77,7 +77,7 @@ async function logRawEvent(rawBody) {
        VALUES (:p, 'S') RETURNING ID INTO :id`,
       {
         p: rawBody.toString('utf8'),
-        id: { type: require('oracledb').NUMBER, dir: require('oracledb').BIND_OUT },
+        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
       },
       { autoCommit: true }
     );

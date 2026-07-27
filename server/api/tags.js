@@ -4,7 +4,7 @@
 
 const express = require('express');
 const db = require('../db/pool');
-const { mapRows } = require('../utils/oracleHelper');
+const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
 
 const router = express.Router();
@@ -33,10 +33,10 @@ router.post('/', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
   let conn;
   try {
     conn = await db.getConnection();
-    const { oracledb } = db;
+    const { tipos } = db;
     const ins = await conn.execute(
       `INSERT INTO MC_ZAP_TAG (NOME, COR) VALUES (:n, :c) RETURNING ID INTO :id`,
-      { n: nome, c: cor, id: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT } }
+      { n: nome, c: cor, id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
     );
     await conn.commit();
     res.status(201).json({ id: ins.outBinds.id[0], nome, cor });
