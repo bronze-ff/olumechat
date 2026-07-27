@@ -11,6 +11,8 @@ process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const db = require('../db/pool');
 const rbac = require('../auth/rbac');
@@ -45,7 +47,6 @@ function mockComTenant(fixture) {
 
 test('carregarPerfil: cria atendente novo como ATENDENTE', async () => {
   rbac.invalidar();
-  delete process.env.DIRETORES_MATRICULAS;
   const capturas = [];
   db.comTenant = mockComTenant({ capturas });
   const p = await rbac.carregarPerfil(1, 111, 'Fulano');
@@ -55,31 +56,33 @@ test('carregarPerfil: cria atendente novo como ATENDENTE', async () => {
   assert.ok(capturas.every((c) => c.binds.tenantId === 1), 'alguma query rodou sem o tenant_id do contexto');
 });
 
-test('carregarPerfil: matrícula em DIRETORES_MATRICULAS vira ADMIN', async () => {
+// FIL-67 removeu o bootstrap de ADMIN por variável de ambiente: num SaaS
+// multi-tenant ele promoveria a MESMA matrícula em TODOS os tenants. O papel
+// agora vem só do banco — nenhum ambiente promove ninguém.
+test('carregarPerfil: nenhuma variável de ambiente promove a ADMIN', async () => {
   rbac.invalidar();
-  process.env.DIRETORES_MATRICULAS = '999,222';
   db.comTenant = mockComTenant({});
-  const p = await rbac.carregarPerfil(1, 222, 'Diretor');
-  assert.equal(p.papel, 'ADMIN');
-  delete process.env.DIRETORES_MATRICULAS;
+  const p = await rbac.carregarPerfil(1, 222, 'Ex-diretor');
+  assert.equal(p.papel, 'ATENDENTE');
+  // Guarda de regressão: o módulo não pode voltar a ler configuração de
+  // ambiente para decidir papel.
+  const fonte = fs.readFileSync(path.join(__dirname, '..', 'auth', 'rbac.js'), 'utf8');
+  assert.equal(/process\.env/.test(fonte), false, 'papel não pode depender de env');
 });
 
-test('carregarPerfil: diretor JÁ EXISTENTE rebaixado a ATENDENTE NÃO volta a ADMIN', async () => {
+test('carregarPerfil: papel do banco manda — carregar não reescreve papel', async () => {
   rbac.invalidar();
-  process.env.DIRETORES_MATRICULAS = '576';
   const capturas = [];
   db.comTenant = mockComTenant({ atendente: { ID: 5, PAPEL: 'ATENDENTE', ATIVO: 'S' }, capturas });
   const p = await rbac.carregarPerfil(1, 576, 'Filippe');
-  assert.equal(p.papel, 'ATENDENTE'); // antes do fix, o carregamento re-promovia pra ADMIN
+  assert.equal(p.papel, 'ATENDENTE');
   // e não pode ter rodado UPDATE de papel:
   assert.equal(capturas.some((c) => /UPDATE atendente SET papel/i.test(c.sql)), false);
   rbac.invalidar();
-  delete process.env.DIRETORES_MATRICULAS;
 });
 
 test('carregarPerfil: existente devolve papel/deptos e usa cache na 2ª chamada', async () => {
   rbac.invalidar();
-  delete process.env.DIRETORES_MATRICULAS;
   let chamadas = 0;
   db.comTenant = async (tenantId, fn) => {
     chamadas++;
@@ -95,7 +98,6 @@ test('carregarPerfil: existente devolve papel/deptos e usa cache na 2ª chamada'
 
 test('invalidar: força nova consulta', async () => {
   rbac.invalidar();
-  delete process.env.DIRETORES_MATRICULAS;
   let chamadas = 0;
   db.comTenant = async (tenantId, fn) => {
     chamadas++;
@@ -120,7 +122,6 @@ test('exigirPapel: bloqueia papel não listado (403) e libera o listado', () => 
 
 test('anexarPerfil: usuário desativado recebe 403', async () => {
   rbac.invalidar();
-  delete process.env.DIRETORES_MATRICULAS;
   db.comTenant = mockComTenant({ atendente: { ID: 9, PAPEL: 'ATENDENTE', ATIVO: 'N' } });
   let status;
   const res = { status: (s) => { status = s; return { json: () => {} }; } };
@@ -128,7 +129,7 @@ test('anexarPerfil: usuário desativado recebe 403', async () => {
   assert.equal(status, 403);
 });
 
-test('anexarPerfil: sem tenantId no req.user recebe 401 (login ainda não escopa por tenant)', async () => {
+test('anexarPerfil: sem tenantId no req.user recebe 401', async () => {
   let status;
   const res = { status: (s) => { status = s; return { json: () => {} }; } };
   await rbac.anexarPerfil({ user: { matricula: 555 } }, res, () => {});
@@ -141,7 +142,6 @@ test('anexarPerfil: sem tenantId no req.user recebe 401 (login ainda não escopa
 // ---------------------------------------------------------------------------
 test('carregarPerfil: isolamento de tenant — mesma matrícula não vaza de A para B', async () => {
   rbac.invalidar();
-  delete process.env.DIRETORES_MATRICULAS;
 
   // "Banco" com um atendente ADMIN de matrícula 777 SÓ no tenant 1.
   const banco = { 1: [{ matricula: 777, ID: 10, PAPEL: 'ADMIN', ATIVO: 'S' }] };

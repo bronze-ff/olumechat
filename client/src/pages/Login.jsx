@@ -41,7 +41,9 @@ function MiniSpinner() {
 
 export default function Login() {
   const { login } = useAuth();
-  const [form, setForm] = useState({ matricula: '', senha: '' });
+  // A empresa (slug do tenant) fica lembrada entre acessos: o usuário digita
+  // o mesmo valor todo dia, e ela não é segredo — sozinha não abre nada.
+  const [form, setForm] = useState({ empresa: localStorage.getItem('empresa') || '', email: '', senha: '' });
   const [showSenha, setShowSenha] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -52,10 +54,10 @@ export default function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!form.matricula || !form.senha) { setError('Preencha todos os campos'); return; }
+    if (!form.empresa || !form.email || !form.senha) { setError('Preencha todos os campos'); return; }
     setLoading(true);
     try {
-      await login(form.matricula, form.senha);
+      await login(form.empresa.trim().toLowerCase(), form.email.trim().toLowerCase(), form.senha);
     } catch (err) {
       setError(
         err.response?.data?.error ||
@@ -123,14 +125,21 @@ export default function Login() {
               <span className="font-mono text-[10px] uppercase tracking-widest text-stone-400">Acesso</span>
             </div>
             <h2 className="font-display text-2xl font-bold" style={{ color: '#1A5276' }}>Entrar no Atendimento</h2>
-            <p className="text-sm text-stone-500 mt-1">Entre com o usuário e a senha da sua empresa.</p>
+            <p className="text-sm text-stone-500 mt-1">Entre com o e-mail e a senha da sua conta.</p>
           </div>
 
           <form onSubmit={handleSubmit} noValidate className="space-y-5">
             <div>
-              <label htmlFor="matricula" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Matrícula</label>
-              <input id="matricula" type="text" inputMode="numeric" value={form.matricula} onChange={set('matricula')}
-                autoComplete="username" placeholder="000000" className="input-field font-mono" />
+              <label htmlFor="empresa" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Empresa</label>
+              <input id="empresa" type="text" value={form.empresa} onChange={set('empresa')}
+                autoComplete="organization" autoCapitalize="none" spellCheck="false"
+                placeholder="sua-empresa" className="input-field font-mono" />
+            </div>
+            <div>
+              <label htmlFor="email" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">E-mail</label>
+              <input id="email" type="email" value={form.email} onChange={set('email')}
+                autoComplete="username" autoCapitalize="none" spellCheck="false"
+                placeholder="voce@suaempresa.com.br" className="input-field" />
             </div>
             <div>
               <label htmlFor="senha" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Senha</label>
@@ -156,6 +165,11 @@ export default function Login() {
               {!loading && <IconArrow />}
             </button>
           </form>
+
+          <p className="mt-6 text-xs leading-relaxed text-stone-500">
+            Primeiro acesso? Use o link de definição de senha que o administrador
+            da sua empresa enviou — ele vale uma vez só e expira.
+          </p>
         </div>
       </div>
     </div>

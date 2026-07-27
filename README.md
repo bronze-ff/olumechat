@@ -80,9 +80,13 @@ serviço para empresas de qualquer segmento (farmácia, RH, clínica, varejo).
 - `ia/tools.js` — eram tools fixas do ERP do cliente. Agora nasce **vazio**;
   cada tenant cadastra as suas.
 
-**Ainda com resíduo** (enumerado em `docs/PORTE.md`): `auth/routes.js` loga
-contra uma tabela do ERP antigo, os nomes de tabela são `MC_ZAP_*`, e
-`api/contatos.js` carrega campos do cadastro de cliente do WinThor.
+- `auth/routes.js` — logava contra a tabela de senhas do ERP do cliente. Agora
+  é **login próprio**: tabela `usuario` por tenant, senha em argon2id, e o
+  `tenant_id` viaja assinado no JWT (FIL-67).
+
+**Ainda com resíduo** (enumerado em `docs/PORTE.md`): os nomes de tabela são
+`MC_ZAP_*` em parte do código, e `api/contatos.js` carrega campos do cadastro
+de cliente do WinThor.
 
 ---
 

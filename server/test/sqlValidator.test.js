@@ -12,10 +12,15 @@ test('rejeita não-SELECT', () => {
 test('rejeita ponto-e-vírgula', () => {
   assert.ok(validarSQL('SELECT 1 FROM DUAL;').some((e) => /";"/.test(e)));
 });
-test('rejeita MC_SENHAS, DBMS_, UTL_, EXECUTE IMMEDIATE', () => {
-  assert.ok(validarSQL('SELECT * FROM MC_SENHAS').length > 0);
+test('rejeita as tabelas de credencial, DBMS_, UTL_, EXECUTE IMMEDIATE', () => {
+  assert.ok(validarSQL('SELECT * FROM usuario').length > 0);
+  assert.ok(validarSQL('SELECT senha_hash FROM USUARIO').length > 0);
+  assert.ok(validarSQL('SELECT * FROM usuario_token_senha').length > 0);
   assert.ok(validarSQL('SELECT DBMS_RANDOM.VALUE FROM DUAL').length > 0);
   assert.ok(validarSQL('SELECT UTL_HTTP.REQUEST(1) FROM DUAL').length > 0);
+});
+test('coluna usuario_id NÃO é confundida com a tabela usuario', () => {
+  assert.deepEqual(validarSQL('SELECT usuario_id FROM conversa'), []);
 });
 test('aceita query com CABEÇALHO COMENTADO (regressão: rejeitava TODA query curada)', () => {
   const q = '-- O que faz: total de vendas\n-- Binds: :data_ini, :data_fim\nSELECT SUM(V) FROM T WHERE D >= :data_ini';

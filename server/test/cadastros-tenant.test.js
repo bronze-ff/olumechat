@@ -42,7 +42,7 @@ const tagsRoutes = require('../api/tags');
 const numerosRoutes = require('../api/numeros');
 const configCache = require('../utils/configCache');
 
-const TOKEN = jwt.sign({ jti: 'ct1', matricula: 1, nome: 'Admin' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 'ct1', tenantId: 1, matricula: 1, nome: 'Admin' }, SECRET, { expiresIn: '1h' });
 const PERFIL_ADMIN = { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true };
 
 // ---------------------------------------------------------------------------

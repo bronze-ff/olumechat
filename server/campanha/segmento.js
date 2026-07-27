@@ -24,10 +24,11 @@ function validarSql(sqlBruto) {
   if (!sql) throw new SegmentoInvalido('Escreva o SELECT que lista os destinatários.');
   if (!/^select\s/i.test(sql)) throw new SegmentoInvalido('A consulta precisa começar com SELECT.');
   if (sql.includes(';')) throw new SegmentoInvalido('Use uma única consulta (sem ";").');
-  // Defesa em profundidade: bloqueia leitura da tabela de senhas e chamadas a
-  // pacotes que executam efeito colateral (um SELECT pode invocar função com
-  // PRAGMA AUTONOMOUS_TRANSACTION). O ideal é rodar com usuário Oracle read-only.
-  if (/\bMC_SENHAS\b/i.test(sql)) throw new SegmentoInvalido('Consulta não permitida (tabela protegida).');
+  // Defesa em profundidade: bloqueia leitura das tabelas de credencial do
+  // login próprio (FIL-67 — a RLS isola o tenant, mas não impediria despejar o
+  // senha_hash dos colegas do próprio tenant) e chamadas a pacotes que
+  // executam efeito colateral. O ideal é rodar com usuário read-only.
+  if (/\busuario(_token_senha)?\b/i.test(sql)) throw new SegmentoInvalido('Consulta não permitida (tabela protegida).');
   if (/\b(DBMS_|UTL_|DBMS_SQL|EXECUTE\s+IMMEDIATE)\b/i.test(sql)) {
     throw new SegmentoInvalido('Consulta não permitida (pacote/comando não autorizado).');
   }

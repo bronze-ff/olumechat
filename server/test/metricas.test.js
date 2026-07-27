@@ -17,7 +17,7 @@ const db = require('../db/pool');
 const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 
-const TOKEN = jwt.sign({ jti: 'tm1', matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 'tm1', tenantId: 1, matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 
 function startApp(rotas, conn, perfil) {
   db.getConnection = async () => conn;

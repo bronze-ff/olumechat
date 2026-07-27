@@ -18,7 +18,7 @@ const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 const numerosRoutes = require('../api/numeros');
 
-const TOKEN = jwt.sign({ jti: 'n1', matricula: 1, nome: 'Admin' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 'n1', tenantId: 1, matricula: 1, nome: 'Admin' }, SECRET, { expiresIn: '1h' });
 const PERFIL_ADMIN = { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true };
 
 function startApp(conn, perfil) {

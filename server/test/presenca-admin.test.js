@@ -21,7 +21,7 @@ const authMiddleware = require('../auth/middleware');
 const presence = require('../realtime/presence');
 const presencaRoutes = require('../api/presenca');
 
-const TOKEN = jwt.sign({ jti: 'tp1', matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 'tp1', tenantId: 1, matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 
 function startApp(perfil) {
   // definirPausa persiste no banco — basta um conn que aceita o UPDATE.

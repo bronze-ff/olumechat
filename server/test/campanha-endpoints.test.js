@@ -18,7 +18,7 @@ const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 const campanhasRoutes = require('../api/campanhas');
 
-const TOKEN = jwt.sign({ jti: 'tc1', matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 'tc1', tenantId: 1, matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
 
 function startApp(conn, perfil) {
   db.getConnection = async () => conn;

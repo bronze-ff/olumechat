@@ -24,7 +24,8 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem('token');
     if (isTokenValid(token)) {
       const p = parseJwt(token);
-      setUser({ matricula: p.matricula, nome: p.nome, isDiretor: !!p.isDiretor, papel: 'ATENDENTE', deptoIds: [], podeAtivo: false });
+      setUser({ usuarioId: p.usuarioId, matricula: p.matricula, nome: p.nome, email: p.email,
+                tenantId: p.tenantId, papel: 'ATENDENTE', deptoIds: [], podeAtivo: false });
       // Papel/departamentos não vivem no JWT (podem mudar sem relogin) — busca no
       // servidor. loading só cai DEPOIS do perfil chegar: senão o app pinta como
       // ATENDENTE por um instante (esconde menu de admin / redireciona no 1º paint).
@@ -38,12 +39,17 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  const login = useCallback(async (matricula, senha) => {
-    const { data } = await api.post('/auth/login', { matricula, senha });
+  // Login próprio (FIL-67): empresa (slug do tenant) + e-mail + senha. O
+  // `empresa` fica guardado só para pré-preencher o campo no próximo acesso —
+  // quem manda no tenant é o `tenantId` assinado dentro do JWT.
+  const login = useCallback(async (empresa, email, senha) => {
+    const { data } = await api.post('/auth/login', { empresa, email, senha });
     localStorage.setItem('token', data.token);
+    localStorage.setItem('empresa', data.empresa || empresa);
     const p = parseJwt(data.token);
     setUser({
-      matricula: data.matricula, nome: data.nome, isDiretor: !!p?.isDiretor,
+      usuarioId: data.usuarioId, matricula: data.matricula, nome: data.nome,
+      email: data.email, tenantId: p?.tenantId,
       papel: data.papel || 'ATENDENTE', deptoIds: data.deptoIds || [], podeAtivo: !!data.podeAtivo,
     });
     navigate('/conversas', { replace: true });

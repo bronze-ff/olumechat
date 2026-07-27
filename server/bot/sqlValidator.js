@@ -5,7 +5,7 @@
  *  IMPORTANTE: remove comentários (-- linha, /* bloco *​/) ANTES das checagens —
  *  os .sql curados começam com um cabeçalho comentado, senão o ^SELECT reprovaria
  *  toda query. As checagens de segurança também rodam sobre o texto sem comentário
- *  (não dá pra burlar escondendo DBMS_/UTL_/MC_SENHAS num comentário). */
+ *  (não dá pra burlar escondendo DBMS_/UTL_/usuario num comentário). */
 function validarSQL(sqlRaw) {
   const sql = String(sqlRaw || '')
     .replace(/--[^\n]*/g, ' ')
@@ -16,7 +16,10 @@ function validarSQL(sqlRaw) {
   // Sobre o texto SEM comentário: rejeita qualquer ";" (bloqueia múltiplos
   // statements). Um ";" que só existisse dentro de um comentário não conta.
   if (sql.includes(';')) erros.push('O SQL não pode conter ";".');
-  if (/\bMC_SENHAS\b/i.test(sql)) erros.push('Tabela protegida não permitida.');
+  // Tabelas de credencial do login próprio (FIL-67). A RLS já impede ler o
+  // tenant do vizinho, mas nada impediria um SELECT curado despejar o
+  // senha_hash dos colegas DO PRÓPRIO tenant.
+  if (/\busuario(_token_senha)?\b/i.test(sql)) erros.push('Tabela protegida não permitida.');
   if (/\bDBMS_|\bUTL_|\bEXECUTE\s+IMMEDIATE\b/i.test(sql)) erros.push('Pacote/comando não autorizado.');
   return erros;
 }
