@@ -72,6 +72,10 @@ module.exports = async function autenticarOperador(req, res, next) {
   // Assinado com o segredo do operador, mas sem cara de sessão de operador.
   // Cobre também o caso de OPERADOR_JWT_SECRET ter sido configurado igual ao
   // JWT_SECRET: um token de tenant passaria na assinatura e morre aqui.
+  if (!Number.isFinite(decoded.exp)) {
+    return res.status(401).json({ error: MSG_401 });
+  }
+
   const operadorId = idValido(decoded.operadorId);
   if (decoded.escopo !== 'operador' || !operadorId) {
     return ehTokenDeTenant(token)

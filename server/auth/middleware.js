@@ -84,6 +84,12 @@ module.exports = async function auth(req, res, next) {
     return res.status(401).json({ error: 'Token inválido' });
   }
 
+  // Tokens without `exp` cannot be safely revoked: the blacklist entry would
+  // expire immediately while the JWT itself would remain valid.
+  if (!Number.isFinite(decoded.exp)) {
+    return res.status(401).json({ error: 'Token inválido' });
+  }
+
   const tenantId = tenantValido(decoded.tenantId);
   if (!tenantId) {
     // Sem tenant não há fronteira. Mesma mensagem de "token inválido": o
