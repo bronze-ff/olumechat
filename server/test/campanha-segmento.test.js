@@ -30,6 +30,14 @@ test('extrairBinds: pega :nome e preenche com params (ou null)', () => {
   assert.equal(b.filial, null);
 });
 
+test('extrairBinds: NÃO confunde ::cast do Postgres com bind', () => {
+  // Regressão: um regex ingênuo (`/:\w+/`) casava o segundo ':' de "::text"
+  // e inventava um bind fantasma ":text".
+  const b = seg.extrairBinds("SELECT telefone::text AS tel FROM p WHERE id = :id", { id: 3 });
+  assert.deepEqual(Object.keys(b), ['id']);
+  assert.equal(b.id, '3');
+});
+
 test('rodarPreview: envolve em LIMIT (com alias de subquery) e decodifica colunas p/ minúsculas', async () => {
   let capturado;
   const conn = { async execute(sql, binds) {

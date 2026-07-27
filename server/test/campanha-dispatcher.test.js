@@ -11,6 +11,7 @@ process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
 const test = require('node:test');
 const assert = require('node:assert');
 const dispatcher = require('../campanha/dispatcher');
+const hub = require('../realtime/hub');
 
 // Hora fixa dentro da janela 08:00-20:00.
 const AGORA = () => new Date(2026, 5, 11, 12, 0, 0);
@@ -155,6 +156,28 @@ test('tenant: processarItem roda dentro de comTenant(tenantId, ...) com o tenant
   assert.ok(capturasTenant.every((t) => t === TENANT), 'alguma chamada usou um tenantId diferente do da campanha');
 });
 
+test('tenant: todo evento publicado no hub carrega o tenantId da campanha (SSE não pode vazar entre tenants)', async () => {
+  const eventos = [];
+  const cancelar = hub.subscribe((e) => eventos.push(e));
+  try {
+    const conn = fakeConn({ campanha: { ...CAMP }, itens: [{ ...ITEM }] });
+    await dispatcher.processarLote(TENANT, 1, deps({ conn, sendTemplate: async () => ({ messages: [{ id: 'x' }] }) }));
+  } finally { cancelar(); }
+  assert.ok(eventos.length > 0, 'nenhum evento publicado');
+  assert.ok(eventos.every((e) => e.tenantId === TENANT), 'evento de campanha publicado sem tenantId (ou com tenant errado)');
+});
+
+test('tenant: evento de pausa (limite diário) também carrega o tenantId', async () => {
+  const eventos = [];
+  const cancelar = hub.subscribe((e) => eventos.push(e));
+  try {
+    const conn = fakeConn({ campanha: { ...CAMP, LIMITE_DIARIO: 250 }, usados: 250, itens: [{ ...ITEM }] });
+    await dispatcher.processarLote(TENANT, 1, deps({ conn, sendTemplate: async () => ({ messages: [{ id: 'x' }] }) }));
+  } finally { cancelar(); }
+  assert.ok(eventos.some((e) => e.status === 'pausada'));
+  assert.ok(eventos.every((e) => e.tenantId === TENANT), 'evento de pausa publicado sem tenantId (ou com tenant errado)');
+});
+
 test('varrerPendentes: itera os tenants ativos e roda a limpeza dentro de comTenant() de cada um', async () => {
   const tenantsChamados = [];
   const rawConn = {
@@ -178,10 +201,9 @@ test('tick: descobre campanhas enviando cruzando tenants (leitura crua) e proces
   const conn = fakeConn({ campanha: { ...CAMP }, itens: [] });
   const rawConn = {
     async execute(sql) {
-      if (sql.includes('SELECT ID, TENANT_ID FROM campanha')) {
-        return { rows: [{ ID: 10, TENANT_ID: 1 }, { ID: 20, TENANT_ID: 2 }] };
-      }
-      return { rows: [] };
+      assert.match(sql, /JOIN tenant t ON t\.ID = c\.TENANT_ID/);
+      assert.match(sql, /t\.STATUS = 'ativo'/);
+      return { rows: [{ ID: 10, TENANT_ID: 1 }, { ID: 20, TENANT_ID: 2 }] };
     },
     close: async () => {},
   };
@@ -193,4 +215,29 @@ test('tick: descobre campanhas enviando cruzando tenants (leitura crua) e proces
   };
   await dispatcher.tick(d);
   assert.deepEqual(tenantsChamados.sort(), [1, 2]);
+});
+
+test('tick: campanha de tenant suspenso/encerrado NÃO é agendada (o JOIN com tenant já filtra no banco)', async () => {
+  const tenantsChamados = [];
+  const conn = fakeConn({ campanha: { ...CAMP }, itens: [] });
+  // Simula o filtro `t.STATUS = 'ativo'` do JOIN real: a linha do tenant 2
+  // (suspenso) nunca chega a sair do banco — o dispatcher não precisa (nem
+  // deveria) filtrar de novo em JS.
+  const TODAS = [{ ID: 10, TENANT_ID: 1 }, { ID: 20, TENANT_ID: 2 }];
+  const STATUS_TENANT = { 1: 'ativo', 2: 'suspenso' };
+  const rawConn = {
+    async execute(sql) {
+      assert.match(sql, /t\.STATUS = 'ativo'/);
+      return { rows: TODAS.filter((c) => STATUS_TENANT[c.TENANT_ID] === 'ativo') };
+    },
+    close: async () => {},
+  };
+  const d = {
+    getConnection: async () => rawConn,
+    comTenant: async (tenantId, fn) => { tenantsChamados.push(tenantId); return fn(conn); },
+    sendTemplate: async () => ({ messages: [{ id: 'x' }] }),
+    agora: AGORA,
+  };
+  await dispatcher.tick(d);
+  assert.deepEqual(tenantsChamados, [1], 'campanha do tenant suspenso (2) não deveria ter sido agendada');
 });

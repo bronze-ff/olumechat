@@ -142,9 +142,16 @@ test('preparar: dedup por telefone (2 linhas mesmo número → 1 item)', async (
   } finally { server.close(); }
 });
 
-test('preparar: violação de UNIQUE (código 23505 do Postgres) conta como duplicado, não propaga erro', async () => {
+test('preparar: conflito de UNIQUE usa ON CONFLICT DO NOTHING — conta como duplicado SEM abortar a transação', async () => {
+  // Regressão: um catch(23505) deixaria a transação ABORTADA (Postgres exige
+  // ROLLBACK/savepoint após erro) — o UPDATE campanha/INSERT auditoria
+  // seguintes, na MESMA transação, falhariam com 25P02. Com ON CONFLICT DO
+  // NOTHING o INSERT só devolve rowsAffected=0 (já existia) e a transação
+  // segue viva — é isso que este teste prova.
+  const capturas = [];
   const conn = {
-    async execute(sql) {
+    async execute(sql, binds) {
+      capturas.push({ sql, binds });
       if (sql.includes('SELECT STATUS, SEGMENTO')) {
         return { rows: [{ STATUS: 'rascunho', SEGMENTO: { sql: 'SELECT telefone FROM dev', telefoneCol: 'telefone', variaveis: [] } }] };
       }
@@ -152,9 +159,8 @@ test('preparar: violação de UNIQUE (código 23505 do Postgres) conta como dupl
         return { rows: [{ TELEFONE: '5562983423192' }] };
       }
       if (sql.startsWith('INSERT INTO campanha_item')) {
-        const e = new Error('duplicate key value violates unique constraint "uq_ci_camp_tel"');
-        e.code = '23505'; e.constraint = 'uq_ci_camp_tel';
-        throw e;
+        assert.match(sql, /ON CONFLICT ON CONSTRAINT uq_ci_camp_tel DO NOTHING/);
+        return { rows: [], rowsAffected: 0 }; // conflito: item já existia, nada inserido
       }
       return { rows: [], rowsAffected: 1 };
     },
@@ -165,5 +171,8 @@ test('preparar: violação de UNIQUE (código 23505 do Postgres) conta como dupl
     assert.equal(r.status, 200);
     assert.equal(r.body.inseridos, 0);
     assert.equal(r.body.duplicados, 1);
+    // a transação continuou viva: UPDATE campanha e INSERT auditoria rodaram.
+    assert.ok(capturas.some((c) => c.sql.startsWith('UPDATE campanha SET TOTAL')));
+    assert.ok(capturas.some((c) => c.sql.startsWith('INSERT INTO auditoria')));
   } finally { server.close(); }
 });

@@ -91,12 +91,16 @@ async function temOptout(conn, telefone) {
 
 /** Pausa a campanha (usa o `conn` já aberto — chamado de dentro de um
     comTenant() em andamento, sem commit próprio). */
-async function pausar(conn, campanhaId, motivo, retomaEm) {
+async function pausar(conn, tenantId, campanhaId, motivo, retomaEm) {
   await conn.execute(
     `UPDATE campanha SET STATUS = 'pausada', PAUSA_MOTIVO = :m, RETOMA_EM = :r,
             ATUALIZADO_EM = now() WHERE ID = :id AND STATUS = 'enviando'`,
     { m: motivo, r: retomaEm || null, id: campanhaId });
-  publish({ tipo: 'campanha', campanhaId, status: 'pausada', motivo });
+  // tenantId no evento é obrigatório: o hub (realtime/hub.js) ainda é um
+  // EventEmitter global sem filtro por tenant — quem filtra do lado de quem
+  // assina é outro ticket (api/stream.js), mas o publicador já precisa
+  // etiquetar agora, senão não tem como aquele ticket filtrar depois.
+  publish({ tipo: 'campanha', tenantId, campanhaId, status: 'pausada', motivo });
 }
 
 function proximaJanela(agora, ini) {
@@ -143,7 +147,7 @@ async function processarItem(tenantId, campanhaId, item, deps) {
       if (TRANSITORIOS.has(code) || !err.isGraphError) {
         // Transitório: devolve o item à fila e pausa a campanha com backoff.
         await conn.execute(`UPDATE campanha_item SET STATUS = 'pendente' WHERE ID = :id`, { id: item.ID });
-        await pausar(conn, campanhaId, `pausa automática (erro ${code || 'rede'}) — retoma em breve`,
+        await pausar(conn, tenantId, campanhaId, `pausa automática (erro ${code || 'rede'}) — retoma em breve`,
           new Date(deps.agora().getTime() + 5 * 60_000));
         return 'pausada-backoff';
       }
@@ -187,7 +191,7 @@ async function processarLote(tenantId, campanhaId, deps) {
       );
       restantesNoDia = Number(c.LIMITE_DIARIO) - Number(usados.rows[0].QTD);
       if (restantesNoDia <= 0) {
-        await pausar(conn, campanhaId, 'limite diário do número atingido', proximaJanela(agora, c.JANELA_INICIO));
+        await pausar(conn, tenantId, campanhaId, 'limite diário do número atingido', proximaJanela(agora, c.JANELA_INICIO));
         return { acao: 'pausada' };
       }
     }
@@ -219,8 +223,8 @@ async function processarLote(tenantId, campanhaId, deps) {
   });
 
   if (preparo.acao === 'nada') return;
-  if (preparo.acao === 'pausada') { publish({ tipo: 'campanha', campanhaId, status: 'pausada' }); return; }
-  if (preparo.acao === 'concluida') { publish({ tipo: 'campanha', campanhaId, status: 'concluida' }); return; }
+  if (preparo.acao === 'pausada') { publish({ tipo: 'campanha', tenantId, campanhaId, status: 'pausada' }); return; }
+  if (preparo.acao === 'concluida') { publish({ tipo: 'campanha', tenantId, campanhaId, status: 'concluida' }); return; }
 
   const { rate, itens } = preparo;
   let pausouBackoff = false;
@@ -231,20 +235,25 @@ async function processarLote(tenantId, campanhaId, deps) {
     await espera(1000 / rate);
   }
 
-  publish({ tipo: 'campanha', campanhaId, status: 'enviando' });
+  publish({ tipo: 'campanha', tenantId, campanhaId, status: 'enviando' });
   if (!pausouBackoff) acordar(tenantId, campanhaId, deps); // continua drenando
 }
 
 /** Tick periódico: acorda toda campanha que está 'enviando' e cuja pausa venceu,
-    em QUALQUER tenant. Leitura crua (bypassa RLS via role dono da conexão) —
-    ver nota multi-tenant no topo do arquivo. */
+    em QUALQUER tenant ATIVO. Leitura crua (bypassa RLS via role dono da
+    conexão) — ver nota multi-tenant no topo do arquivo. Restringe a
+    tenant.status = 'ativo': tenant suspenso/encerrado não pode ter mensagem
+    (paga) disparada, mesmo que a campanha tenha ficado 'enviando' de antes de
+    ser suspenso — mesmo filtro que varrerPendentes() já aplica. */
 async function tick(deps = defaultDeps()) {
   let conn;
   try {
     conn = await deps.getConnection();
     const r = await conn.execute(
-      `SELECT ID, TENANT_ID FROM campanha
-        WHERE STATUS = 'enviando' AND (RETOMA_EM IS NULL OR RETOMA_EM <= now())`
+      `SELECT c.ID, c.TENANT_ID FROM campanha c
+         JOIN tenant t ON t.ID = c.TENANT_ID
+        WHERE c.STATUS = 'enviando' AND (c.RETOMA_EM IS NULL OR c.RETOMA_EM <= now())
+          AND t.STATUS = 'ativo'`
     );
     await Promise.all(r.rows.map((row) => acordar(row.TENANT_ID, row.ID, deps)));
   } catch (err) {

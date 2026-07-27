@@ -192,16 +192,17 @@ router.post('/:id/preparar', async (req, res, next) => {
         if (vistos.has(chave)) { duplicados++; continue; }
         vistos.add(chave);
         const vars = (seg.variaveis || []).map((col) => String(linha[col] ?? ''));
-        try {
-          await conn.execute(
-            `INSERT INTO campanha_item (CAMPANHA_ID, TELEFONE, VARIAVEIS, STATUS)
-             VALUES (:cid, :tel, :vars, 'pendente')`,
-            { cid: id, tel, vars: JSON.stringify(vars) }
-          );
-          inseridos++;
-        } catch (e) {
-          if (e.code === '23505') { duplicados++; } else throw e; // UNIQUE (tenant,campanha,telefone)
-        }
+        // ON CONFLICT DO NOTHING em vez de catch(23505): um catch aqui deixaria
+        // a transação ABORTADA (Postgres exige ROLLBACK/savepoint depois de um
+        // erro) — o UPDATE campanha e o INSERT auditoria logo abaixo, na MESMA
+        // transação, falhariam com 25P02 "current transaction is aborted".
+        const ins = await conn.execute(
+          `INSERT INTO campanha_item (CAMPANHA_ID, TELEFONE, VARIAVEIS, STATUS)
+           VALUES (:cid, :tel, :vars, 'pendente')
+           ON CONFLICT ON CONSTRAINT uq_ci_camp_tel DO NOTHING`,
+          { cid: id, tel, vars: JSON.stringify(vars) }
+        );
+        if (ins.rowsAffected) inseridos++; else duplicados++;
       }
       const pulados = invalidos + duplicados;
       await conn.execute(

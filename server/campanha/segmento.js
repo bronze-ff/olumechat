@@ -12,6 +12,7 @@
 // automaticamente; nenhuma mudança aqui é necessária para isso.
 'use strict';
 
+const { nomesBinds } = require('../db/sql');
 
 class SegmentoInvalido extends Error {}
 
@@ -39,12 +40,13 @@ function validarSql(sqlBruto) {
   return sql;
 }
 
-/** Extrai os binds :nome do SQL, preenchendo com `params` (ou null). */
+/** Extrai os binds :nome do SQL, preenchendo com `params` (ou null).
+    Reusa a varredura de db/sql.js (nomesBinds) — um regex ingênuo confundia
+    `::cast` do Postgres (ex.: `telefone::text`) com um bind `:text`. */
 function extrairBinds(sql, params = {}) {
   const binds = {};
-  for (const m of String(sql).matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)/g)) {
-    const nome = m[1];
-    if (!(nome in binds)) binds[nome] = params[nome] !== undefined ? String(params[nome]) : null;
+  for (const nome of nomesBinds(sql)) {
+    binds[nome] = params[nome] !== undefined ? String(params[nome]) : null;
   }
   return binds;
 }
