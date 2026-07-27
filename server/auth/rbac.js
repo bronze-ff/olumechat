@@ -1,4 +1,6 @@
-// auth/rbac.js — Perfil de autorização (papel + departamentos) por matrícula.
+// auth/rbac.js — Perfil de autorização (papel + departamentos) por matrícula,
+// ESCOPADO POR TENANT (FIL-59, porte da fundação FIL-58): o papel de uma
+// matrícula só vale dentro do tenant em que ela foi carregada.
 //
 // Decisões (ver docs/fase5-plano.md):
 //  - Perfil consultado no banco com cache em memória (TTL 30s): papel/departamento
@@ -12,7 +14,7 @@
 const db = require('../db/pool');
 
 const TTL_MS = 30_000;
-const cache = new Map(); // matricula -> { perfil, exp }
+const cache = new Map(); // `${tenantId}:${matricula}` -> { perfil, exp }
 
 const PAPEIS = ['ADMIN', 'SUPERVISOR', 'ATENDENTE', 'AUDITOR'];
 
@@ -21,20 +23,21 @@ function diretores() {
 }
 
 /**
- * Carrega (criando se preciso) o perfil do usuário.
+ * Carrega (criando se preciso) o perfil do usuário DENTRO do tenant informado.
+ * Roda sob comTenant() — RLS garante o isolamento; o filtro tenant_id explícito
+ * nas queries é defesa em profundidade (auditável, independe da RLS).
  * @returns {Promise<{atendenteId, papel, ativo, deptoIds: number[]}>}
  */
-async function carregarPerfil(matricula, nome) {
-  const key = String(matricula);
+async function carregarPerfil(tenantId, matricula, nome) {
+  const key = `${tenantId}:${matricula}`;
   const hit = cache.get(key);
   if (hit && hit.exp > Date.now()) return hit.perfil;
 
-  let conn;
-  try {
-    conn = await db.getConnection();
+  const perfil = await db.comTenant(tenantId, async (conn) => {
     let sel = await conn.execute(
-      `SELECT ID, PAPEL, ATIVO, STATUS_PRESENCA, PODE_ATIVO FROM MC_ZAP_ATENDENTE WHERE MATRICULA = :m`,
-      { m: matricula }
+      `SELECT id, papel, ativo, status_presenca, pode_ativo
+         FROM atendente WHERE tenant_id = :tenantId AND matricula = :m`,
+      { tenantId, m: matricula }
     );
 
     let atendenteId, papel, ativo, pausado = false, podeAtivo = false;
@@ -52,60 +55,61 @@ async function carregarPerfil(matricula, nome) {
       // PUT /api/atendentes.)
     } else {
       const { tipos } = db;
-      papel = diretores().includes(key) ? 'ADMIN' : 'ATENDENTE';
+      papel = diretores().includes(String(matricula)) ? 'ADMIN' : 'ATENDENTE';
       ativo = true;
       const ins = await conn.execute(
-        `INSERT INTO MC_ZAP_ATENDENTE (MATRICULA, NOME, PAPEL)
-         VALUES (:m, :n, :p) RETURNING ID INTO :id`,
-        { m: matricula, n: nome || null, p: papel,
+        `INSERT INTO atendente (tenant_id, matricula, nome, papel)
+         VALUES (:tenantId, :m, :n, :p) RETURNING id INTO :id`,
+        { tenantId, m: matricula, n: nome || null, p: papel,
           id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
       );
-      await conn.commit();
       atendenteId = ins.outBinds.id[0];
     }
 
     const dep = await conn.execute(
-      `SELECT DEPARTAMENTO_ID FROM MC_ZAP_ATENDENTE_DEPTO WHERE ATENDENTE_ID = :id`,
-      { id: atendenteId }
+      `SELECT departamento_id FROM atendente_depto WHERE tenant_id = :tenantId AND atendente_id = :id`,
+      { tenantId, id: atendenteId }
     );
     const deptoIds = dep.rows.map((r) => r.DEPARTAMENTO_ID);
 
     // Números (canais) que o atendente atende. LISTA VAZIA = sem restrição = TODOS.
-    // Tolerante: se a tabela ainda não existe (script 11 não rodou), trata como
-    // sem restrição em vez de derrubar o login (carregarPerfil roda em toda req).
-    let numeroIds = [];
-    try {
-      const num = await conn.execute(
-        `SELECT NUMERO_ID FROM MC_ZAP_ATENDENTE_NUMERO WHERE ATENDENTE_ID = :id`,
-        { id: atendenteId }
-      );
-      numeroIds = num.rows.map((r) => r.NUMERO_ID);
-    } catch (e) {
-      if (e.errorNum !== 942) throw e; // 942 = tabela/view não existe
-    }
+    const num = await conn.execute(
+      `SELECT numero_id FROM atendente_numero WHERE tenant_id = :tenantId AND atendente_id = :id`,
+      { tenantId, id: atendenteId }
+    );
+    const numeroIds = num.rows.map((r) => r.NUMERO_ID);
 
     // ADMIN sempre pode iniciar conversa ativa.
-    const perfil = { atendenteId, papel, ativo, deptoIds, numeroIds, pausado, podeAtivo: podeAtivo || papel === 'ADMIN' };
-    cache.set(key, { perfil, exp: Date.now() + TTL_MS });
-    return perfil;
-  } finally {
-    if (conn) await conn.close().catch(() => {});
+    return { atendenteId, papel, ativo, deptoIds, numeroIds, pausado, podeAtivo: podeAtivo || papel === 'ADMIN' };
+  });
+
+  cache.set(key, { perfil, exp: Date.now() + TTL_MS });
+  return perfil;
+}
+
+/**
+ * Invalida o cache (chamar quando admin altera papel/departamentos).
+ * Sem argumento: limpa tudo. Só `matricula`: limpa essa matrícula em
+ * QUALQUER tenant (chamadores hoje não conhecem o tenant_id — ver call
+ * sites em api/atendentes.js e api/presenca.js).
+ */
+function invalidar(matricula) {
+  if (matricula === undefined) { cache.clear(); return; }
+  const alvo = `:${matricula}`;
+  for (const key of cache.keys()) {
+    if (key.endsWith(alvo)) cache.delete(key);
   }
 }
 
-/** Invalida o cache (chamar quando admin altera papel/departamentos). */
-function invalidar(matricula) {
-  if (matricula === undefined) cache.clear();
-  else cache.delete(String(matricula));
-}
-
-/** Middleware: anexa req.perfil (depende do authMiddleware ter setado req.user). */
+/** Middleware: anexa req.perfil (depende do authMiddleware ter setado req.user
+ *  com tenantId e matricula — hoje só o login próprio de FIL-67 seta tenantId
+ *  no JWT; até lá esta rota fica inoperante, como o resto de auth/routes.js). */
 async function anexarPerfil(req, res, next) {
   try {
-    if (!req.user || !req.user.matricula) {
+    if (!req.user || !req.user.matricula || !req.user.tenantId) {
       return res.status(401).json({ error: 'Não autenticado' });
     }
-    req.perfil = await carregarPerfil(req.user.matricula, req.user.nome);
+    req.perfil = await carregarPerfil(req.user.tenantId, req.user.matricula, req.user.nome);
     if (!req.perfil.ativo) {
       return res.status(403).json({ error: 'Usuário desativado no sistema' });
     }
