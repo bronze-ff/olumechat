@@ -12,6 +12,11 @@
 // ADMIN/AUDITOR em podeReceber — "vê tudo" nunca pode significar "vê tudo de
 // todo mundo"). Fail-closed: evento sem tenantId (publicador ainda não
 // portado) também é descartado, nunca vaza por omissão.
+//
+// tenantId vem do ticket (que carrega req.user por inteiro — ver POST
+// /ticket) — mesmo contrato do JWT que FIL-59 estabeleceu para
+// auth/rbac.carregarPerfil(tenantId, matricula, nome): quem emite o token é
+// quem decide o tenant, não uma consulta feita aqui.
 'use strict';
 
 const express = require('express');
@@ -52,24 +57,17 @@ function podeReceber(perfil, evt) {
 router.get('/', async (req, res) => {
   const user = consumirTicket(req.query.ticket);
   if (!user) return res.status(401).json({ error: 'Ticket inválido ou expirado' });
+  if (!user.tenantId) return res.status(401).json({ error: 'Ticket sem tenant associado' });
+  const tenantId = user.tenantId;
 
   // Perfil para filtrar eventos + registrar presença.
   let perfil;
   try {
-    perfil = await carregarPerfil(user.matricula, user.nome);
+    perfil = await carregarPerfil(tenantId, user.matricula, user.nome);
   } catch (err) {
     console.error('[stream] falha ao carregar perfil:', err.message);
     return res.status(500).json({ error: 'Falha ao carregar perfil' });
   }
-
-  let tenantId;
-  try {
-    tenantId = await presence.tenantDoAtendente(perfil.atendenteId);
-  } catch (err) {
-    console.error('[stream] falha ao resolver tenant:', err.message);
-    return res.status(500).json({ error: 'Falha ao resolver tenant' });
-  }
-  if (!tenantId) return res.status(401).json({ error: 'Atendente sem tenant associado' });
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',

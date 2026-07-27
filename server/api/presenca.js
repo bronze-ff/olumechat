@@ -16,7 +16,7 @@ router.put('/', async (req, res, next) => {
     return res.status(400).json({ error: "Estado inválido (use 'online' ou 'pausa')" });
   }
   try {
-    await presence.definirPausa(req.perfil.atendenteId, estado === 'pausa');
+    await presence.definirPausa(req.perfil.atendenteId, estado === 'pausa', req.user.tenantId);
     invalidar(req.user.matricula); // perfil.pausado muda
     res.json({ ok: true, estado });
   } catch (err) {
@@ -38,13 +38,16 @@ router.put('/:atendenteId', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res,
     return res.status(400).json({ error: "Estado inválido (use 'online' ou 'pausa')" });
   }
   const info = presence.infoDe(atendenteId);
-  if (!info) {
+  // Mesma resposta para "nunca conectou" e "conectado em OUTRO tenant" — não
+  // revela pra fora do tenant que o ID existe (isolamento também é sigilo de
+  // existência, não só de dado).
+  if (!info || info.tenantId !== req.user.tenantId) {
     return res.status(409).json({
       error: 'Atendente não está conectado — ele precisa entrar no sistema para a mudança valer.',
     });
   }
   try {
-    await presence.definirPausa(atendenteId, estado === 'pausa');
+    await presence.definirPausa(atendenteId, estado === 'pausa', req.user.tenantId);
     if (info.matricula) invalidar(info.matricula); // o perfil.pausado dele muda
     res.json({ ok: true, atendenteId, estado });
   } catch (err) {
@@ -52,13 +55,8 @@ router.put('/:atendenteId', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res,
   }
 });
 
-router.get('/', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
-  try {
-    const tenantId = await presence.tenantDoAtendente(req.perfil.atendenteId);
-    res.json(presence.snapshot(tenantId));
-  } catch (err) {
-    next(err);
-  }
+router.get('/', exigirPapel('ADMIN', 'SUPERVISOR'), (req, res) => {
+  res.json(presence.snapshot(req.user.tenantId));
 });
 
 module.exports = router;

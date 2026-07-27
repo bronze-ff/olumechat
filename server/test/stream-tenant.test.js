@@ -22,27 +22,27 @@ const presence = require('../realtime/presence');
 const { publish } = require('../realtime/hub');
 const streamRoutes = require('../api/stream');
 
-const TOKEN = jwt.sign({ jti: 'tstream1', matricula: 999, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
+// tenantId vem do JWT (mesmo contrato que auth/rbac.carregarPerfil(tenantId,
+// matricula, nome) usa desde FIL-59) — o ticket carrega req.user por inteiro.
+const TOKEN = jwt.sign({ jti: 'tstream1', tenantId: 1, matricula: 999, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 
-// Simula o banco por trás de carregarPerfil (auth/rbac) + tenantDoAtendente
-// (presence): atendente 42, tenant 1, sem departamento/número restrito.
+// Simula o banco por trás de carregarPerfil (auth/rbac, escopado por tenant
+// desde FIL-59): atendente 42, sem departamento/número restrito.
 function fakeConn() {
   return {
     async execute(sql) {
-      if (sql.includes('FROM MC_ZAP_ATENDENTE WHERE MATRICULA')) {
+      if (/FROM atendente WHERE/.test(sql)) {
         return { rows: [{ ID: 42, PAPEL: 'ADMIN', ATIVO: 'S', STATUS_PRESENCA: 'online', PODE_ATIVO: 'S' }] };
       }
-      if (sql.includes('FROM MC_ZAP_ATENDENTE_DEPTO')) return { rows: [] };
-      if (sql.includes('FROM MC_ZAP_ATENDENTE_NUMERO')) return { rows: [] };
-      if (sql.includes('FROM atendente WHERE id')) return { rows: [{ TENANT_ID: 1 }] };
+      if (/FROM atendente_depto/.test(sql)) return { rows: [] };
+      if (/FROM atendente_numero/.test(sql)) return { rows: [] };
       return { rows: [], outBinds: {}, rowsAffected: 1 };
     },
-    commit: async () => {}, rollback: async () => {}, close: async () => {},
   };
 }
 
 function startApp() {
-  db.getConnection = async () => fakeConn();
+  db.comTenant = async (tenantId, fn) => fn(fakeConn());
   const app = express();
   app.use('/api/stream', streamRoutes);
   return new Promise((resolve) => {

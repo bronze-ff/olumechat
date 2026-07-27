@@ -21,11 +21,14 @@ const authMiddleware = require('../auth/middleware');
 const presence = require('../realtime/presence');
 const presencaRoutes = require('../api/presenca');
 
-const TOKEN = jwt.sign({ jti: 'tp1', matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
+// tenantId no JWT: mesmo contrato que auth/rbac.carregarPerfil(tenantId, ...)
+// usa desde FIL-59 — aqui o perfil é injetado direto (abaixo), sem passar por
+// carregarPerfil, mas presence.definirPausa/snapshot precisam de req.user.tenantId.
+const TOKEN = jwt.sign({ jti: 'tp1', tenantId: 1, matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 
 function startApp(perfil) {
-  // definirPausa persiste no banco — basta um conn que aceita o UPDATE.
-  db.getConnection = async () => ({ execute: async () => ({ rowsAffected: 1 }), commit: async () => {}, close: async () => {} });
+  // definirPausa persiste no banco via comTenant — basta um conn que aceita o UPDATE.
+  db.comTenant = async (tenantId, fn) => fn({ execute: async () => ({ rowsAffected: 1 }) });
   const app = express();
   app.use('/api', express.json());
   app.use('/api/presenca', authMiddleware, (req, res, next) => { req.perfil = perfil; next(); }, presencaRoutes);

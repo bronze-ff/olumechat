@@ -6,13 +6,15 @@
 // Pausa é manual e persiste em atendente.status_presenca (sobrevive a
 // restart); o online em si é só memória — reconstruído quando os SSE reconectam.
 //
-// MULTI-TENANT: cada entrada guarda o tenantId do atendente (setado no
-// primeiro conectar() ou resolvido via tenantDoAtendente()). `onlineDoDepto`
-// aceita tenantId como 2º parâmetro OPCIONAL — quem já resolveu o tenant
-// (fila/distribuidor.js) filtra por ele; quem não sabe de tenant (bot/runtime.js,
-// ainda não portado) chama com 1 argumento só e continua funcionando como
-// antes. `snapshot` idem: sem tenantId devolve tudo (uso interno/teste); com
-// tenantId, só as entradas daquele tenant (api/presenca.js sempre passa).
+// MULTI-TENANT: cada entrada guarda o tenantId do atendente, setado em
+// conectar() — quem abre a conexão SSE (api/stream.js) já sabe o tenant via
+// req.user.tenantId (JWT; mesma fonte que auth/rbac.carregarPerfil(tenantId,
+// matricula, nome) usa desde FIL-59). `onlineDoDepto` aceita tenantId como 2º
+// parâmetro OPCIONAL — quem já resolveu o tenant (fila/distribuidor.js) filtra
+// por ele; quem não sabe de tenant (bot/runtime.js, ainda não portado) chama
+// com 1 argumento só e continua funcionando como antes. `snapshot` idem: sem
+// tenantId devolve tudo (uso interno/teste); com tenantId, só as entradas
+// daquele tenant (api/presenca.js sempre passa req.user.tenantId).
 'use strict';
 
 const db = require('../db/pool');
@@ -41,23 +43,6 @@ function estaOnline(e) { return e.conexoes > 0 || e.gracaTimer !== null; }
 function estadoDe(e) {
   if (!estaOnline(e)) return 'offline';
   return e.pausado ? 'pausa' : 'online';
-}
-
-/** Resolve o tenant de um atendente: usa a presença em memória se já
-    conectado (sem query), senão consulta direto (fora de comTenant — é
-    justamente o dado que falta para abrir um contexto de tenant). */
-async function tenantDoAtendente(atendenteId) {
-  const e = mapa.get(atendenteId);
-  if (e && e.tenantId) return e.tenantId;
-  let conn;
-  try {
-    conn = await db.getConnection();
-    const r = await conn.execute(`SELECT tenant_id FROM atendente WHERE id = :id`, { id: atendenteId });
-    const rows = (r && r.rows) || [];
-    return rows.length ? rows[0].TENANT_ID : null;
-  } finally {
-    if (conn) await conn.close().catch(() => {});
-  }
 }
 
 /** Nova conexão SSE do atendente. Devolve true se ele FICOU online agora. */
@@ -97,13 +82,13 @@ function desconectar(atendenteId) {
   }
 }
 
-/** Pausa/retoma (persiste no banco para sobreviver a restart). */
-async function definirPausa(atendenteId, pausado) {
+/** Pausa/retoma (persiste no banco para sobreviver a restart). tenantId vem
+    de quem chama (api/presenca.js passa req.user.tenantId) — comTenant()
+    já recusa um tenantId inválido/ausente, então não repetimos a checagem
+    aqui. */
+async function definirPausa(atendenteId, pausado, tenantId) {
   const e = entrada(atendenteId);
   e.pausado = !!pausado;
-
-  const tenantId = await tenantDoAtendente(atendenteId);
-  if (!tenantId) throw new Error(`definirPausa: atendente ${atendenteId} sem tenant associado`);
   e.tenantId = tenantId;
 
   await db.comTenant(tenantId, async (conn) => {
@@ -153,12 +138,14 @@ function lastAssignedAt(atendenteId) {
   return e ? e.lastAssignedAt : 0;
 }
 
-/** Info atual de um atendente na presença (matrícula + estado), ou null se ele
-    nunca conectou nesta sessão do serviço — usado pela ação do gestor de forçar
-    a presença (só faz sentido sobre quem está conectado). */
+/** Info atual de um atendente na presença (matrícula + estado + tenant), ou
+    null se ele nunca conectou nesta sessão do serviço — usado pela ação do
+    gestor de forçar a presença (só faz sentido sobre quem está conectado;
+    api/presenca.js também usa o tenantId aqui pra recusar forçar presença de
+    atendente de OUTRO tenant, sem revelar que o ID existe lá). */
 function infoDe(atendenteId) {
   const e = mapa.get(atendenteId);
-  return e ? { matricula: e.matricula, estado: estadoDe(e) } : null;
+  return e ? { matricula: e.matricula, estado: estadoDe(e), tenantId: e.tenantId } : null;
 }
 
 /** Snapshot p/ o monitor do supervisor. tenantId OPCIONAL: sem ele devolve
@@ -194,5 +181,5 @@ function _reset() {
 module.exports = {
   conectar, desconectar, definirPausa, onlineDoDepto, numerosDe, atendeNumero,
   marcarAtribuicao, lastAssignedAt, snapshot, infoDe, atualizarPerfil,
-  setAoFicarOnline, tenantDoAtendente, _reset, GRACA_MS,
+  setAoFicarOnline, _reset, GRACA_MS,
 };
