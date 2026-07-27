@@ -332,6 +332,11 @@ export default function Numeros() {
     queryKey: ['departamentos', 'todos'],
     queryFn: () => api.get('/departamentos', { params: { todos: 1 } }).then((r) => r.data),
   });
+  const meta = useQuery({
+    queryKey: ['meta-connection-status'],
+    queryFn: () => api.get('/meta/status').then((r) => r.data),
+    retry: false,
+  });
 
   return (
     <div className="max-w-screen-xl mx-auto space-y-4">
@@ -347,6 +352,18 @@ export default function Numeros() {
             + Cadastrar número
           </button>
         )}
+      </div>
+      <div className="bg-white rounded-2xl border border-black/[0.06] px-4 py-3 flex items-center gap-3">
+        <span className={`w-2.5 h-2.5 rounded-full ${meta.data?.some((x) => x.status === 'conectada') ? 'bg-emerald-500' : 'bg-amber-400'}`} />
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-stone-800">Conexão Meta</p>
+          <p className="text-xs text-stone-500">
+            {meta.data?.some((x) => x.status === 'conectada')
+              ? `${meta.data.filter((x) => x.status === 'conectada').length} número(s) conectado(s)`
+              : 'Nenhuma conta Meta conectada. Use o Embedded Signup para começar.'}
+          </p>
+        </div>
+        {meta.data?.some((x) => x.pending) && <span className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded-full">Há pendências</span>}
       </div>
       <div className="bg-white rounded-2xl border border-black/[0.06] divide-y divide-black/[0.05]">
         {numeros.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}

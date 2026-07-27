@@ -319,7 +319,7 @@ async function confirmarEncerramento(evt) {
   const texto = render(evt.confirmacao, { protocolo: evt.protocolo || '' }, {});
   let wamid = null;
   try {
-    const resp = await sendText(evt.telefone, texto, evt.phoneNumberId || undefined);
+    const resp = await sendText(evt.telefone, texto, evt.phoneNumberId || undefined, evt.tenantId);
     wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
   } catch (e) {
     console.error('[webhook] confirmação de encerramento não enviada:', e.message);
@@ -347,7 +347,7 @@ async function enviarAvisoForaHorario(evt) {
   const { sendText } = require('../graph/sendText');
   let wamid = null;
   try {
-    const resp = await sendText(evt.telefone, evt.texto, evt.phoneNumberId || undefined);
+    const resp = await sendText(evt.telefone, evt.texto, evt.phoneNumberId || undefined, evt.tenantId);
     wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
   } catch (e) {
     console.error('[webhook] aviso de fora de horário não enviado:', e.message);

@@ -9,7 +9,7 @@ const { sendMessage } = require('./client');
  * @param {string[]} bodyParams  Valores das variáveis {{1}},{{2}}... do corpo (ordem importa).
  * @param {string} [phoneNumberId] Número de origem (multi-número); default = .env.
  */
-async function sendTemplate(to, templateName, lang = 'pt_BR', bodyParams = [], phoneNumberId) {
+async function sendTemplate(to, templateName, lang = 'pt_BR', bodyParams = [], phoneNumberId, tenantId) {
   const components = [];
   if (bodyParams.length) {
     components.push({
@@ -28,7 +28,7 @@ async function sendTemplate(to, templateName, lang = 'pt_BR', bodyParams = [], p
       language: { code: lang },
       ...(components.length ? { components } : {}),
     },
-  }, phoneNumberId);
+  }, phoneNumberId, tenantId);
 }
 
 module.exports = { sendTemplate };
