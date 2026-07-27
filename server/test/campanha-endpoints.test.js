@@ -15,10 +15,10 @@ const campanhasRoutes = require('../api/campanhas');
 const TOKEN = jwt.sign({ jti: 'tc-new', tenantId: 1, matricula: 1 }, SECRET, { expiresIn: '1h' });
 const ADMIN = { atendenteId: 1, papel: 'ADMIN', deptoIds: [] };
 
-function appFake(conn, tenantId = 7, capturas = []) {
+function appFake(conn, tenantId = 7, capturas = [], perfil = ADMIN) {
   db.comTenant = async (tid, fn) => { capturas.push(tid); return fn(conn); };
   const app = express(); app.use(express.json());
-  app.use('/api/campanhas', (req, res, next) => { req.tenantId = tenantId; req.perfil = ADMIN; req.user = { matricula: 1 }; next(); }, campanhasRoutes);
+  app.use('/api/campanhas', (req, res, next) => { req.tenantId = tenantId; req.perfil = perfil; req.user = { matricula: 1 }; next(); }, campanhasRoutes);
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
   return new Promise((resolve) => { const s = app.listen(0, () => resolve({ s, port: s.address().port })); });
 }

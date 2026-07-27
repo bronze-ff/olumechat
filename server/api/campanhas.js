@@ -170,16 +170,34 @@ router.post('/:id/import', uploadCsv.single('arquivo'), async (req, res, next) =
 const CUSTO_ESTIMADO = 0.04; // R$/msg utility (alinhe ao dispatcher)
 
 function linhasDoSegmento(conn, seg, limite) {
-  if (seg.tipo === 'atributos') {
-    const consulta = segmento.filtroAtributos(seg.filtros || {});
-    const texto = `${consulta.texto} LIMIT :segmento_limite`;
-    return conn.execute(texto, { ...consulta.binds, segmento_limite: limite || 100000 }).then((r) => r.rows.map((row) => ({ telefone: row.TELEFONE, variaveis: [row.NOME || ''] })));
+  switch (seg.tipo) {
+    case 'atributos': {
+      const consulta = segmento.filtroAtributos(seg.filtros || {});
+      const texto = `${consulta.texto} LIMIT :segmento_limite`;
+      return conn.execute(texto, { ...consulta.binds, segmento_limite: limite || 100000 }).then((r) => r.rows.map((row) => ({ telefone: row.TELEFONE, variaveis: [row.NOME || ''] })));
+    }
+    case 'csv':
+      return conn.execute(
+        `SELECT TELEFONE, VARIAVEIS FROM campanha_import_linha
+          WHERE CAMPANHA_ID = :id AND STATUS = 'aceita' ORDER BY NUMERO_LINHA LIMIT :segmento_limite`,
+        { id: seg.id, segmento_limite: limite || 100000 }
+      ).then((r) => r.rows.map((row) => ({ telefone: row.TELEFONE, variaveis: row.VARIAVEIS || [] })));
+    default:
+      throw new segmento.SegmentoInvalido('Tipo de segmento inválido: esperado "csv" ou "atributos".');
   }
-  return conn.execute(
-    `SELECT TELEFONE, VARIAVEIS FROM campanha_import_linha
-      WHERE CAMPANHA_ID = :id AND STATUS = 'aceita' ORDER BY NUMERO_LINHA LIMIT :segmento_limite`,
-    { id: seg.id, segmento_limite: limite || 100000 }
-  ).then((r) => r.rows.map((row) => ({ telefone: row.TELEFONE, variaveis: row.VARIAVEIS || [] })));
+}
+
+function totalDoSegmento(conn, seg) {
+  switch (seg.tipo) {
+    case 'csv':
+      return conn.execute(`SELECT COUNT(*) AS QTD FROM campanha_import_linha WHERE CAMPANHA_ID = :id AND STATUS = 'aceita'`, { id: seg.id });
+    case 'atributos': {
+      const consulta = segmento.filtroAtributos(seg.filtros || {});
+      return conn.execute(`${consulta.texto.replace(/^SELECT /, 'SELECT COUNT(*) OVER () AS QTD, ')}`, consulta.binds);
+    }
+    default:
+      throw new segmento.SegmentoInvalido('Tipo de segmento inválido: esperado "csv" ou "atributos".');
+  }
 }
 
 async function optoutAtual(conn, telefone) {
@@ -203,9 +221,7 @@ router.post('/:id/preview', async (req, res, next) => {
       const seg = parseSegmento(r.rows[0].SEGMENTO);
       seg.id = id;
       const amostra = await linhasDoSegmento(conn, seg, 50);
-      const totalR = seg.tipo === 'csv'
-        ? await conn.execute(`SELECT COUNT(*) AS QTD FROM campanha_import_linha WHERE CAMPANHA_ID = :id AND STATUS = 'aceita'`, { id })
-        : await conn.execute(`${segmento.filtroAtributos(seg.filtros || {}).texto.replace(/^SELECT /, 'SELECT COUNT(*) OVER () AS QTD, ')}`, segmento.filtroAtributos(seg.filtros || {}).binds);
+      const totalR = await totalDoSegmento(conn, seg);
       const total = seg.tipo === 'csv' ? Number(totalR.rows[0].QTD) : Number(totalR.rows[0]?.QTD || 0);
       return { seg, amostra, total };
     });

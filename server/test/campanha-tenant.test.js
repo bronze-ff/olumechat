@@ -152,6 +152,11 @@ test('RLS real: linhas importadas pelo tenant A não aparecem nem viram itens no
         const item = await c.query(`INSERT INTO campanha_item (campanha_id, telefone, status) SELECT $1, telefone, 'pendente' FROM campanha_import_linha WHERE campanha_id = $2 RETURNING id`, [camp, camp]);
         assert.equal(item.rowCount, 0, 'VAZAMENTO: tenant B materializou linha do tenant A');
       });
+      await comoTenant(admin, A, async (c) => {
+        await c.query('DELETE FROM campanha WHERE id = $1', [camp]);
+        const r = await c.query('SELECT id FROM campanha_import_linha WHERE campanha_id = $1', [camp]);
+        assert.equal(r.rowCount, 0, 'DELETE da campanha deveria remover as linhas importadas por CASCADE');
+      });
     } finally {
       await admin.query(`DELETE FROM campanha_import_linha WHERE campanha_id IN (SELECT id FROM campanha WHERE nome = $1)`, [`CSV ${marca}`]).catch(() => {});
       await admin.query(`DELETE FROM campanha WHERE nome IN ($1, $2)`, [`CSV ${marca}`, `Campanha ${marca}`]).catch(() => {});

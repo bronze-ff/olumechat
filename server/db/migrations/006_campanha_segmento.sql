@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS campanha_import_linha (
   criado_em timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT uq_cil_tenant_id UNIQUE (tenant_id, id),
   CONSTRAINT uq_cil_linha UNIQUE (tenant_id, campanha_id, numero_linha),
-  CONSTRAINT fk_cil_camp FOREIGN KEY (tenant_id, campanha_id) REFERENCES campanha (tenant_id, id),
+  CONSTRAINT fk_cil_camp FOREIGN KEY (tenant_id, campanha_id) REFERENCES campanha (tenant_id, id) ON DELETE CASCADE,
   CONSTRAINT ck_cil_status CHECK (status IN ('aceita', 'rejeitada'))
 );
 CREATE INDEX IF NOT EXISTS ix_cil_camp ON campanha_import_linha (tenant_id, campanha_id, status);
