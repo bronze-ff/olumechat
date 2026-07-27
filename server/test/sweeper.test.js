@@ -42,13 +42,16 @@ test('varrer: expira conversas paradas, respeitando timeoutMin do fluxo por tena
   });
   db.getConnection = async () => conn;
   const chamadas = [];
-  const original = runtime.expirar;
-  runtime.expirar = (tenantId, conversaId) => { chamadas.push([tenantId, conversaId]); };
+  const original = runtime.expirarNaTransacao;
+  runtime.expirarNaTransacao = async (conn, tenantId, conversaId) => {
+    chamadas.push([tenantId, conversaId]);
+    return [];
+  };
   try {
     await sweeper.varrer();
     assert.deepEqual(chamadas.sort(), [[1, 101], [2, 201]].sort());
   } finally {
-    runtime.expirar = original;
+    runtime.expirarNaTransacao = original;
   }
 });
 
@@ -65,13 +68,16 @@ test('varrer: timeoutMin malformado ou ausente cai no padrão de 30min em vez de
   });
   db.getConnection = async () => conn;
   const chamadas = [];
-  const original = runtime.expirar;
-  runtime.expirar = (tenantId, conversaId) => { chamadas.push([tenantId, conversaId]); };
+  const original = runtime.expirarNaTransacao;
+  runtime.expirarNaTransacao = async (conn, tenantId, conversaId) => {
+    chamadas.push([tenantId, conversaId]);
+    return [];
+  };
   try {
     await sweeper.varrer(); // não deve lançar nem logar "sweeper falhou"
     assert.deepEqual(chamadas.map((c) => c[1]).sort((a, b) => a - b), [301, 303, 304, 305]);
   } finally {
-    runtime.expirar = original;
+    runtime.expirarNaTransacao = original;
   }
 });
 
@@ -97,4 +103,37 @@ test('varrer: falha num tenant não impede a varredura dos demais', async () => 
   db.getConnection = async () => conn;
   await assert.doesNotReject(sweeper.varrer());
   assert.equal(chamadas, 2, 'deveria ter tentado os dois tenants mesmo com o primeiro falhando');
+});
+
+test('varrer: duas instâncias concorrentes expiram uma única vez quando uma perde o lock', async () => {
+  let locks = 0;
+  const conn = {
+    async execute(sql, binds = {}) {
+      if (/set_config/i.test(sql)) return { rows: [] };
+      if (/^SET LOCAL ROLE/i.test(sql)) return { rows: [] };
+      if (sql.includes("FROM tenant WHERE status = 'ativo'")) return { rows: [{ ID: 1 }] };
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        locks++;
+        return { rows: [{ ADQUIRIDO: locks === 1 }] };
+      }
+      if (sql.includes('FROM conversa c')) {
+        return { rows: [{ ID: 901, DEFINICAO: { config: { timeoutMin: 1 } }, PARADA_MIN: 5 }] };
+      }
+      return { rows: [] };
+    },
+    commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+  db.getConnection = async () => conn;
+  const expiracoes = [];
+  const original = runtime.expirarNaTransacao;
+  runtime.expirarNaTransacao = async (tx, tenantId, conversaId) => {
+    expiracoes.push([tenantId, conversaId]);
+    return [];
+  };
+  try {
+    await Promise.all([sweeper.varrer(), sweeper.varrer()]);
+    assert.deepEqual(expiracoes, [[1, 901]]);
+  } finally {
+    runtime.expirarNaTransacao = original;
+  }
 });

@@ -32,8 +32,10 @@
 const db = require('../db/pool');
 const presence = require('../realtime/presence');
 const { publish } = require('../realtime/hub');
+const { tentar: tentarLock } = require('../workers/leaderLock');
 
 const cadeias = new Map(); // departamentoId -> Promise (fila de execução)
+const RETRY_LOCK_MS = 50;
 
 /** Descobre a qual tenant um departamento pertence — caminho privilegiado
     (bypass de RLS via role dono da conexão), não uma query de negócio. Ver
@@ -60,6 +62,11 @@ function atribuir(departamentoId, tentativa = 0) {
   });
   cadeias.set(departamentoId, proxima);
   return proxima;
+}
+
+function retryDepoisDoLock(departamentoId, tentativa) {
+  const timer = setTimeout(() => atribuir(departamentoId, tentativa + 1), RETRY_LOCK_MS);
+  if (timer.unref) timer.unref();
 }
 
 /** Uma rodada: tenta atribuir UMA conversa; se conseguiu e há mais, re-agenda. */
@@ -99,6 +106,7 @@ async function rodada(departamentoId, tentativa = 0) {
   if (!irrestrito && !numerosServiveis.length) return; // candidatos só atendem números que não estão na fila
 
   const resultado = await db.comTenant(tenantId, async (conn) => {
+    if (!await tentarLock(conn, 'fila', tenantId)) return { status: 'retry-lock' };
     // Conversa mais antiga aguardando QUE ALGUÉM consiga atender (evita head-of-line:
     // uma conversa de número sem candidato online não trava as outras da fila).
     const bSel = { d: departamentoId };
@@ -171,6 +179,10 @@ async function rodada(departamentoId, tentativa = 0) {
   });
 
   if (!resultado) return;
+  if (resultado.status === 'retry-lock') {
+    retryDepoisDoLock(departamentoId, tentativa);
+    return;
+  }
   if (resultado.status === 'retry') {
     atribuir(departamentoId, tentativa + 1);
     return;

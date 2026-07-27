@@ -241,3 +241,135 @@ test('tick: campanha de tenant suspenso/encerrado NÃO é agendada (o JOIN com t
   await dispatcher.tick(d);
   assert.deepEqual(tenantsChamados, [1], 'campanha do tenant suspenso (2) não deveria ter sido agendada');
 });
+
+test('FIL-73: dois ticks concorrentes enviam cada item uma única vez', async () => {
+  let lockOcupado = false;
+  let pendente = true;
+  let envios = 0;
+  const conn = {
+    async execute(sql) {
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        if (lockOcupado) return { rows: [{ ADQUIRIDO: false }] };
+        lockOcupado = true;
+        return { rows: [{ ADQUIRIDO: true }] };
+      }
+      if (sql.includes('FROM campanha c')) return { rows: [{ ...CAMP }] };
+      if (sql.includes("ci.ENVIADO_EM >= date_trunc('day', now())")) return { rows: [{ QTD: 0 }] };
+      if (sql.includes("STATUS = 'pendente'") && sql.includes('SELECT ID, TELEFONE')) {
+        return { rows: pendente ? [{ ...ITEM }] : [] };
+      }
+      if (sql.includes("SET STATUS = 'enviando_item'")) {
+        if (!pendente) return { rowsAffected: 0 };
+        pendente = false;
+        return { rowsAffected: 1 };
+      }
+      if (sql.includes('FROM auditoria')) return { rows: [] };
+      return { rows: [], rowsAffected: 1, outBinds: {} };
+    },
+    commit: async () => { lockOcupado = false; },
+    rollback: async () => { lockOcupado = false; },
+    close: async () => {},
+  };
+  const raw = { execute: async () => ({ rows: [{ ID: 1, TENANT_ID: TENANT }] }), close: async () => {} };
+  const d = {
+    getConnection: async () => raw,
+    comTenant: async (_tenantId, fn) => {
+      try { const result = await fn(conn); await conn.commit(); return result; }
+      catch (err) { await conn.rollback(); throw err; }
+    },
+    sendTemplate: async () => { envios++; return { messages: [{ id: 'wamid.once' }] }; },
+    agora: AGORA,
+  };
+
+  await Promise.all([dispatcher.tick(d), dispatcher.tick(d)]);
+  assert.equal(envios, 1);
+});
+
+test('FIL-73: lock perdido encerra o tick silenciosamente', async () => {
+  let erros = 0;
+  const conn = {
+    async execute(sql) {
+      if (sql.includes('pg_try_advisory_xact_lock')) return { rows: [{ ADQUIRIDO: false }] };
+      erros++;
+      return { rows: [{ ...CAMP }] };
+    },
+    commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+  const d = {
+    comTenant: async (_tenantId, fn) => fn(conn),
+    sendTemplate: async () => { throw new Error('nao deveria enviar'); },
+    agora: AGORA,
+  };
+  const logs = [];
+  const originalError = console.error;
+  console.error = (...args) => logs.push(args.join(' '));
+  try { await dispatcher.processarLote(TENANT, 1, d); }
+  finally { console.error = originalError; }
+  assert.equal(erros, 0);
+  assert.deepEqual(logs, []);
+});
+
+test('FIL-73: tenants diferentes adquirem locks independentes', async () => {
+  let ativos = 0;
+  let maxAtivos = 0;
+  const chaves = [];
+  const conn = {
+    async execute(sql, binds = {}) {
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        chaves.push(binds.chave);
+        return { rows: [{ ADQUIRIDO: true }] };
+      }
+      if (sql.includes('FROM campanha c')) return { rows: [{ ...CAMP, LIMITE_DIARIO: null }] };
+      if (sql.includes("STATUS = 'pendente'") && sql.includes('SELECT ID, TELEFONE')) return { rows: [] };
+      return { rows: [], rowsAffected: 1, outBinds: {} };
+    },
+    commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+  const raw = {
+    execute: async () => ({ rows: [{ ID: 1, TENANT_ID: 1 }, { ID: 2, TENANT_ID: 2 }] }),
+    close: async () => {},
+  };
+  const d = {
+    getConnection: async () => raw,
+    comTenant: async (_tenantId, fn) => {
+      ativos++;
+      maxAtivos = Math.max(maxAtivos, ativos);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      try { return await fn(conn); } finally { ativos--; }
+    },
+    agora: AGORA,
+  };
+  await dispatcher.tick(d);
+  assert.equal(maxAtivos, 2, 'tenant A e tenant B deveriam executar simultaneamente');
+  assert.notEqual(chaves[0], chaves[1], 'cada tenant deve ter uma chave de lock distinta');
+});
+
+test('FIL-73: lock transacional fica disponível depois de falha no ciclo', async () => {
+  let ocupado = false;
+  let falhar = true;
+  const conn = {
+    async execute(sql) {
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        if (ocupado) return { rows: [{ ADQUIRIDO: false }] };
+        ocupado = true;
+        return { rows: [{ ADQUIRIDO: true }] };
+      }
+      if (falhar && sql.includes('FROM campanha c')) throw new Error('falha no ciclo');
+      return { rows: [], rowsAffected: 1, outBinds: {} };
+    },
+    commit: async () => { ocupado = false; },
+    rollback: async () => { ocupado = false; },
+    close: async () => {},
+  };
+  const d = {
+    comTenant: async (_tenantId, fn) => {
+      try { const result = await fn(conn); await conn.commit(); return result; }
+      catch (err) { await conn.rollback(); throw err; }
+    },
+    agora: AGORA,
+  };
+  await assert.rejects(dispatcher.processarLote(TENANT, 1, d), /falha no ciclo/);
+  falhar = false;
+  await assert.doesNotReject(dispatcher.processarLote(TENANT, 1, d));
+  assert.equal(ocupado, false);
+});

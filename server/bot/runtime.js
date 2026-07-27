@@ -303,6 +303,16 @@ async function executar(tenantId, conversaId, fn) {
   }
 }
 
+/** Executa uma ação do bot dentro de uma transação já aberta pelo chamador.
+    Usado pelo sweeper para manter seu advisory lock até a expiração terminar. */
+async function executarNaTransacao(conn, tenantId, conversaId, fn) {
+  const cv = await carregar(conn, tenantId, conversaId);
+  if (!cv) return [];
+  let resultado = fn(cv);
+  resultado = await resolverConsultas(conn, tenantId, cv, resultado);
+  return aplicar(conn, tenantId, cv, resultado);
+}
+
 /** Saudação: conversa nova entrou em estado bot. */
 function iniciarFluxo(tenantId, conversaId) {
   return executar(tenantId, conversaId, (cv) => engine.iniciar(cv.fluxo, cv.contexto));
@@ -318,4 +328,10 @@ function expirar(tenantId, conversaId) {
   return executar(tenantId, conversaId, (cv) => engine.aoExpirar(cv.fluxo, cv.estado, cv.contexto));
 }
 
-module.exports = { iniciarFluxo, processarEntrada, expirar, executarConsulta };
+function expirarNaTransacao(conn, tenantId, conversaId) {
+  return executarNaTransacao(conn, tenantId, conversaId, (cv) =>
+    engine.aoExpirar(cv.fluxo, cv.estado, cv.contexto)
+  );
+}
+
+module.exports = { iniciarFluxo, processarEntrada, expirar, expirarNaTransacao, executarConsulta };
