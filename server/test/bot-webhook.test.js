@@ -13,6 +13,14 @@ const assert = require('node:assert');
 
 const db = require('../db/pool');
 const presence = require('../realtime/presence');
+const configCache = require('../utils/configCache');
+// webhook/processEvent.js (FIL-60, fora deste ticket) ainda chama
+// lerConfig(conn) com um único argumento — sob o contrato pós-FIL-66
+// (tenantId obrigatório, sem balde 'default') isso lança. Este arquivo testa
+// o fluxo de bot/menu, não config; stub aqui equivale ao comportamento
+// anterior do fakeConn para 'FROM MC_ZAP_CONFIG' (nenhuma linha → {}) e evita
+// acoplar esta regressão ao rebase pendente do FIL-60.
+configCache.lerConfig = async () => ({});
 const { processPayload } = require('../webhook/processEvent');
 
 const FLUXO_DEF = JSON.stringify({
