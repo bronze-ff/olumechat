@@ -1,5 +1,5 @@
-// app.js — Entry do serviço (Multicanal - Atendimento WhatsApp).
-// Inicializa o pool Oracle, monta o webhook e o healthcheck.
+// app.js — Entry do serviço (Falatta).
+// Inicializa o pool Postgres, monta o webhook e o healthcheck.
 // NÃO aplicamos express.json() global de propósito: o webhook precisa do
 // corpo bruto (rawBodyJson) para validar a assinatura.
 const path = require('path');
@@ -122,18 +122,19 @@ if (cfg.nodeEnv === 'production') {
 
 app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada' }));
 
-// Error handler JSON — sempre o último. Sistema interno (usuários autenticados):
-// devolver a mensagem real (ex.: ORA-xxxxx) acelera MUITO o diagnóstico — antes
-// o "Erro interno" seco obrigava a ir atrás do stderr.log do serviço.
+// Error handler JSON — sempre o último. Devolver a mensagem real do banco
+// acelera MUITO o diagnóstico — antes o "Erro interno" seco obrigava a ir
+// atrás do stderr.log do serviço.
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error('[api] erro:', err.message);
-  // Erros de INFRA do Oracle (ORA-125xx / TNS) embutem host:porta/serviço do
-  // banco — nunca devolver isso ao cliente. Mensagem genérica; detalhe só no log.
+  // Erros de INFRA/REDE embutem host:porta do banco na mensagem — nunca
+  // devolver isso ao cliente. Classe 08 = falha de conexão, 57P0x = servidor
+  // indisponível, EC*/ETIMEDOUT = socket. Erros de DADOS (violação de
+  // constraint, tipo, etc.) seguem como mensagem real.
   const msg = String(err.message || '');
-  // Só os códigos de INFRA/REDE (que embutem host:porta do banco) viram 503
-  // genérico. ORA-12899/12704 etc. (dados/constraint) seguem como erro real.
-  if (/ORA-12(154|170|514|541|545|537|560|571)|TNS:|ORA-03113|ORA-03114|NJS-50\d/.test(msg)) {
+  const code = String(err.code || '');
+  if (/^(08|57P0)/.test(code) || /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN)$/.test(code)) {
     return res.status(503).json({ error: 'Banco de dados indisponível. Tente novamente em instantes.' });
   }
   res.status(500).json({ error: 'Erro interno: ' + (msg || 'desconhecido') });

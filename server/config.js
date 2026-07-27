@@ -7,15 +7,15 @@ const REQUIRED = [
   'WA_TOKEN',
   'WA_PHONE_NUMBER_ID',
   'WA_BUSINESS_ACCOUNT_ID',
-  'ORACLE_USER',
-  'ORACLE_PASSWORD',
-  'ORACLE_CONNECT_STRING',
+  'DATABASE_URL',
 ];
+
+const DB_VARS = ['DATABASE_URL'];
 
 function loadConfig({ requireDb = true } = {}) {
   const required = requireDb
     ? REQUIRED
-    : REQUIRED.filter((k) => !k.startsWith('ORACLE_'));
+    : REQUIRED.filter((k) => !DB_VARS.includes(k));
 
   const missing = required.filter((k) => !process.env[k] || !process.env[k].trim());
   if (missing.length) {
@@ -41,12 +41,8 @@ function loadConfig({ requireDb = true } = {}) {
       ref: process.env.GITHUB_REF || 'main',
       token: process.env.GITHUB_TOKEN || null,
     },
-    oracle: {
-      user:          process.env.ORACLE_USER,
-      password:      process.env.ORACLE_PASSWORD,
-      connectString: process.env.ORACLE_CONNECT_STRING,
-      libDir:        process.env.ORACLE_LIB_DIR,
-    },
+    // Connection string POOLED do Neon (PgBouncer em transaction mode).
+    databaseUrl: process.env.DATABASE_URL,
   };
 }
 
