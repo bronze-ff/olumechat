@@ -3,8 +3,18 @@
 // Online = tem pelo menos 1 conexão SSE ativa (refcount — várias abas contam 1).
 // Queda de conexão tem GRAÇA de 60s antes de marcar offline (o EventSource
 // reconecta em ~5s; sem a graça, todo refresh dispararia redistribuição).
-// Pausa é manual e persiste em MC_ZAP_ATENDENTE.STATUS_PRESENCA (sobrevive a
+// Pausa é manual e persiste em atendente.status_presenca (sobrevive a
 // restart); o online em si é só memória — reconstruído quando os SSE reconectam.
+//
+// MULTI-TENANT: cada entrada guarda o tenantId do atendente, setado em
+// conectar() — quem abre a conexão SSE (api/stream.js) já sabe o tenant via
+// req.user.tenantId (JWT; mesma fonte que auth/rbac.carregarPerfil(tenantId,
+// matricula, nome) usa desde FIL-59). `onlineDoDepto` aceita tenantId como 2º
+// parâmetro OPCIONAL — quem já resolveu o tenant (fila/distribuidor.js) filtra
+// por ele; quem não sabe de tenant (bot/runtime.js, ainda não portado) chama
+// com 1 argumento só e continua funcionando como antes. `snapshot` idem: sem
+// tenantId devolve tudo (uso interno/teste); com tenantId, só as entradas
+// daquele tenant (api/presenca.js sempre passa req.user.tenantId).
 'use strict';
 
 const db = require('../db/pool');
@@ -12,7 +22,7 @@ const { publish } = require('./hub');
 
 const GRACA_MS = 60_000;
 
-// atendenteId -> { conexoes, pausado, deptoIds, matricula, nome, lastAssignedAt, gracaTimer }
+// atendenteId -> { conexoes, tenantId, pausado, deptoIds, matricula, nome, lastAssignedAt, gracaTimer }
 const mapa = new Map();
 
 let aoFicarOnline = null; // callback (distribuidor) — setado pelo app no boot
@@ -22,7 +32,7 @@ function setAoFicarOnline(fn) { aoFicarOnline = fn; }
 function entrada(atendenteId) {
   if (!mapa.has(atendenteId)) {
     mapa.set(atendenteId, {
-      conexoes: 0, pausado: false, deptoIds: [], numeroIds: [], matricula: null, nome: null,
+      conexoes: 0, tenantId: null, pausado: false, deptoIds: [], numeroIds: [], matricula: null, nome: null,
       lastAssignedAt: 0, gracaTimer: null,
     });
   }
@@ -36,10 +46,11 @@ function estadoDe(e) {
 }
 
 /** Nova conexão SSE do atendente. Devolve true se ele FICOU online agora. */
-function conectar({ atendenteId, deptoIds, numeroIds, matricula, nome, pausado }) {
+function conectar({ atendenteId, tenantId, deptoIds, numeroIds, matricula, nome, pausado }) {
   const e = entrada(atendenteId);
   const estavaOnline = estaOnline(e);
   e.conexoes += 1;
+  if (tenantId !== undefined) e.tenantId = tenantId;
   e.deptoIds = deptoIds || e.deptoIds;
   if (numeroIds !== undefined) e.numeroIds = numeroIds || [];
   e.matricula = matricula ?? e.matricula;
@@ -48,8 +59,8 @@ function conectar({ atendenteId, deptoIds, numeroIds, matricula, nome, pausado }
   if (e.gracaTimer) { clearTimeout(e.gracaTimer); e.gracaTimer = null; }
 
   if (!estavaOnline) {
-    publish({ tipo: 'presenca', atendenteId, estado: estadoDe(e) });
-    if (!e.pausado && aoFicarOnline) aoFicarOnline(atendenteId, e.deptoIds);
+    publish({ tipo: 'presenca', atendenteId, tenantId: e.tenantId, estado: estadoDe(e) });
+    if (!e.pausado && aoFicarOnline) aoFicarOnline(e.tenantId, atendenteId, e.deptoIds);
     return true;
   }
   return false;
@@ -64,39 +75,43 @@ function desconectar(atendenteId) {
     e.gracaTimer = setTimeout(() => {
       e.gracaTimer = null;
       if (e.conexoes === 0) {
-        publish({ tipo: 'presenca', atendenteId, estado: 'offline' });
+        publish({ tipo: 'presenca', atendenteId, tenantId: e.tenantId, estado: 'offline' });
       }
     }, GRACA_MS);
     if (e.gracaTimer.unref) e.gracaTimer.unref();
   }
 }
 
-/** Pausa/retoma (persiste no banco para sobreviver a restart). */
-async function definirPausa(atendenteId, pausado) {
+/** Pausa/retoma (persiste no banco para sobreviver a restart). tenantId vem
+    de quem chama (api/presenca.js passa req.user.tenantId) — comTenant()
+    já recusa um tenantId inválido/ausente, então não repetimos a checagem
+    aqui. */
+async function definirPausa(atendenteId, pausado, tenantId) {
   const e = entrada(atendenteId);
   e.pausado = !!pausado;
+  e.tenantId = tenantId;
 
-  let conn;
-  try {
-    conn = await db.getConnection();
+  await db.comTenant(tenantId, async (conn) => {
     await conn.execute(
-      `UPDATE MC_ZAP_ATENDENTE SET STATUS_PRESENCA = :s WHERE ID = :id`,
+      `UPDATE atendente SET status_presenca = :s WHERE id = :id`,
       { s: pausado ? 'pausa' : 'online', id: atendenteId }
     );
-    await conn.commit();
-  } finally {
-    if (conn) await conn.close().catch(() => {});
-  }
+  });
 
-  publish({ tipo: 'presenca', atendenteId, estado: estadoDe(e) });
-  if (!pausado && estaOnline(e) && aoFicarOnline) aoFicarOnline(atendenteId, e.deptoIds);
+  publish({ tipo: 'presenca', atendenteId, tenantId, estado: estadoDe(e) });
+  if (!pausado && estaOnline(e) && aoFicarOnline) aoFicarOnline(tenantId, atendenteId, e.deptoIds);
 }
 
-/** IDs dos atendentes online (não pausados) que atendem o departamento. */
-function onlineDoDepto(departamentoId) {
+/** IDs dos atendentes online (não pausados) que atendem o departamento.
+    tenantId é OPCIONAL: quando informado, filtra defensivamente também por
+    tenant (ver cabeçalho do arquivo). */
+function onlineDoDepto(departamentoId, tenantId) {
   const out = [];
   for (const [id, e] of mapa) {
-    if (estaOnline(e) && !e.pausado && e.deptoIds.includes(departamentoId)) out.push(id);
+    if (!estaOnline(e) || e.pausado) continue;
+    if (!e.deptoIds.includes(departamentoId)) continue;
+    if (tenantId !== undefined && e.tenantId !== tenantId) continue;
+    out.push(id);
   }
   return out;
 }
@@ -123,18 +138,23 @@ function lastAssignedAt(atendenteId) {
   return e ? e.lastAssignedAt : 0;
 }
 
-/** Info atual de um atendente na presença (matrícula + estado), ou null se ele
-    nunca conectou nesta sessão do serviço — usado pela ação do gestor de forçar
-    a presença (só faz sentido sobre quem está conectado). */
+/** Info atual de um atendente na presença (matrícula + estado + tenant), ou
+    null se ele nunca conectou nesta sessão do serviço — usado pela ação do
+    gestor de forçar a presença (só faz sentido sobre quem está conectado;
+    api/presenca.js também usa o tenantId aqui pra recusar forçar presença de
+    atendente de OUTRO tenant, sem revelar que o ID existe lá). */
 function infoDe(atendenteId) {
   const e = mapa.get(atendenteId);
-  return e ? { matricula: e.matricula, estado: estadoDe(e) } : null;
+  return e ? { matricula: e.matricula, estado: estadoDe(e), tenantId: e.tenantId } : null;
 }
 
-/** Snapshot p/ o monitor do supervisor. */
-function snapshot() {
+/** Snapshot p/ o monitor do supervisor. tenantId OPCIONAL: sem ele devolve
+    tudo (uso interno/teste); api/presenca.js sempre passa o tenant de quem
+    pediu, para o supervisor de um tenant nunca ver a equipe de outro. */
+function snapshot(tenantId) {
   const out = [];
   for (const [atendenteId, e] of mapa) {
+    if (tenantId !== undefined && e.tenantId !== tenantId) continue;
     out.push({
       atendenteId, matricula: e.matricula, nome: e.nome,
       estado: estadoDe(e), deptoIds: e.deptoIds,

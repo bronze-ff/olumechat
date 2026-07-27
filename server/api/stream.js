@@ -3,6 +3,27 @@
 // GET  /api/stream?ticket= → abre o stream; repassa os eventos do hub
 //                            FILTRADOS pelo perfil (departamentos/papel) e
 //                            registra a PRESENÇA do atendente (Fase 5B).
+//
+// MULTI-TENANT: o hub (realtime/hub.js) continua um EventEmitter local sem
+// noção de tenant — quem publica evento tageia `evento.tenantId` na origem
+// (fila/distribuidor.js, realtime/presence.js) e o filtro aqui é o gate final
+// e OBRIGATÓRIO: evt.tenantId !== tenantId do assinante → descarta, sempre,
+// antes de qualquer outra regra de escopo (inclusive antes do bypass de
+// ADMIN/AUDITOR em podeReceber — "vê tudo" nunca pode significar "vê tudo de
+// todo mundo"). Fail-closed: evento sem tenantId (publicador ainda não
+// portado) também é descartado, nunca vaza por omissão — e é LOGADO (não
+// silenciado), porque um publisher esquecido vira "o inbox parou de
+// atualizar" sem pista nenhuma no log. Ver a lista de publishers de outros
+// módulos que ainda não etiquetam (api/contatos.js, api/conversas.js,
+// bot/runtime.js, campanha/dispatcher.js, webhook/processEvent.js) no corpo
+// do PR #7 — até essas portes tageiarem, os eventos deles somem daqui (log
+// avisa; não é um crash, é o gate fazendo o trabalho dele mais cedo do que
+// o resto do sistema está pronto pra ele).
+//
+// tenantId vem do ticket (que carrega req.user por inteiro — ver POST
+// /ticket) — mesmo contrato do JWT que FIL-59 estabeleceu para
+// auth/rbac.carregarPerfil(tenantId, matricula, nome): quem emite o token é
+// quem decide o tenant, não uma consulta feita aqui.
 'use strict';
 
 const express = require('express');
@@ -43,11 +64,13 @@ function podeReceber(perfil, evt) {
 router.get('/', async (req, res) => {
   const user = consumirTicket(req.query.ticket);
   if (!user) return res.status(401).json({ error: 'Ticket inválido ou expirado' });
+  if (!user.tenantId) return res.status(401).json({ error: 'Ticket sem tenant associado' });
+  const tenantId = user.tenantId;
 
   // Perfil para filtrar eventos + registrar presença.
   let perfil;
   try {
-    perfil = await carregarPerfil(user.matricula, user.nome);
+    perfil = await carregarPerfil(tenantId, user.matricula, user.nome);
   } catch (err) {
     console.error('[stream] falha ao carregar perfil:', err.message);
     return res.status(500).json({ error: 'Falha ao carregar perfil' });
@@ -63,6 +86,14 @@ router.get('/', async (req, res) => {
   res.write('event: ready\ndata: {}\n\n'); // sinaliza conexão pronta
 
   const enviar = (evt) => {
+    if (evt.tenantId === undefined) {
+      // Descarta (fail-closed) — mas AVISA: isso é sinal de publisher que
+      // ainda não tageia tenantId, não de tráfego cross-tenant normal (ver
+      // cabeçalho do arquivo). Ajuda a achar o módulo esquecido em produção.
+      console.warn(`[stream] evento "${evt.tipo}" sem tenantId descartado — publisher não tageia tenant?`);
+      return;
+    }
+    if (evt.tenantId !== tenantId) return; // outro tenant — tráfego normal do hub compartilhado, não loga
     if (podeReceber(perfil, evt)) res.write(`data: ${JSON.stringify(evt)}\n\n`);
   };
   const cancelar = subscribe(enviar);
@@ -70,6 +101,7 @@ router.get('/', async (req, res) => {
   // Presença: conexão SSE conta como "online" (pausa persistida no banco).
   presence.conectar({
     atendenteId: perfil.atendenteId,
+    tenantId,
     deptoIds: perfil.deptoIds,
     numeroIds: perfil.numeroIds,
     matricula: user.matricula,
@@ -89,3 +121,4 @@ router.get('/', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.podeReceber = podeReceber; // uso em teste

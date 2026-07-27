@@ -27,7 +27,7 @@ function fakeConn({ optout = false, numero = { ID: 2 }, depExiste = true, captur
       if (sql.includes('FROM auditoria')) return { rows: optout ? [{ ACAO: 'optout' }] : [] };
       if (sql.includes('FROM numero')) return { rows: numero ? [numero] : [] };
       if (sql.includes('FROM departamento')) return { rows: depExiste ? [{ ID: binds && binds.id }] : [] };
-      if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260611100001' }] };
+      if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260611100001' }] };
       if (sql.includes('FROM conversa')) return { rows: [] };
       if (sql.startsWith('INSERT INTO conversa')) { capture.insert = binds; return { outBinds: { id: [7] } }; }
       if (sql.includes('FROM atendente')) return { rows: [{ ID: 9 }] };

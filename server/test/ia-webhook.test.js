@@ -22,7 +22,7 @@ function fakeConn(conversaExistente, opts) {
     if (sql.includes('FROM numero')) return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: null, FLUXO_ID: null, MODO: 'ia' }] };
     if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Gestor' }] };
     if (sql.includes('FROM conversa')) return { rows: conversaExistente ? [conversaExistente] : [] };
-    if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260701100001' }] };
+    if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260701100001' }] };
     if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [88] } };
     if (sql.includes('FROM config')) {
       if (!foraHorario) return { rows: [] };

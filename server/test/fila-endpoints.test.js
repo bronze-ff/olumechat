@@ -64,7 +64,7 @@ function fakeConn({ atribuiu = true, capturas = [] } = {}) {
         return { rows: [{ CONTATO_ID: 3, DEPARTAMENTO_ID: 4, ATENDENTE_ID: 9, PROTOCOLO: null }] };
       }
       if (sql.includes('FROM departamento WHERE id')) return { rows: [{ NOME: 'T.I' }] };
-      if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260610100099' }] };
+      if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100099' }] };
       if (sql.includes('FROM atendente WHERE matricula')) return { rows: [{ ID: 9 }] };
       if (sql.includes('SELECT c.contato_id')) {
         return { rows: [{ CONTATO_ID: 3, NUMERO_ID: 2, DEPARTAMENTO_ID: 4, JANELA_EXPIRA_EM: null, PROTOCOLO: '260610100001', TELEFONE: '5562999990000', PHONE_NUMBER_ID: null }] };
