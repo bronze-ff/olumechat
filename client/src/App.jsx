@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/layout/ProtectedRoute';
 
 import Login from './pages/Login';
+import DefinirSenha from './pages/DefinirSenha';
 import Conversas from './pages/Conversas';
 import Admin from './pages/admin/Admin';
 
@@ -12,6 +13,8 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          {/* Primeiro acesso: rota pública, chega por link com token. */}
+          <Route path="/definir-senha" element={<DefinirSenha />} />
           <Route element={<ProtectedRoute />}>
             <Route path="/"          element={<Navigate to="/conversas" replace />} />
             <Route path="/conversas" element={<Conversas />} />

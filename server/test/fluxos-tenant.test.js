@@ -22,7 +22,10 @@ const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 const fluxosRoutes = require('../api/fluxos');
 
-const TOKEN = jwt.sign({ jti: 'tf-tenant', matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
+// tenantId no JWT: desde o FIL-67 o auth/middleware.js rejeita token sem ele.
+// O tenant que este teste exercita vem do middleware de fixture abaixo, que
+// roda DEPOIS do auth e sobrescreve req.tenantId por caso de teste.
+const TOKEN = jwt.sign({ jti: 'tf-tenant', tenantId: 1, matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
 const ADMIN = { atendenteId: 1, papel: 'ADMIN', deptoIds: [] };
 
 // `ctxTenant` simula o set_config('app.current_tenant_id', ..., true) do

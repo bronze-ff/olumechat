@@ -13,6 +13,7 @@
 'use strict';
 
 const { nomesBinds } = require('../db/sql');
+const { validarAbusoPostgres } = require('../bot/sqlValidator');
 
 class SegmentoInvalido extends Error {}
 
@@ -30,13 +31,18 @@ function validarSql(sqlBruto) {
   if (!sql) throw new SegmentoInvalido('Escreva o SELECT que lista os destinatários.');
   if (!/^select\s/i.test(sql)) throw new SegmentoInvalido('A consulta precisa começar com SELECT.');
   if (sql.includes(';')) throw new SegmentoInvalido('Use uma única consulta (sem ";").');
-  // Defesa em profundidade: bloqueia leitura da tabela de senhas e chamadas a
-  // pacotes que executam efeito colateral (um SELECT pode invocar função com
-  // PRAGMA AUTONOMOUS_TRANSACTION). O ideal é rodar com usuário Oracle read-only.
-  if (/\bMC_SENHAS\b/i.test(sql)) throw new SegmentoInvalido('Consulta não permitida (tabela protegida).');
-  if (/\b(DBMS_|UTL_|DBMS_SQL|EXECUTE\s+IMMEDIATE)\b/i.test(sql)) {
-    throw new SegmentoInvalido('Consulta não permitida (pacote/comando não autorizado).');
-  }
+  // Defesa em profundidade contra abuso do banco compartilhado: tabelas de
+  // credencial (`usuario`/`usuario_token_senha`, `ia_config`), funções que
+  // tocam arquivo/rede, mutação do contexto de tenant e catálogo do sistema.
+  //
+  // As regras são as MESMAS do nó 'consulta' do bot e vêm de bot/sqlValidator —
+  // este SELECT é tão livre quanto aquele e roda no mesmo banco. Antes daqui
+  // havia uma segunda lista, herdada do Oracle (DBMS_/UTL_/EXECUTE IMMEDIATE),
+  // que não barra nada em Postgres e ficou para trás quando o validador do bot
+  // foi portado. Uma cópia só evita que a próxima blindagem passe por um lado
+  // e esqueça o outro.
+  const abusos = validarAbusoPostgres(sql);
+  if (abusos.length) throw new SegmentoInvalido(`Consulta não permitida. ${abusos[0]}`);
   return sql;
 }
 

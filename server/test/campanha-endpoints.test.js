@@ -19,7 +19,7 @@ const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 const campanhasRoutes = require('../api/campanhas');
 
-const TOKEN = jwt.sign({ jti: 'tc1', matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 'tc1', tenantId: 1, matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
 
 // `db.comTenant` é mockado para rodar `fn(conn)` direto (sem BEGIN/COMMIT real)
 // — o contrato do comTenant() em si já tem prova própria em db-tenant.test.js.

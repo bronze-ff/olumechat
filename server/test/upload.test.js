@@ -29,7 +29,7 @@ const { cfg: cfgGraph } = require('../graph/client');
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-zap-upload-'));
 cfgGraph.mediaDir = TMP_DIR;
 
-const TOKEN = jwt.sign({ jti: 't1', matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 't1', tenantId: 1, matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 
 function fakeConn({ janelaExpiraEm }) {
   const executed = [];

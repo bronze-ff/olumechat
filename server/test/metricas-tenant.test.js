@@ -25,7 +25,10 @@ const db = require('../db/pool');
 const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 
-const TOKEN = jwt.sign({ jti: 'tm-tenant', matricula: 999, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
+// tenantId no JWT: desde o FIL-67 o auth/middleware.js rejeita token sem ele.
+// O tenant que este teste exercita vem do middleware de fixture abaixo, que
+// roda DEPOIS do auth e sobrescreve req.tenantId por caso de teste.
+const TOKEN = jwt.sign({ jti: 'tm-tenant', tenantId: 1, matricula: 999, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 
 /** Client falso: filtra `conversa`/`contato` pelo tenant do set_config vigente
  *  (emula a policy de RLS da migração 001) e responde às queries específicas

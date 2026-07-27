@@ -5,8 +5,12 @@
 // Decisões (ver docs/fase5-plano.md):
 //  - Perfil consultado no banco com cache em memória (TTL 30s): papel/departamento
 //    mudam sem o usuário precisar relogar, e 1 query a cada 30s é irrelevante.
-//  - Bootstrap do primeiro admin: matrículas em DIRETORES_MATRICULAS (.env)
-//    entram como ADMIN automaticamente no primeiro acesso.
+//  - TODO usuário nasce ATENDENTE. Não existe promoção automática a ADMIN por
+//    variável de ambiente: a lista de matrículas privilegiadas que o fork
+//    trazia era bootstrap do cliente antigo e, num SaaS multi-tenant,
+//    promoveria a MESMA matrícula em TODOS os tenants (removida no FIL-67). O
+//    primeiro ADMIN de um tenant nasce no provisionamento, pelo painel do
+//    operador (FIL-70).
 //  - O atendente é criado lazy aqui (mesma ideia do getOrCreateAtendente do
 //    api/conversas.js, que continua existindo para o fluxo de envio).
 'use strict';
@@ -17,10 +21,6 @@ const TTL_MS = 30_000;
 const cache = new Map(); // `${tenantId}:${matricula}` -> { perfil, exp }
 
 const PAPEIS = ['ADMIN', 'SUPERVISOR', 'ATENDENTE', 'AUDITOR'];
-
-function diretores() {
-  return (process.env.DIRETORES_MATRICULAS || '').split(',').filter(Boolean);
-}
 
 /**
  * Carrega (criando se preciso) o perfil do usuário DENTRO do tenant informado.
@@ -48,14 +48,12 @@ async function carregarPerfil(tenantId, matricula, nome) {
       ativo = sel.rows[0].ATIVO !== 'N';
       pausado = sel.rows[0].STATUS_PRESENCA === 'pausa';
       podeAtivo = sel.rows[0].PODE_ATIVO === 'S';
-      // DIRETORES_MATRICULAS só promove a ADMIN na CRIAÇÃO (1º login, no INSERT
-      // abaixo). NÃO re-promovemos a cada carregamento: senão um diretor nunca
-      // podia ser rebaixado — salvava ATENDENTE e a próxima requisição o jogava
-      // de volta pra ADMIN. (Proteção contra trancar o último admin fica no
-      // PUT /api/atendentes.)
+      // O papel vem SEMPRE do banco, nunca de configuração de ambiente — quem
+      // promove é o ADMIN do tenant pelo PUT /api/atendentes (que também
+      // protege contra trancar o último admin).
     } else {
       const { tipos } = db;
-      papel = diretores().includes(String(matricula)) ? 'ADMIN' : 'ATENDENTE';
+      papel = 'ATENDENTE'; // sempre; promoção é ato de ADMIN, no banco
       ativo = true;
       const ins = await conn.execute(
         `INSERT INTO atendente (tenant_id, matricula, nome, papel)
@@ -101,9 +99,10 @@ function invalidar(matricula) {
   }
 }
 
-/** Middleware: anexa req.perfil (depende do authMiddleware ter setado req.user
- *  com tenantId e matricula — hoje só o login próprio de FIL-67 seta tenantId
- *  no JWT; até lá esta rota fica inoperante, como o resto de auth/routes.js). */
+/** Middleware: anexa req.perfil. Depende do authMiddleware ter setado req.user
+ *  com tenantId e matricula — ambos vêm do JWT emitido pelo login próprio
+ *  (FIL-67), e o middleware já rejeita token sem tenantId. A checagem aqui é
+ *  defesa em profundidade para quem montar a cadeia de middlewares errada. */
 async function anexarPerfil(req, res, next) {
   try {
     if (!req.user || !req.user.matricula || !req.user.tenantId) {

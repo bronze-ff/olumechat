@@ -26,7 +26,10 @@ const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 const conversasRoutes = require('../api/conversas');
 
-const TOKEN = jwt.sign({ jti: 'tl1', matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
+// tenantId no JWT: desde o FIL-67 o auth/middleware.js rejeita token sem ele.
+// O tenant que este teste exercita vem do middleware de fixture abaixo, que
+// roda DEPOIS do auth e sobrescreve req.tenantId por caso de teste.
+const TOKEN = jwt.sign({ jti: 'tl1', tenantId: 1, matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 const ADMIN = { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true };
 
 function startApp(conn, perfil = ADMIN) {

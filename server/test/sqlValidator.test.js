@@ -12,6 +12,11 @@ test('rejeita não-SELECT', () => {
 test('rejeita ponto-e-vírgula', () => {
   assert.ok(validarSQL('SELECT 1;').some((e) => /";"/.test(e)));
 });
+test('rejeita as tabelas de credencial do login próprio', () => {
+  assert.ok(validarSQL('SELECT * FROM usuario').length > 0);
+  assert.ok(validarSQL('SELECT senha_hash FROM USUARIO').length > 0);
+  assert.ok(validarSQL('SELECT * FROM usuario_token_senha').length > 0);
+});
 test('rejeita ia_config, pg_sleep, dblink, pg_read_file', () => {
   assert.ok(validarSQL('SELECT * FROM ia_config').length > 0);
   assert.ok(validarSQL('SELECT pg_sleep(5)').length > 0);
@@ -33,6 +38,9 @@ test('SET/RESET não dá falso-positivo em identificador comum (ex.: "settings",
 test('rejeita acesso a catálogo do sistema', () => {
   assert.ok(validarSQL('SELECT * FROM information_schema.tables').length > 0);
   assert.ok(validarSQL('SELECT * FROM pg_catalog.pg_roles').length > 0);
+});
+test('coluna usuario_id NÃO é confundida com a tabela usuario', () => {
+  assert.deepEqual(validarSQL('SELECT usuario_id FROM conversa'), []);
 });
 test('aceita query com CABEÇALHO COMENTADO (regressão: rejeitava TODA query curada)', () => {
   const q = '-- O que faz: total de vendas\n-- Binds: :data_ini, :data_fim\nSELECT SUM(v) FROM t WHERE d >= :data_ini';

@@ -18,7 +18,7 @@ const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 const fluxosRoutes = require('../api/fluxos');
 
-const TOKEN = jwt.sign({ jti: 'tf1', matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 'tf1', tenantId: 1, matricula: 1, nome: 'Adm' }, SECRET, { expiresIn: '1h' });
 const ADMIN = { atendenteId: 1, papel: 'ADMIN', deptoIds: [] };
 const TENANT_ID = 1;
 

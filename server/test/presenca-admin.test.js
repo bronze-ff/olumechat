@@ -24,6 +24,7 @@ const presencaRoutes = require('../api/presenca');
 // tenantId no JWT: mesmo contrato que auth/rbac.carregarPerfil(tenantId, ...)
 // usa desde FIL-59 — aqui o perfil é injetado direto (abaixo), sem passar por
 // carregarPerfil, mas presence.definirPausa/snapshot precisam de req.user.tenantId.
+// Desde o FIL-67 o próprio auth/middleware.js rejeita token sem tenantId.
 const TOKEN = jwt.sign({ jti: 'tp1', tenantId: 1, matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 
 function startApp(perfil) {

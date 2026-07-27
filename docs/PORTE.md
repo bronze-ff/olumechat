@@ -50,12 +50,20 @@ sofre em migração e incha o `pg_catalog` acima de algumas centenas de tenants.
   conexão pooled: uma farmácia veria dado de outra. Isto precisa de teste
   automatizado dedicado.
 
-### 1.3 Login próprio
+### 1.3 Login próprio — ✅ feito (FIL-67)
 
-`auth/routes.js` ainda autentica contra a tabela de senhas do ERP do cliente
-original. Substituir por tabela de usuários própria, com hash (argon2/bcrypt),
-escopada por tenant. O RBAC (`auth/rbac.js`), o JWT e a blacklist de `jti`
-ficam como estão.
+`auth/routes.js` autentica contra a tabela `usuario` (migração `004`), escopada
+por tenant, com senha em **argon2id**. A credencial é o trio
+*empresa (slug) + e-mail + senha*; o `tenant_id` sai assinado no JWT e
+`auth/middleware.js` rejeita token sem ele. RBAC, blacklist de `jti` e
+`GET /api/auth/perfil` seguem como estavam. Primeiro acesso por link com token
+de uso único e expiração (`auth/tokenSenha.js`), com o hash do token no banco —
+nunca o token em claro.
+
+⚠️ **O `tenant_id` do JWT é a fronteira de segurança de todo o sistema.**
+Nenhuma rota aceita tenant por header, query string ou corpo. O middleware
+alimenta as duas convenções em uso no repo — `req.tenantId` e
+`req.user.tenantId` — com o mesmo valor.
 
 ### 1.4 Renomear o schema
 

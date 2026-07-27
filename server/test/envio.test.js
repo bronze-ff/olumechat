@@ -19,7 +19,7 @@ const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 const conversasRoutes = require('../api/conversas');
 
-const TOKEN = jwt.sign({ jti: 't1', matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 't1', tenantId: 1, matricula: 123, nome: 'Teste' }, SECRET, { expiresIn: '1h' });
 
 function fakeConn({ janelaExpiraEm }) {
   const executed = [];
