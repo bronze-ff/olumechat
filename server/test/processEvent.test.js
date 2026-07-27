@@ -16,6 +16,7 @@ const db = require('../db/pool');
 const presence = require('../realtime/presence');
 const { processPayload } = require('../webhook/processEvent');
 const { subscribe } = require('../realtime/hub');
+const runtime = require('../bot/runtime');
 
 function payloadInbound() {
   return {
@@ -165,4 +166,98 @@ test('redelivery: WAMID duplicado (dedup via ON CONFLICT) não aborta o resto do
   // a transação continuou viva depois do "conflito" da primeira.
   const insConversas = capturas.filter((c) => c.sql.startsWith('INSERT INTO conversa'));
   assert.equal(insConversas.length, 2, 'as duas mensagens do lote devem ter sido processadas');
+});
+
+// ─── Dispatch webhook → bot/runtime.js ─────────────────────────────────────
+// processEvent.js decide SE/COMO aciona o bot e com quais argumentos — o motor
+// do bot (engine + runtime.js real) já tem cobertura própria em
+// test/bot-webhook.test.js (FIL-62). Aqui mocka-se runtime.iniciarFluxo/
+// processarEntrada como espiões pra provar que a borda do webhook (FIL-60)
+// passa o tenantId certo e respeita o opt-out antes de acionar o bot.
+function payloadFluxo(texto) {
+  return {
+    entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: '1112223334', display_phone_number: '556237731090' },
+      contacts: [{ wa_id: '5562999990000', profile: { name: 'Cliente' } }],
+      messages: [{ id: 'wamid.' + Math.random(), from: '5562999990000', timestamp: '1718000000', type: 'text', text: { body: texto } }],
+    } }] }],
+  };
+}
+
+function fakeConnBot({ conversaExistente = null, capturas = [] } = {}) {
+  return {
+    capturas,
+    async execute(sql, binds) {
+      capturas.push({ sql, binds });
+      if (sql.includes('FROM numero')) {
+        return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: null, MODO: 'padrao', FLUXO_ID: 9 }] };
+      }
+      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (sql.includes('FROM conversa')) return { rows: conversaExistente ? [conversaExistente] : [] };
+      if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260610100077' }] };
+      if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [88] } };
+      return { rows: [], outBinds: { id: [1] }, rowsAffected: 1 };
+    },
+    commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+}
+
+test('dispatch: conversa NOVA em número com fluxo → runtime.iniciarFluxo(tenantId, conversaId)', async () => {
+  presence._reset();
+  const capturas = [];
+  db.getConnection = async () => fakeConnBot({ capturas });
+  let chamado = null;
+  const original = runtime.iniciarFluxo;
+  runtime.iniciarFluxo = (tenantId, conversaId) => { chamado = { tenantId, conversaId }; };
+  try {
+    await processPayload(payloadFluxo('oi'));
+    assert.deepEqual(chamado, { tenantId: 1, conversaId: 88 });
+    const ins = capturas.find((c) => c.sql.startsWith('INSERT INTO conversa'));
+    assert.equal(ins.binds.fst, 'bot');
+    assert.equal(ins.binds.flx, 9);
+  } finally {
+    runtime.iniciarFluxo = original;
+  }
+});
+
+test('dispatch: resposta de texto em conversa JÁ em bot → runtime.processarEntrada(tenantId, conversaId, texto)', async () => {
+  presence._reset();
+  const capturas = [];
+  db.getConnection = async () => fakeConnBot({
+    capturas,
+    conversaExistente: { ID: 88, DEPARTAMENTO_ID: null, FILA_STATUS: 'bot' },
+  });
+  let chamado = null;
+  const original = runtime.processarEntrada;
+  runtime.processarEntrada = (tenantId, conversaId, texto) => { chamado = { tenantId, conversaId, texto }; };
+  try {
+    await processPayload(payloadFluxo('1'));
+    assert.deepEqual(chamado, { tenantId: 1, conversaId: 88, texto: '1' });
+  } finally {
+    runtime.processarEntrada = original;
+  }
+});
+
+test('dispatch: "PARAR" em conversa bot registra opt-out, ENCERRA e NÃO aciona o bot', async () => {
+  presence._reset();
+  const capturas = [];
+  db.getConnection = async () => fakeConnBot({
+    capturas,
+    conversaExistente: { ID: 88, DEPARTAMENTO_ID: null, FILA_STATUS: 'bot' },
+  });
+  let chamouRuntime = false;
+  const originalIniciar = runtime.iniciarFluxo;
+  const originalEntrada = runtime.processarEntrada;
+  runtime.iniciarFluxo = () => { chamouRuntime = true; };
+  runtime.processarEntrada = () => { chamouRuntime = true; };
+  try {
+    await processPayload(payloadFluxo('PARAR'));
+    assert.equal(chamouRuntime, false, 'bot não pode ser acionado após opt-out');
+    assert.ok(capturas.some((c) => c.sql.includes(`optin = 'N'`)), 'deve registrar opt-out');
+    const upd = capturas.find((c) => c.sql.includes(`fila_status = 'resolvida'`) && c.sql.startsWith('UPDATE'));
+    assert.ok(upd, 'deve encerrar a conversa do bot');
+  } finally {
+    runtime.iniciarFluxo = originalIniciar;
+    runtime.processarEntrada = originalEntrada;
+  }
 });
