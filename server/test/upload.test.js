@@ -9,6 +9,7 @@ process.env.WEBHOOK_VERIFY_TOKEN = 'verify123';
 process.env.WA_TOKEN = 'token_abc';
 process.env.WA_PHONE_NUMBER_ID = '1112223334';
 process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
+process.env.DEV_META_FALLBACK = '0';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -21,6 +22,8 @@ const jwt = require('jsonwebtoken');
 
 const db = require('../db/pool');
 const { SECRET } = require('../auth/secret');
+const { criptografar } = require('../ia/crypto');
+const { CONTEXTO } = require('../meta/connection');
 const authMiddleware = require('../auth/middleware');
 const conversasRoutes = require('../api/conversas');
 const { cfg: cfgGraph } = require('../graph/client');
@@ -37,6 +40,9 @@ function fakeConn({ janelaExpiraEm }) {
     executed,
     async execute(sql, binds) {
       executed.push({ sql, binds });
+      if (sql.includes('FROM meta_conexao')) {
+        return { rows: [{ TENANT_ID: 1, PHONE_NUMBER_ID: '5550009999', WABA_ID: 'waba-1', ACCESS_TOKEN_CRIPTOGRAFADO: criptografar('token-tenant-1', 1, undefined, CONTEXTO) }] };
+      }
       // conversaNoEscopo (guard de IDOR): devolve a conversa p/ a checagem.
       if (sql.includes('SELECT id, departamento_id, numero_id, atendente_id')) {
         return { rows: [{ ID: 7, DEPARTAMENTO_ID: null, NUMERO_ID: 2, ATENDENTE_ID: null }] };
@@ -120,7 +126,7 @@ test('upload: PDF válido → grava, sobe pra Meta, envia como documento e persi
   const calls = [];
   global.fetch = async (url, opts) => {
     const u = String(url);
-    calls.push({ url: u, method: opts && opts.method });
+    calls.push({ url: u, method: opts && opts.method, authorization: opts && opts.headers && opts.headers.Authorization });
     if (u.endsWith('/media')) return { ok: true, status: 200, json: async () => ({ id: 'media_ABC' }) };
     if (u.endsWith('/messages')) return { ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.OUTFILE' }] }) };
     return { ok: true, status: 200, json: async () => ({}) };
@@ -133,13 +139,15 @@ test('upload: PDF válido → grava, sobe pra Meta, envia como documento e persi
       buffer: Buffer.from('%PDF-1.4 fake content'),
     });
     const r = await postMultipart(port, '/api/conversas/7/arquivos', mp);
-    assert.equal(r.status, 201);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
     assert.equal(r.body.tipo, 'document');
     assert.equal(r.body.nomeArquivo, 'boleto.pdf');
     assert.equal(r.body.wamid, 'wamid.OUTFILE');
     // Subiu a mídia pelo número DA CONVERSA e enviou a mensagem:
     assert.ok(calls.some((c) => c.url.includes('/5550009999/media')), 'chamou upload de mídia');
     assert.ok(calls.some((c) => c.url.includes('/5550009999/messages')), 'enviou a mensagem');
+    assert.equal(calls.find((c) => c.url.includes('/5550009999/media')).authorization, 'Bearer token-tenant-1');
+    assert.ok(!calls.some((c) => c.authorization === 'Bearer token_abc'), 'nao usou o token global');
     // Persistiu a saída no histórico:
     assert.ok(conn.executed.some((e) => e.sql.startsWith('INSERT INTO mensagem')));
   } finally { server.close(); }

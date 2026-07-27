@@ -1,6 +1,6 @@
 // graph/listTemplates.js — Lista os templates da WABA na Graph API.
 // Requer permissão whatsapp_business_management no token.
-const { graphGet, cfg } = require('./client');
+const { graphGet, credenciais, cfg } = require('./client');
 
 function parseBody(components) {
   const body = (components || []).find((c) => c.type === 'BODY');
@@ -11,9 +11,14 @@ function parseBody(components) {
 }
 
 /** Devolve os templates APROVADOS, com corpo e nº de variáveis. */
-async function listApprovedTemplates() {
+async function listApprovedTemplates(tenantId) {
+  const c = await credenciais(undefined, tenantId);
+  const wabaId = c.wabaId || cfg.wabaId;
+  if (!wabaId) throw new Error('WABA não está configurada para este tenant');
   const res = await graphGet(
-    `${cfg.wabaId}/message_templates?fields=name,status,language,category,components&limit=200`
+    `${wabaId}/message_templates?fields=name,status,language,category,components&limit=200`,
+    c.phoneNumberId || undefined,
+    tenantId
   );
   const json = await res.json();
   return (json.data || [])

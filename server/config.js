@@ -4,9 +4,6 @@ require('dotenv').config();
 const REQUIRED = [
   'META_APP_SECRET',
   'WEBHOOK_VERIFY_TOKEN',
-  'WA_TOKEN',
-  'WA_PHONE_NUMBER_ID',
-  'WA_BUSINESS_ACCOUNT_ID',
   'DATABASE_URL',
 ];
 
@@ -29,9 +26,12 @@ function loadConfig({ requireDb = true } = {}) {
     nodeEnv:       process.env.NODE_ENV || 'development',
     appSecret:     process.env.META_APP_SECRET,
     verifyToken:   process.env.WEBHOOK_VERIFY_TOKEN,
-    waToken:       process.env.WA_TOKEN,
-    phoneNumberId: process.env.WA_PHONE_NUMBER_ID,
-    wabaId:        process.env.WA_BUSINESS_ACCOUNT_ID,
+    // Fallback exclusivo de desenvolvimento legado; produção resolve por tenant.
+    devMetaFallback: process.env.NODE_ENV !== 'production' && process.env.DEV_META_FALLBACK === '1',
+    waToken:       process.env.NODE_ENV !== 'production' && process.env.DEV_META_FALLBACK === '1' ? process.env.WA_TOKEN : undefined,
+    phoneNumberId: process.env.NODE_ENV !== 'production' && process.env.DEV_META_FALLBACK === '1' ? process.env.WA_PHONE_NUMBER_ID : undefined,
+    wabaId:        process.env.NODE_ENV !== 'production' && process.env.DEV_META_FALLBACK === '1' ? process.env.WA_BUSINESS_ACCOUNT_ID : undefined,
+    metaAppId:     process.env.META_APP_ID,
     graphVersion:  process.env.GRAPH_VERSION || 'v21.0',
     mediaDir:      process.env.MEDIA_DIR || require('path').join(process.cwd(), 'media'),
     conhecimentoDir: process.env.CONHECIMENTO_DIR || require('path').join(process.cwd(), 'conhecimento'),

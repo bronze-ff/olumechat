@@ -17,29 +17,29 @@
 'use strict';
 const crypto = require('crypto');
 
-function chaveDe(tenantId, segredo) {
+function chaveDe(tenantId, segredo, contexto = 'ia_config') {
   const s = segredo || process.env.IA_CRYPTO_KEY || process.env.JWT_SECRET || '';
   if (!s) throw new Error('IA_CRYPTO_KEY/JWT_SECRET ausente para derivar a chave de cifragem');
   if (tenantId === undefined || tenantId === null || tenantId === '') {
     throw new Error('chaveDe: tenantId obrigatório — a chave é derivada por tenant');
   }
-  return crypto.createHash('sha256').update(`${s}|ia_config|${tenantId}`).digest(); // 32 bytes
+  return crypto.createHash('sha256').update(`${s}|${contexto}|${tenantId}`).digest(); // 32 bytes
 }
 
-function criptografar(texto, tenantId, segredo) {
+function criptografar(texto, tenantId, segredo, contexto = 'ia_config') {
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', chaveDe(tenantId, segredo), iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', chaveDe(tenantId, segredo, contexto), iv);
   const ct = Buffer.concat([cipher.update(String(texto), 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `${iv.toString('hex')}:${tag.toString('hex')}:${ct.toString('hex')}`;
 }
 
-function descriptografar(blob, tenantId, segredo) {
+function descriptografar(blob, tenantId, segredo, contexto = 'ia_config') {
   const [ivHex, tagHex, ctHex] = String(blob).split(':');
   if (!ivHex || !tagHex || !ctHex) throw new Error('Blob criptografado inválido');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', chaveDe(tenantId, segredo), Buffer.from(ivHex, 'hex'));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', chaveDe(tenantId, segredo, contexto), Buffer.from(ivHex, 'hex'));
   decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
   return Buffer.concat([decipher.update(Buffer.from(ctHex, 'hex')), decipher.final()]).toString('utf8');
 }
 
-module.exports = { criptografar, descriptografar };
+module.exports = { criptografar, descriptografar, chaveDe };

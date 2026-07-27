@@ -8,14 +8,14 @@ const { sendMessage } = require('./client');
  * @param {string} text           Conteúdo da mensagem.
  * @param {string} [phoneNumberId] Número de origem (multi-número); default = .env.
  */
-async function sendText(to, text, phoneNumberId) {
+async function sendText(to, text, phoneNumberId, tenantId) {
   return sendMessage({
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
     to,
     type: 'text',
     text: { preview_url: false, body: text },
-  }, phoneNumberId);
+  }, phoneNumberId, tenantId);
 }
 
 module.exports = { sendText };

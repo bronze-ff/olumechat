@@ -31,6 +31,8 @@ const autenticarOperador = require('./middleware');
 const contas = require('./contas');
 const auditoria = require('./auditoria');
 const tenants = require('./tenants');
+const { trocarCodigo } = require('../api/meta');
+const { guardar } = require('../meta/connection');
 
 const router = express.Router();
 
@@ -144,6 +146,29 @@ router.post(
 
 // A partir daqui, TUDO exige sessão de operador.
 router.use(autenticarOperador);
+
+// Fallback do operador quando o cliente trava no Embedded Signup. O operador
+// escolhe explicitamente o tenant; nunca criamos tenant a partir do webhook.
+router.post('/tenants/:id/meta/signup/exchange', async (req, res, next) => {
+  const tenantId = Number(req.params.id);
+  const { code, wabaId, phoneNumberId, displayPhone, nomeExibicao } = req.body || {};
+  if (!Number.isSafeInteger(tenantId) || tenantId <= 0 || !code || !phoneNumberId) {
+    return res.status(400).json({ error: 'tenant, code e phoneNumberId são obrigatórios' });
+  }
+  try {
+    const meta = await trocarCodigo(code);
+    await comOperador(async (conn) => {
+      await guardar({ tenantId, accessToken: meta.access_token, wabaId, conn });
+      await conn.execute(
+        `INSERT INTO numero (tenant_id, phone_number_id, display_phone, nome_exibicao, waba_id)
+         VALUES (:tenantId, :phone, :displayPhone, :nome, :waba)
+         ON CONFLICT (phone_number_id) DO UPDATE SET display_phone = COALESCE(EXCLUDED.display_phone, numero.display_phone),
+           nome_exibicao = COALESCE(EXCLUDED.nome_exibicao, numero.nome_exibicao), waba_id = COALESCE(EXCLUDED.waba_id, numero.waba_id)`,
+        { tenantId, phone: String(phoneNumberId), displayPhone: displayPhone || null, nome: nomeExibicao || null, waba: wabaId || null });
+    });
+    res.status(201).json({ ok: true, status: 'conectada', tenantId, phoneNumberId: String(phoneNumberId) });
+  } catch (err) { next(err); }
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/operador/logout — jti na blacklist.
