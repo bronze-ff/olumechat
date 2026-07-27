@@ -24,7 +24,7 @@ function startApp(rotas, conn, perfil) {
   const app = express();
   app.use('/api', express.json());
   for (const [caminho, router] of rotas) {
-    app.use(caminho, authMiddleware, (req, res, next) => { req.perfil = perfil; next(); }, router);
+    app.use(caminho, authMiddleware, (req, res, next) => { req.perfil = perfil; req.tenantId = 1; next(); }, router);
   }
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
@@ -206,11 +206,11 @@ test('fluxos: PUT atualiza DEFINICAO por atribuição direta (sem COALESCE no CL
       rq.on('error', reject); rq.write(body); rq.end();
     });
     assert.equal(r.status, 200);
-    const upd = capturas.find((c) => c.sql.startsWith('UPDATE MC_ZAP_FLUXO'));
+    const upd = capturas.find((c) => c.sql.startsWith('UPDATE fluxo'));
     assert.ok(upd, 'deve executar o UPDATE');
-    // ORA-00932: bind VARCHAR2 dentro de COALESCE com coluna CLOB — proibido.
+    // Atribuição direta — nunca dentro de COALESCE com a coluna jsonb.
     assert.equal(/COALESCE\([^)]*:def/i.test(upd.sql), false);
-    assert.match(upd.sql, /DEFINICAO = :def/);
+    assert.match(upd.sql, /definicao = :def/);
     assert.match(upd.binds.def, /menu|encerrar/);
     assert.equal(upd.binds.num, 2);
   } finally { server.close(); }
