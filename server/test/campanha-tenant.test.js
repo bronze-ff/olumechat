@@ -134,3 +134,27 @@ test('RLS real: UNIQUE de campanha_item passou a incluir tenant — mesmo telefo
       await admin.end();
     }
   });
+
+test('RLS real: linhas importadas pelo tenant A não aparecem nem viram itens no tenant B',
+  { skip: semBanco && 'defina TEST_DATABASE_URL para rodar (usa Postgres real)' },
+  async () => {
+    const { Client } = require('pg');
+    const admin = new Client({ connectionString: URL_INTEGRACAO }); await admin.connect();
+    const marca = `csv${Date.now()}`;
+    try {
+      const t = await admin.query(`INSERT INTO tenant (nome, slug) VALUES ('A ${marca}', 'a-${marca}'), ('B ${marca}', 'b-${marca}') RETURNING id, slug`);
+      const A = t.rows.find((r) => r.slug === `a-${marca}`).id; const B = t.rows.find((r) => r.slug === `b-${marca}`).id;
+      const camp = await comoTenant(admin, A, async (c) => (await c.query(`INSERT INTO campanha (nome) VALUES ($1) RETURNING id`, [`CSV ${marca}`])).rows[0].id);
+      await comoTenant(admin, A, async (c) => { await c.query(`INSERT INTO campanha_import_linha (campanha_id, numero_linha, telefone, status) VALUES ($1, 2, '5562999990000', 'aceita')`, [camp]); });
+      await comoTenant(admin, B, async (c) => {
+        const r = await c.query(`SELECT id FROM campanha_import_linha WHERE campanha_id = $1`, [camp]);
+        assert.equal(r.rowCount, 0, 'VAZAMENTO: tenant B enxergou linha CSV do tenant A');
+        const item = await c.query(`INSERT INTO campanha_item (campanha_id, telefone, status) SELECT $1, telefone, 'pendente' FROM campanha_import_linha WHERE campanha_id = $2 RETURNING id`, [camp, camp]);
+        assert.equal(item.rowCount, 0, 'VAZAMENTO: tenant B materializou linha do tenant A');
+      });
+    } finally {
+      await admin.query(`DELETE FROM campanha_import_linha WHERE campanha_id IN (SELECT id FROM campanha WHERE nome = $1)`, [`CSV ${marca}`]).catch(() => {});
+      await admin.query(`DELETE FROM campanha WHERE nome IN ($1, $2)`, [`CSV ${marca}`, `Campanha ${marca}`]).catch(() => {});
+      await admin.query(`DELETE FROM tenant WHERE slug LIKE $1`, [`%-${marca}`]).catch(() => {}); await admin.end();
+    }
+  });

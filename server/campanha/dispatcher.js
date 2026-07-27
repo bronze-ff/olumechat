@@ -79,14 +79,14 @@ async function temOptout(conn, telefone) {
   const binds = {};
   const marks = vs.map((v, i) => { binds['t' + i] = v; return ':t' + i; });
   const r = await conn.execute(
-    `SELECT a.ACAO FROM auditoria a
+    `SELECT ct.OPTIN, a.ACAO FROM auditoria a
        JOIN contato ct ON ct.ID = a.ENTIDADE_ID
       WHERE a.ENTIDADE = 'contato' AND a.ACAO IN ('optin','optout')
         AND ct.TELEFONE IN (${marks.join(',')})
       ORDER BY a.CRIADO_EM DESC, a.ID DESC FETCH FIRST 1 ROWS ONLY`,
     binds
   );
-  return r.rows.length > 0 && r.rows[0].ACAO === 'optout';
+  return r.rows.length > 0 && (r.rows[0].OPTIN === 'N' || r.rows[0].ACAO === 'optout');
 }
 
 /** Pausa a campanha (usa o `conn` já aberto — chamado de dentro de um
