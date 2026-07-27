@@ -7,18 +7,18 @@ const { variantes } = require('../utils/telefone');
 // sem (5562 xxxx...). Comparar exato deixaria o mesmo diretor "não autorizado"
 // dependendo de como a mensagem chegou. `variantes()` gera as duas formas
 // (com/sem 9, sempre com DDI 55) e casamos por qualquer uma delas.
-async function autorizado(conn, telefone, numeroId) {
+async function autorizado(conn, tenantId, telefone, numeroId) {
   try {
     const vs = variantes(telefone);
-    const binds = { n: numeroId };
+    const binds = { tenantId, n: numeroId };
     const marks = vs.map((v, i) => { binds['t' + i] = v; return ':t' + i; });
     const r = await conn.execute(
-      `SELECT COUNT(*) AS N FROM MC_ZAP_IA_AUTORIZADO
-        WHERE TELEFONE IN (${marks.join(',')}) AND NUMERO_ID = :n AND ATIVO = 'S'`,
+      `SELECT COUNT(*) AS N FROM ia_autorizado
+        WHERE tenant_id = :tenantId AND TELEFONE IN (${marks.join(',')}) AND NUMERO_ID = :n AND ATIVO = 'S'`,
       binds);
     return (r.rows[0].N || 0) > 0;
   } catch (err) {
-    if (err.errorNum === 942) return false;
+    if (err.code === '42P01') return false; // tabela ainda não criada (undefined_table)
     throw err;
   }
 }

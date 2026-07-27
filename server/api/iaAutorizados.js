@@ -1,4 +1,5 @@
 // api/iaAutorizados.js — telefones autorizados a falar com o bot de IA (ADMIN).
+// FIL-63: escopado por req.tenantId via db.comTenant() (ver api/iaConfig.js).
 'use strict';
 const express = require('express');
 const db = require('../db/pool');
@@ -8,14 +9,16 @@ const { normalizar } = require('../utils/telefone');
 const router = express.Router();
 
 router.get('/', exigirPapel('ADMIN'), async (req, res, next) => {
-  let conn;
   try {
-    conn = await db.getConnection();
-    const r = await conn.execute(
-      `SELECT ID, TELEFONE, NOME, NUMERO_ID, ATIVO FROM MC_ZAP_IA_AUTORIZADO
-        WHERE (:num IS NULL OR NUMERO_ID = :num) ORDER BY NOME`, { num: req.query.numeroId ? Number(req.query.numeroId) : null });
-    res.json(r.rows);
-  } catch (err) { next(err); } finally { if (conn) await conn.close().catch(() => {}); }
+    const rows = await db.comTenant(req.tenantId, async (conn) => {
+      const r = await conn.execute(
+        `SELECT ID, TELEFONE, NOME, NUMERO_ID, ATIVO FROM ia_autorizado
+          WHERE tenant_id = :tenantId AND (:num IS NULL OR NUMERO_ID = :num) ORDER BY NOME`,
+        { tenantId: req.tenantId, num: req.query.numeroId ? Number(req.query.numeroId) : null });
+      return r.rows;
+    });
+    res.json(rows);
+  } catch (err) { next(err); }
 });
 
 router.post('/', exigirPapel('ADMIN'), async (req, res, next) => {
@@ -27,38 +30,35 @@ router.post('/', exigirPapel('ADMIN'), async (req, res, next) => {
   const nome = (req.body && req.body.nome) || null;
   if (!telefone) return res.status(400).json({ error: 'Telefone obrigatório' });
   if (!Number.isInteger(numeroId)) return res.status(400).json({ error: 'numeroId inválido' });
-  let conn;
   try {
-    conn = await db.getConnection();
-    await conn.execute(
-      `MERGE INTO MC_ZAP_IA_AUTORIZADO a USING (SELECT :t AS TEL, :n AS NUM FROM DUAL) x
-          ON (a.TELEFONE = x.TEL AND a.NUMERO_ID = x.NUM)
-        WHEN MATCHED THEN UPDATE SET a.ATIVO='S', a.NOME=:nm
-        WHEN NOT MATCHED THEN INSERT (TELEFONE, NOME, NUMERO_ID, ATIVO) VALUES (:t2, :nm2, :n2, 'S')`,
-      { t: telefone, n: numeroId, nm: nome, t2: telefone, nm2: nome, n2: numeroId });
-    await conn.execute(
-      `INSERT INTO MC_ZAP_AUDITORIA (ATENDENTE_ID, MATRICULA, ACAO, ENTIDADE, DETALHE)
-       VALUES (:atd, :mat, 'ia_autorizado_add', 'ia_autorizado', :det)`,
-      { atd: req.perfil && req.perfil.atendenteId, mat: req.user && req.user.matricula, det: JSON.stringify({ telefone, numeroId }) });
-    await conn.commit();
+    await db.comTenant(req.tenantId, async (conn) => {
+      await conn.execute(
+        `INSERT INTO ia_autorizado (tenant_id, TELEFONE, NOME, NUMERO_ID, ATIVO)
+         VALUES (:tenantId, :t, :nm, :n, 'S')
+         ON CONFLICT (tenant_id, TELEFONE, NUMERO_ID) DO UPDATE SET ATIVO = 'S', NOME = EXCLUDED.NOME`,
+        { tenantId: req.tenantId, t: telefone, nm: nome, n: numeroId });
+      await conn.execute(
+        `INSERT INTO auditoria (tenant_id, ATENDENTE_ID, MATRICULA, ACAO, ENTIDADE, DETALHE)
+         VALUES (:tenantId, :atd, :mat, 'ia_autorizado_add', 'ia_autorizado', :det)`,
+        { tenantId: req.tenantId, atd: req.perfil && req.perfil.atendenteId, mat: req.user && req.user.matricula, det: JSON.stringify({ telefone, numeroId }) });
+    });
     res.json({ ok: true });
-  } catch (err) { if (conn) await conn.rollback().catch(() => {}); next(err); } finally { if (conn) await conn.close().catch(() => {}); }
+  } catch (err) { next(err); }
 });
 
 router.delete('/:id', exigirPapel('ADMIN'), async (req, res, next) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'id inválido' });
-  let conn;
   try {
-    conn = await db.getConnection();
-    await conn.execute(`UPDATE MC_ZAP_IA_AUTORIZADO SET ATIVO='N' WHERE ID = :id`, { id });
-    await conn.execute(
-      `INSERT INTO MC_ZAP_AUDITORIA (ATENDENTE_ID, MATRICULA, ACAO, ENTIDADE, ENTIDADE_ID)
-       VALUES (:atd, :mat, 'ia_autorizado_off', 'ia_autorizado', :id)`,
-      { atd: req.perfil && req.perfil.atendenteId, mat: req.user && req.user.matricula, id });
-    await conn.commit();
+    await db.comTenant(req.tenantId, async (conn) => {
+      await conn.execute(`UPDATE ia_autorizado SET ATIVO='N' WHERE tenant_id = :tenantId AND ID = :id`, { tenantId: req.tenantId, id });
+      await conn.execute(
+        `INSERT INTO auditoria (tenant_id, ATENDENTE_ID, MATRICULA, ACAO, ENTIDADE, ENTIDADE_ID)
+         VALUES (:tenantId, :atd, :mat, 'ia_autorizado_off', 'ia_autorizado', :id)`,
+        { tenantId: req.tenantId, atd: req.perfil && req.perfil.atendenteId, mat: req.user && req.user.matricula, id });
+    });
     res.json({ ok: true });
-  } catch (err) { if (conn) await conn.rollback().catch(() => {}); next(err); } finally { if (conn) await conn.close().catch(() => {}); }
+  } catch (err) { next(err); }
 });
 
 module.exports = router;
