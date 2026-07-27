@@ -102,7 +102,8 @@ npm run migrar                # aplica db/migrations/ em ordem
 ```
 
 Para DDL prefira a connection string **direta** (host sem `-pooler`), via
-`MIGRATION_DATABASE_URL`.
+`MIGRATION_DATABASE_URL`. O barramento SSE tambÃ©m exige essa conexÃ£o direta em
+`DATABASE_URL_DIRECT`, usada pela sessÃ£o dedicada de `LISTEN/NOTIFY`.
 
 ### Como falar com o banco
 
@@ -189,7 +190,8 @@ dividir conexões SSE.
 
 1. Crie um projeto Neon de produção e uma branch Neon separada para
    desenvolvimento/testes descartáveis. Use a URL pooled da produção em
-   `DATABASE_URL` e a URL direta (sem `-pooler`) em `MIGRATION_DATABASE_URL`.
+   `DATABASE_URL` e a URL direta (sem `-pooler`) em `MIGRATION_DATABASE_URL` e
+   `DATABASE_URL_DIRECT` (para o barramento SSE).
 2. No Render, crie um Blueprint a partir deste repositório e preencha os
    segredos marcados `sync: false` em `render.yaml`, incluindo as credenciais
    da Meta e os segredos JWT. Não coloque valores reais no repositório.

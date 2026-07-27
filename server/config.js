@@ -43,6 +43,8 @@ function loadConfig({ requireDb = true } = {}) {
     },
     // Connection string POOLED do Neon (PgBouncer em transaction mode).
     databaseUrl: process.env.DATABASE_URL,
+    // Conexão direta em session mode, exclusiva do LISTEN/NOTIFY (nunca usar o pooler).
+    databaseUrlDirect: process.env.DATABASE_URL_DIRECT,
   };
 }
 
