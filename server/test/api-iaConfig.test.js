@@ -8,11 +8,12 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const db = require('../db/pool');
 
-function servidor(papel = 'ADMIN') {
+function servidor(papel = 'ADMIN', tenantId = 1) {
   const app = express();
   app.use(express.json());
-  // stub de auth/perfil com papel configurável
-  app.use((req, _res, next) => { req.user = { matricula: 10 }; req.perfil = { atendenteId: 1, papel }; next(); });
+  // stub de auth/perfil com papel configurável (o middleware real que popula
+  // req.tenantId a partir do login é o FIL-59; aqui simulamos o contrato dele)
+  app.use((req, _res, next) => { req.user = { matricula: 10 }; req.perfil = { atendenteId: 1, papel }; req.tenantId = tenantId; next(); });
   app.use('/api/ia-config', require('../api/iaConfig'));
   return app;
 }
@@ -33,10 +34,11 @@ test('PUT válido cifra a chave, faz upsert e audita', async () => {
   db.getConnection = async () => ({ async execute(sql, binds) { cap.push({ sql, binds }); return { rows: [] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
   const res = await req(servidor(), 'PUT', { provider: 'openai', modelo: 'gpt-4o', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-abc' });
   assert.equal(res.status, 200);
-  const merge = cap.find((c) => c.sql.includes('MERGE INTO MC_ZAP_IA_CONFIG'));
-  assert.ok(merge, 'faz upsert');
+  const upsert = cap.find((c) => c.sql.includes('INSERT INTO ia_config') && c.sql.includes('ON CONFLICT'));
+  assert.ok(upsert, 'faz upsert');
+  assert.equal(upsert.binds.tenantId, 1);
   assert.ok(!JSON.stringify(cap).includes('sk-abc'), 'a chave nunca vai em claro pro banco');
-  assert.ok(cap.some((c) => c.sql.includes('MC_ZAP_AUDITORIA')), 'audita');
+  assert.ok(cap.some((c) => c.sql.includes('auditoria')), 'audita');
 });
 
 test('PUT rejeita provider inválido', async () => {
@@ -46,7 +48,7 @@ test('PUT rejeita provider inválido', async () => {
 });
 
 test('GET nunca devolve a API key', async () => {
-  db.getConnection = async () => ({ async execute() { return { rows: [{ PROVIDER: 'openai', MODELO: 'gpt-4o', BASE_URL: 'u', ATIVO: 'S' }] }; }, close: async()=>{} });
+  db.getConnection = async () => ({ async execute() { return { rows: [{ PROVIDER: 'openai', MODELO: 'gpt-4o', BASE_URL: 'u', ATIVO: 'S' }] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
   const res = await req(servidor(), 'GET');
   assert.equal(res.body.provider, 'openai');
   assert.ok(!('apiKey' in res.body) && !('API_KEY_CRIPTOGRAFADA' in res.body));
@@ -67,8 +69,27 @@ test('PUT sem apiKey MANTÉM a chave atual (editar só modelo/URL sem recolar a 
   }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
   const res = await req(servidor(), 'PUT', { provider: 'openrouter', modelo: 'openai/gpt-4o-mini', baseUrl: 'https://openrouter.ai/api/v1' }); // sem apiKey
   assert.equal(res.status, 200);
-  const merge = cap.find((c) => c.sql.includes('MERGE INTO MC_ZAP_IA_CONFIG'));
-  assert.equal(merge.binds.k, 'iv:tag:ct'); // reusou a chave já cifrada
+  const upsert = cap.find((c) => c.sql.includes('INSERT INTO ia_config') && c.sql.includes('ON CONFLICT'));
+  assert.equal(upsert.binds.k, 'iv:tag:ct'); // reusou a chave já cifrada
+});
+
+test('PUT sem apiKey e sem config prévia dá 400 (não pode nascer sem chave)', async () => {
+  db.getConnection = async () => ({ async execute(sql) {
+    if (sql.includes('SELECT API_KEY_CRIPTOGRAFADA')) return { rows: [] };
+    return { rows: [] };
+  }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
+  const res = await req(servidor(), 'PUT', { provider: 'openrouter', modelo: 'm', baseUrl: 'https://openrouter.ai/api/v1' });
+  assert.equal(res.status, 400);
+});
+
+test('SEGURANÇA: GET só devolve a config do tenant do próprio request (bind de tenant_id)', async () => {
+  let bindsVistos;
+  db.getConnection = async () => ({ async execute(sql, binds) {
+    if (sql.includes('SELECT PROVIDER')) { bindsVistos = binds; return { rows: [{ PROVIDER: 'openai', MODELO: 'm', BASE_URL: null, ATIVO: 'S' }] }; }
+    return { rows: [] };
+  }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
+  await req(servidor('ADMIN', 7), 'GET');
+  assert.equal(bindsVistos.tenantId, 7);
 });
 
 test('PUT rejeita modelo que é URL (causa do "not a valid model ID")', async () => {
@@ -85,6 +106,6 @@ test('PUT rejeita baseUrl inválida e normaliza um /chat/completions colado por 
   assert.equal(bad.status, 400);
   const ok = await req(servidor(), 'PUT', { provider: 'openrouter', modelo: 'm', baseUrl: 'https://openrouter.ai/api/v1/chat/completions/', apiKey: 'k' });
   assert.equal(ok.status, 200);
-  const merge = cap.find((c) => c.sql.includes('MERGE INTO MC_ZAP_IA_CONFIG'));
-  assert.equal(merge.binds.b, 'https://openrouter.ai/api/v1'); // normalizada
+  const upsert = cap.find((c) => c.sql.includes('INSERT INTO ia_config') && c.sql.includes('ON CONFLICT'));
+  assert.equal(upsert.binds.b, 'https://openrouter.ai/api/v1'); // normalizada
 });

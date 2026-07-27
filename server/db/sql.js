@@ -38,6 +38,11 @@
 //
 // Valores jsonb: passe STRING JSON (JSON.stringify), não objeto JS — objeto
 // simples é reservado para specs de bind.
+//
+// `nomesBinds(sql)` expõe só a varredura de nomes (sem traduzir/exigir
+// valores) — reuse isto se precisar descobrir quais :nome um SQL usa antes de
+// ter os valores (ex.: campanha/segmento.js, que valida o SELECT livre do
+// admin antes de rodar).
 'use strict';
 
 // Constantes de tipo/direção compatíveis com os specs `oracledb.*` que o
@@ -57,6 +62,63 @@ function ehSpec(v) {
   if (v === null || typeof v !== 'object') return false;
   if (v instanceof Date || Buffer.isBuffer(v) || Array.isArray(v)) return false;
   return 'val' in v || 'dir' in v || 'type' in v;
+}
+
+/**
+ * Varre `sql` com a MESMA consciência de string/identificador/comentário/cast
+ * que `traduzir()` usa, mas só para DESCOBRIR os nomes de bind `:nome` (sem
+ * traduzir para $n nem exigir valores) — na ordem de aparição, sem repetir.
+ * Reuse isto em vez de reimplementar a varredura: um regex ingênuo (`/:\w+/`)
+ * confunde `::cast` do Postgres com bind (ex.: `telefone::text` vira um bind
+ * fantasma `:text`) e não sabe pular string/comentário.
+ */
+function nomesBinds(sql) {
+  const texto = String(sql);
+  const ordem = [];
+  const vistos = new Set();
+  let i = 0;
+  const n = texto.length;
+  while (i < n) {
+    const ch = texto[i];
+    const prox = texto[i + 1];
+
+    if (ch === "'") { // string literal ('' escapa aspas)
+      let j = i + 1;
+      while (j < n) {
+        if (texto[j] === "'" && texto[j + 1] === "'") { j += 2; continue; }
+        if (texto[j] === "'") { j++; break; }
+        j++;
+      }
+      i = j; continue;
+    }
+    if (ch === '"') { // identificador entre aspas
+      let j = texto.indexOf('"', i + 1);
+      j = j === -1 ? n : j + 1;
+      i = j; continue;
+    }
+    if (ch === '-' && prox === '-') { // comentário de linha
+      let j = texto.indexOf('\n', i);
+      j = j === -1 ? n : j;
+      i = j; continue;
+    }
+    if (ch === '/' && prox === '*') { // comentário de bloco
+      let j = texto.indexOf('*/', i + 2);
+      j = j === -1 ? n : j + 2;
+      i = j; continue;
+    }
+    if (ch === ':' && (prox === ':' || prox === '=')) { // cast :: ou :=
+      i += 2; continue;
+    }
+    if (ch === ':' && /[a-zA-Z_]/.test(prox || '')) { // bind!
+      let j = i + 1;
+      while (j < n && /[a-zA-Z0-9_$]/.test(texto[j])) j++;
+      const nome = texto.slice(i + 1, j);
+      if (!vistos.has(nome)) { vistos.add(nome); ordem.push(nome); }
+      i = j; continue;
+    }
+    i++;
+  }
+  return ordem;
 }
 
 const RE_RETURNING_INTO =
@@ -158,64 +220,6 @@ function traduzir(sql, binds = {}) {
   });
 
   return { text: saida, values, outNames };
-}
-
-/**
- * Devolve só os NOMES de bind `:nome` usados de fato em `sql`, na ordem da
- * primeira aparição — mesma varredura ciente de string/identificador/
- * comentário/`::`/`:=` de `traduzir()` (`::` de cast e `:=` NUNCA são bind).
- * Existe pra quem precisa dos nomes ANTES de ter os valores prontos (ex.:
- * bot/runtime.js monta os binds de um SQL livre a partir das variáveis
- * capturadas) — uma regex `/:nome/` própria erraria em "WHERE id = :x::int"
- * (o "::int" vira um bind fantasma chamado "int").
- * @param {string} sql
- * @returns {string[]}
- */
-function nomesBinds(sql) {
-  if (typeof sql !== 'string' || !sql.trim()) throw new Error('nomesBinds: SQL vazio');
-  const ordem = [];
-  const vistos = new Set();
-  let i = 0;
-  const n = sql.length;
-  while (i < n) {
-    const ch = sql[i];
-    const prox = sql[i + 1];
-
-    if (ch === "'") {
-      let j = i + 1;
-      while (j < n) {
-        if (sql[j] === "'" && sql[j + 1] === "'") { j += 2; continue; }
-        if (sql[j] === "'") { j++; break; }
-        j++;
-      }
-      i = j; continue;
-    }
-    if (ch === '"') {
-      let j = sql.indexOf('"', i + 1);
-      j = j === -1 ? n : j + 1;
-      i = j; continue;
-    }
-    if (ch === '-' && prox === '-') {
-      let j = sql.indexOf('\n', i);
-      j = j === -1 ? n : j;
-      i = j; continue;
-    }
-    if (ch === '/' && prox === '*') {
-      let j = sql.indexOf('*/', i + 2);
-      j = j === -1 ? n : j + 2;
-      i = j; continue;
-    }
-    if (ch === ':' && (prox === ':' || prox === '=')) { i += 2; continue; }
-    if (ch === ':' && /[a-zA-Z_]/.test(prox || '')) {
-      let j = i + 1;
-      while (j < n && /[a-zA-Z0-9_$]/.test(sql[j])) j++;
-      const nome = sql.slice(i + 1, j);
-      if (!vistos.has(nome)) { vistos.add(nome); ordem.push(nome); }
-      i = j; continue;
-    }
-    i++;
-  }
-  return ordem;
 }
 
 module.exports = { traduzir, tipos, nomesBinds };
