@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { traduzir, tipos } = require('../db/sql');
+const { traduzir, tipos, nomesBinds } = require('../db/sql');
 
 test('bind simples vira $1 na ordem de aparição', () => {
   const r = traduzir('SELECT * FROM contato WHERE telefone = :tel AND optin = :op',
@@ -109,4 +109,32 @@ test('Date e Buffer passam como valor cru, não como spec', () => {
   const d = new Date('2026-01-01T00:00:00Z');
   const r = traduzir('UPDATE t SET ts = :ts WHERE id = :id', { ts: d, id: 1 });
   assert.equal(r.values[0], d);
+});
+
+// ---------- nomesBinds — usado por bot/runtime.js pra montar binds de SQL
+// livre ANTES de ter os valores (por isso não dá pra chamar traduzir() ali). ----------
+
+test('nomesBinds: extrai os nomes na ordem de aparição, sem duplicar repetido', () => {
+  assert.deepEqual(
+    nomesBinds('SELECT * FROM conversa WHERE id = :id OR pai_id = :id OR tel = :tel'),
+    ['id', 'tel']
+  );
+});
+
+test('nomesBinds: "::cast" do Postgres NÃO vira um bind fantasma', () => {
+  // Regressão: uma regex `/:nome/` ingênua lê ":codigo::int" como dois binds
+  // (`codigo` e `int`) porque o segundo ":" de "::" é seguido de letra.
+  assert.deepEqual(nomesBinds('SELECT * FROM t WHERE id = :codigo::int'), ['codigo']);
+  assert.deepEqual(nomesBinds('SELECT tenant_id::text, :a FROM t WHERE id = :b::bigint'), ['a', 'b']);
+});
+
+test('nomesBinds: ignora bind dentro de string, identificador entre aspas e comentário', () => {
+  assert.deepEqual(nomesBinds("SELECT ':naoehbind' AS s FROM t WHERE id = :id"), ['id']);
+  assert.deepEqual(nomesBinds('SELECT "coluna :estranha" FROM t WHERE id = :id'), ['id']);
+  assert.deepEqual(nomesBinds('SELECT id FROM t -- filtra por :antigo\nWHERE x = :x'), ['x']);
+});
+
+test('nomesBinds: ":=" (atribuição) não é bind', () => {
+  assert.deepEqual(nomesBinds('SELECT * FROM t WHERE id = :id'), ['id']);
+  assert.deepEqual(nomesBinds('DO $$ BEGIN x := 1; END $$'), []);
 });

@@ -3,10 +3,16 @@
 //   - só SELECT, sem ';' (uma única statement);
 //   - binds por :nome (impede injeção; valores nunca concatenados no SQL).
 // O SELECT devolve uma coluna de telefone + as colunas que viram {{1}},{{2}}...
-// do template. O preview usa ROWNUM (não FETCH FIRST, que pode colidir com um
-// FETCH do próprio admin) — mesma técnica do GET /api/conversas.
+// do template. O preview envelopa em LIMIT (não FETCH FIRST, que pode colidir
+// com um FETCH do próprio admin) — mesma técnica do GET /api/conversas.
+//
+// Multi-tenant (FIL-61): este módulo não abre conexão própria — recebe o
+// `conn` de quem chama (api/campanhas.js), que já roda dentro de
+// db.comTenant(). RLS filtra o SELECT livre do admin pelo tenant do contexto
+// automaticamente; nenhuma mudança aqui é necessária para isso.
 'use strict';
 
+const { nomesBinds } = require('../db/sql');
 
 class SegmentoInvalido extends Error {}
 
@@ -34,21 +40,23 @@ function validarSql(sqlBruto) {
   return sql;
 }
 
-/** Extrai os binds :nome do SQL, preenchendo com `params` (ou null). */
+/** Extrai os binds :nome do SQL, preenchendo com `params` (ou null).
+    Reusa a varredura de db/sql.js (nomesBinds) — um regex ingênuo confundia
+    `::cast` do Postgres (ex.: `telefone::text`) com um bind `:text`. */
 function extrairBinds(sql, params = {}) {
   const binds = {};
-  for (const m of String(sql).matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)/g)) {
-    const nome = m[1];
-    if (!(nome in binds)) binds[nome] = params[nome] !== undefined ? String(params[nome]) : null;
+  for (const nome of nomesBinds(sql)) {
+    binds[nome] = params[nome] !== undefined ? String(params[nome]) : null;
   }
   return binds;
 }
 
-/** Conta quantos destinatários o SELECT retorna. */
+/** Conta quantos destinatários o SELECT retorna. Postgres exige alias na
+    subquery do FROM (Oracle aceitava sem). */
 async function contarTotal(conn, sqlBruto, params) {
   const sql = validarSql(sqlBruto);
   const binds = extrairBinds(sql, params);
-  const r = await conn.execute(`SELECT COUNT(*) AS QTD FROM (${sql})`, binds);
+  const r = await conn.execute(`SELECT COUNT(*) AS QTD FROM (${sql}) AS seg`, binds);
   return Number(r.rows[0].QTD);
 }
 
@@ -56,10 +64,9 @@ async function contarTotal(conn, sqlBruto, params) {
 async function rodarPreview(conn, sqlBruto, params, limite = 50) {
   const sql = validarSql(sqlBruto);
   const binds = extrairBinds(sql, params);
-  // Nome do bind precisa começar com LETRA — ':__lim' dá ORA-01036 no Oracle.
   binds.mczap_lim = limite;
   const r = await conn.execute(
-    `SELECT * FROM (${sql}) WHERE ROWNUM <= :mczap_lim`, binds
+    `SELECT * FROM (${sql}) AS seg LIMIT :mczap_lim`, binds
   );
   return r.rows.map((row) => {
     const o = {};
@@ -71,11 +78,15 @@ async function rodarPreview(conn, sqlBruto, params, limite = 50) {
 }
 
 /** Roda o SELECT completo (para o "preparar"). Devolve todas as linhas em
-    minúsculas. Para volumes muito grandes (>50k) trocar por resultSet/cursor. */
+    minúsculas. O `pg` não tem um equivalente ao `maxRows` do oracledb no
+    wrapper de conexão (db/pool.js só repassa `autoCommit`) — o teto de
+    segurança contra um SELECT descontrolado é reproduzido embrulhando em
+    LIMIT. Para volumes muito grandes (>100k) trocar por cursor. */
 async function rodarCompleto(conn, sqlBruto, params) {
   const sql = validarSql(sqlBruto);
   const binds = extrairBinds(sql, params);
-  const r = await conn.execute(sql, binds, { maxRows: 100000 });
+  binds.mczap_max = 100000;
+  const r = await conn.execute(`SELECT * FROM (${sql}) AS seg LIMIT :mczap_max`, binds);
   return r.rows.map((row) => {
     const o = {};
     for (const [col, val] of Object.entries(row)) {
