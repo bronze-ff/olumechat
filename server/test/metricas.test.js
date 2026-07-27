@@ -21,10 +21,11 @@ const TOKEN = jwt.sign({ jti: 'tm1', matricula: 123, nome: 'Teste' }, SECRET, { 
 
 function startApp(rotas, conn, perfil) {
   db.getConnection = async () => conn;
+  db.comTenant = async (tenantId, fn) => fn(conn); // rotas de metricas/historico passam por comTenant()
   const app = express();
   app.use('/api', express.json());
   for (const [caminho, router] of rotas) {
-    app.use(caminho, authMiddleware, (req, res, next) => { req.perfil = perfil; req.tenantId = 1; next(); }, router);
+    app.use(caminho, authMiddleware, (req, res, next) => { req.perfil = perfil; req.tenantId = perfil.tenantId || 1; next(); }, router);
   }
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
@@ -59,13 +60,14 @@ test('metricas: SUPERVISOR é escopado aos seus departamentos', async () => {
   const { server, port } = await startApp(
     [['/api/metricas', require('../api/metricas')]],
     fakeConn(capturas),
-    { atendenteId: 1, papel: 'SUPERVISOR', deptoIds: [2, 3], ativo: true }
+    { atendenteId: 1, papel: 'SUPERVISOR', deptoIds: [2, 3], ativo: true, tenantId: 1 }
   );
   try {
     const r = await get(port, '/api/metricas/resumo');
     assert.equal(r.status, 200);
     const sel = capturas.find((c) => c.sql.includes('AS TOTAL'));
-    assert.match(sel.sql, /DEPARTAMENTO_ID IN \(:sd0,:sd1\)/);
+    assert.match(sel.sql, /c\.tenant_id = :tenantId/);
+    assert.match(sel.sql, /departamento_id IN \(:sd0,:sd1\)/);
   } finally { server.close(); }
 });
 
@@ -74,14 +76,14 @@ test('metricas: AUDITOR vê tudo (sem escopo)', async () => {
   const { server, port } = await startApp(
     [['/api/metricas', require('../api/metricas')]],
     fakeConn(capturas),
-    { atendenteId: 1, papel: 'AUDITOR', deptoIds: [], ativo: true }
+    { atendenteId: 1, papel: 'AUDITOR', deptoIds: [], ativo: true, tenantId: 1 }
   );
   try {
     const r = await get(port, '/api/metricas/resumo?de=2026-06-01&ate=2026-06-10');
     assert.equal(r.status, 200);
     const sel = capturas.find((c) => c.sql.includes('AS TOTAL'));
     assert.equal(/IN \(:sd/.test(sel.sql), false);
-    assert.match(sel.sql, /TO_DATE\(:de/);
+    assert.match(sel.sql, /c\.criado_em >= :de::date/);
   } finally { server.close(); }
 });
 
@@ -89,7 +91,7 @@ test('metricas: ATENDENTE não acessa (403)', async () => {
   const { server, port } = await startApp(
     [['/api/metricas', require('../api/metricas')]],
     fakeConn(),
-    { atendenteId: 1, papel: 'ATENDENTE', deptoIds: [1], ativo: true }
+    { atendenteId: 1, papel: 'ATENDENTE', deptoIds: [1], ativo: true, tenantId: 1 }
   );
   try {
     const r = await get(port, '/api/metricas/resumo');
@@ -102,7 +104,7 @@ test('historico: pagina com OFFSET/FETCH e devolve total', async () => {
   const { server, port } = await startApp(
     [['/api/historico', require('../api/historico')]],
     fakeConn(capturas),
-    { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true }
+    { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true, tenantId: 1 }
   );
   try {
     const r = await get(port, '/api/historico?pagina=3&protocolo=260610100042');
@@ -121,7 +123,7 @@ test('historico: export CSV audita e manda BOM + cabeçalho', async () => {
   const { server, port } = await startApp(
     [['/api/historico', require('../api/historico')]],
     fakeConn(capturas),
-    { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true }
+    { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true, tenantId: 1 }
   );
   try {
     const r = await get(port, '/api/historico/export.csv');
@@ -158,6 +160,7 @@ test('config: GET devolve mapa e PUT (ADMIN) faz upsert auditado', async () => {
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
   db.getConnection = async () => conn;
+  db.comTenant = async (tenantId, fn) => fn(conn); // config.js roda dentro de comTenant() — não herdar o mock de outro teste
   const server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
   const port = server.address().port;
   try {
