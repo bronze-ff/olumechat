@@ -245,9 +245,9 @@ async function openOrRenewConversa(conn, contatoId, numero, ts) {
 }
 
 /** Baixa a mídia para o disco e devolve os metadados (ou null se falhar). */
-async function safeDownload(mediaObj) {
+async function safeDownload(mediaObj, context) {
   try {
-    return await downloadMedia(mediaObj);
+    return await downloadMedia(mediaObj, context);
   } catch (err) {
     console.error('[webhook] Falha ao baixar/gravar mídia:', err.message);
     return null; // não perde a mensagem por causa da mídia
@@ -469,7 +469,7 @@ async function processChange(conn, numero, value) {
     let media = null;
     let conteudo;
     if (MEDIA_TYPES.includes(msg.type) && msg[msg.type] && msg[msg.type].id) {
-      media = await safeDownload(msg[msg.type]);
+      media = await safeDownload(msg[msg.type], { tenantId: numero.tenantId, conversaId });
       conteudo = msg[msg.type].caption || null;
     } else if (msg.type === 'text' && msg.text) {
       conteudo = msg.text.body;
