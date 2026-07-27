@@ -18,6 +18,18 @@ test('rejeita ia_config, pg_sleep, dblink, pg_read_file', () => {
   assert.ok(validarSQL("SELECT * FROM dblink('conn', 'select 1') AS t(x int)").length > 0);
   assert.ok(validarSQL("SELECT pg_read_file('/etc/passwd')").length > 0);
 });
+test('rejeita set_config (mutação do contexto de tenant) mesmo sem parênteses colados', () => {
+  assert.ok(validarSQL("SELECT set_config('app.current_tenant_id', '2', true)").length > 0);
+  assert.ok(validarSQL("SELECT set_config ('app.current_tenant_id', '2', true)").length > 0);
+});
+test('rejeita SET/RESET (role ou GUC) — mutação de contexto por outro caminho', () => {
+  assert.ok(validarSQL('SELECT 1 WHERE 1=1 SET ROLE admin').length > 0);
+  assert.ok(validarSQL('SELECT 1 RESET ALL').length > 0);
+  assert.ok(validarSQL('SELECT 1 SET SESSION AUTHORIZATION DEFAULT').length > 0);
+});
+test('SET/RESET não dá falso-positivo em identificador comum (ex.: "settings", "reset_em")', () => {
+  assert.deepEqual(validarSQL('SELECT settings, reset_em FROM t'), []);
+});
 test('rejeita acesso a catálogo do sistema', () => {
   assert.ok(validarSQL('SELECT * FROM information_schema.tables').length > 0);
   assert.ok(validarSQL('SELECT * FROM pg_catalog.pg_roles').length > 0);

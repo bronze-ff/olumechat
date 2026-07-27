@@ -13,6 +13,7 @@
 'use strict';
 
 const db = require('../db/pool');
+const { nomesBinds } = require('../db/sql');
 const engine = require('./engine');
 const { sendText } = require('../graph/sendText');
 const { publish } = require('../realtime/hub');
@@ -55,6 +56,29 @@ async function carregar(conn, tenantId, conversaId) {
   };
 }
 
+/** Roda `fn` isolado num SAVEPOINT: se falhar, ROLLBACK TO SAVEPOINT recupera
+    só o que fn tentou fazer, sem deixar a TRANSAÇÃO INTEIRA abortada (Postgres
+    rejeita qualquer comando seguinte com 25P02 até um ROLLBACK). Usado nos
+    pontos onde uma falha isolada (SQL livre do admin, config ainda não
+    portada) precisa seguir um caminho alternativo em vez de derrubar tudo que
+    `aplicar()` ainda vai persistir na mesma transação. */
+let spSeq = 0;
+async function comSavepoint(conn, fn) {
+  const nome = `bot_sp_${spSeq++}`;
+  await conn.execute(`SAVEPOINT ${nome}`);
+  try {
+    const valor = await fn();
+    await conn.execute(`RELEASE SAVEPOINT ${nome}`);
+    return { ok: true, valor };
+  } catch (erro) {
+    try {
+      await conn.execute(`ROLLBACK TO SAVEPOINT ${nome}`);
+      await conn.execute(`RELEASE SAVEPOINT ${nome}`);
+    } catch { /* pior caso: a transação segue abortada — o erro original já explica por quê */ }
+    return { ok: false, erro };
+  }
+}
+
 /** Envia e persiste as mensagens do bot. */
 async function enviarMensagens(conn, cv, mensagens) {
   for (const txt of mensagens) {
@@ -89,23 +113,32 @@ async function auditarConversa(conn, conversaId, acao) {
   } catch (e) { console.error('[bot] auditar conversa falhou:', e.message); }
 }
 
-/** Aplica o resultado do engine: estado, transferência ou encerramento. */
+/** Aplica o resultado do engine: estado, transferência ou encerramento.
+    Devolve uma lista de efeitos PÓS-COMMIT (publish/distribuidor.atribuir) —
+    quem chama só os dispara depois que comTenant() confirmar a transação,
+    senão outra conexão (SSE, distribuidor) pode reagir a um estado que ainda
+    não está visível fora desta transação. */
 async function aplicar(conn, tenantId, cv, resultado) {
   await enviarMensagens(conn, cv, resultado.mensagens);
+  const posCommit = [];
 
   if (resultado.acao && resultado.acao.tipo === 'transferir') {
     const dep = resultado.acao.departamentoId;
     // Handoff pra HUMANO fora do horário: o bot self-service roda 24/7, mas ao
     // passar pra fila avisa que o time está fora do expediente — senão o cliente
-    // fica esperando achando que vão responder na hora. Isolado: não derruba o transfer.
-    try {
+    // fica esperando achando que vão responder na hora. Isolado num SAVEPOINT:
+    // falha aqui (ex.: lerConfig ainda mira a tabela antiga — porte é o FIL-66,
+    // PR #3 em andamento; TODO adaptar para lerConfig(tenantId, conn) no rebase
+    // pós-merge) não pode abortar a transação inteira nem derrubar o transfer.
+    const { ok: cfgOk, erro: cfgErro } = await comSavepoint(conn, async () => {
       const cfg = await lerConfig(conn);
       const fora = foraDeHorario(cfg, new Date());
       if (fora && String(cfg.fora_horario_msg || '').trim()) {
         await enviarMensagens(conn, cv, [String(cfg.fora_horario_msg).trim()]);
       }
       if (fora) await auditarConversa(conn, cv.conversaId, 'fila_fora_horario');
-    } catch (e) { console.error('[bot] aviso de fora de horário no transfer falhou:', e.message); }
+    });
+    if (!cfgOk) console.error('[bot] aviso de fora de horário no transfer falhou:', cfgErro.message);
     // Nota interna com o que o bot capturou (contexto pro atendente).
     const vars = resultado.estado.variaveis || {};
     const resumo = Object.keys(vars).length
@@ -127,10 +160,12 @@ async function aplicar(conn, tenantId, cv, resultado) {
     if (presence.onlineDoDepto(dep).length === 0) {
       await auditarConversa(conn, cv.conversaId, 'fila_sem_agentes');
     }
-    publish({ tipo: 'fila', conversaId: cv.conversaId, departamentoId: dep, protocolo: cv.protocolo });
-    publish({ tipo: 'mensagem', direcao: 'out', conversaId: cv.conversaId, departamentoId: dep });
-    distribuidor.atribuir(dep);
-    return;
+    posCommit.push(() => {
+      publish({ tipo: 'fila', conversaId: cv.conversaId, departamentoId: dep, protocolo: cv.protocolo, tenantId });
+      publish({ tipo: 'mensagem', direcao: 'out', conversaId: cv.conversaId, departamentoId: dep, tenantId });
+      distribuidor.atribuir(dep);
+    });
+    return posCommit;
   }
 
   if (resultado.acao && resultado.acao.tipo === 'encerrar') {
@@ -141,8 +176,8 @@ async function aplicar(conn, tenantId, cv, resultado) {
         WHERE id = :id AND fila_status = 'bot' AND tenant_id = :tid`,
       { id: cv.conversaId, tid: tenantId }
     );
-    publish({ tipo: 'conversa', conversaId: cv.conversaId, departamentoId: null });
-    return;
+    posCommit.push(() => publish({ tipo: 'conversa', conversaId: cv.conversaId, departamentoId: null, tenantId }));
+    return posCommit;
   }
 
   // Continua no bot: persiste o novo estado.
@@ -159,7 +194,8 @@ async function aplicar(conn, tenantId, cv, resultado) {
       tid: tenantId,
     }
   );
-  publish({ tipo: 'mensagem', direcao: 'out', conversaId: cv.conversaId, departamentoId: null });
+  posCommit.push(() => publish({ tipo: 'mensagem', direcao: 'out', conversaId: cv.conversaId, departamentoId: null, tenantId }));
+  return posCommit;
 }
 
 /**
@@ -167,7 +203,9 @@ async function aplicar(conn, tenantId, cv, resultado) {
  * capturadas (:codigo_rca etc). Devolve { encontrado, vars } — as colunas da
  * 1ª linha viram variáveis em minúsculas (ex.: {{nome}}).
  * Erro de SQL é tratado como "não encontrado" (o fluxo segue o caminho de
- * falha em vez de travar o cliente), com log alto pro admin corrigir.
+ * falha em vez de travar o cliente), com log alto pro admin corrigir. Roda
+ * num SAVEPOINT: SQL malformado do admin não pode abortar a transação (o
+ * `aplicar()` seguinte ainda precisa persistir estado/mensagens).
  * `conn` já está dentro de um comTenant() do chamador — a RLS confina o SELECT
  * livre do admin ao tenant corrente mesmo sem filtro explícito na query dele.
  */
@@ -178,25 +216,25 @@ async function executarConsulta(conn, no, variaveis) {
     return { encontrado: false, vars: {} };
   }
   const binds = {};
-  for (const m of sql.matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)/g)) {
-    const nome = m[1];
-    if (!(nome in binds)) binds[nome] = variaveis[nome] !== undefined ? String(variaveis[nome]) : null;
+  // Reusa a varredura de db/sql.js (ciente de string/comentário/:: de cast) —
+  // uma regex própria confundiria ":codigo::int" com um bind chamado "int".
+  for (const nome of nomesBinds(sql)) {
+    binds[nome] = variaveis[nome] !== undefined ? String(variaveis[nome]) : null;
   }
-  try {
-    const r = await conn.execute(sql, binds);
-    if (!r.rows || !r.rows.length) return { encontrado: false, vars: {} };
-    const vars = {};
-    for (const [col, val] of Object.entries(r.rows[0])) {
-      if (val !== null && val !== undefined) vars[col.toLowerCase()] = String(val);
-    }
-    return { encontrado: true, vars };
-  } catch (err) {
+  const { ok, valor: r, erro } = await comSavepoint(conn, () => conn.execute(sql, binds));
+  if (!ok) {
     // Em produção, erro de SQL segue o caminho de "não encontrado" (não trava o
     // cliente). O `erro` é devolvido pra o SIMULADOR exibir ao admin — erro de
     // sintaxe, nome de tabela errado, etc. ficam óbvios no teste.
-    console.error(`[bot] consulta "${no.id}" falhou (seguindo caminho de não-encontrado):`, err.message);
-    return { encontrado: false, vars: {}, erro: err.message };
+    console.error(`[bot] consulta "${no.id}" falhou (seguindo caminho de não-encontrado):`, erro.message);
+    return { encontrado: false, vars: {}, erro: erro.message };
   }
+  if (!r.rows || !r.rows.length) return { encontrado: false, vars: {} };
+  const vars = {};
+  for (const [col, val] of Object.entries(r.rows[0])) {
+    if (val !== null && val !== undefined) vars[col.toLowerCase()] = String(val);
+  }
+  return { encontrado: true, vars };
 }
 
 /** Resolve ações intermediárias em cadeia (máx. 5): consultas ao banco e saltos
@@ -246,16 +284,23 @@ async function resolverConsultas(conn, tenantId, cv, resultado) {
 }
 
 async function executar(tenantId, conversaId, fn) {
+  let posCommit = [];
   try {
     await db.comTenant(tenantId, async (conn) => {
       const cv = await carregar(conn, tenantId, conversaId);
       if (!cv) return;
       let resultado = fn(cv);
       resultado = await resolverConsultas(conn, tenantId, cv, resultado);
-      await aplicar(conn, tenantId, cv, resultado);
+      posCommit = await aplicar(conn, tenantId, cv, resultado);
     });
   } catch (err) {
     console.error(`[bot] erro na conversa ${conversaId} (tenant ${tenantId}):`, err.message);
+    return;
+  }
+  // Só dispara SSE/distribuidor depois que a transação acima confirmou —
+  // antes disso o estado novo não é visível pra nenhuma outra conexão.
+  for (const efeito of posCommit) {
+    try { efeito(); } catch (e) { console.error(`[bot] efeito pós-commit falhou (conversa ${conversaId}):`, e.message); }
   }
 }
 

@@ -33,12 +33,25 @@ async function tenantsAtivos() {
   }
 }
 
+const TIMEOUT_MIN_PADRAO = 30;
+
+/** `config.timeoutMin` vem de um JSON editado pelo admin — pode faltar, vir
+    como texto não numérico ou zero/negativo. Um `(...)::int` na query quebra
+    a query INTEIRA na primeira linha malformada (Postgres avalia a expressão
+    por linha; erro de cast aborta o SELECT todo, não só aquela linha) — o que
+    derrubaria o sweep do tenant inteiro por causa de UM fluxo mal editado.
+    Por isso o cast é feito aqui, defensivo, nunca em SQL. */
+function timeoutMinDe(definicao) {
+  const bruto = definicao && definicao.config ? definicao.config.timeoutMin : undefined;
+  const n = Number(bruto);
+  return Number.isFinite(n) && n > 0 ? n : TIMEOUT_MIN_PADRAO;
+}
+
 /** Verifica os fluxos parados além do timeout para UM tenant e dispara o expirar. */
 async function varrerTenant(tenantId) {
   const expirados = await db.comTenant(tenantId, async (conn) => {
     const r = await conn.execute(
-      `SELECT c.id,
-              COALESCE((f.definicao -> 'config' ->> 'timeoutMin')::int, 30) AS timeout_min,
+      `SELECT c.id, f.definicao,
               EXTRACT(EPOCH FROM (now() - c.bot_ultima_interacao)) / 60 AS parada_min
          FROM conversa c
          JOIN fluxo f ON f.id = c.bot_fluxo_id
@@ -47,7 +60,7 @@ async function varrerTenant(tenantId) {
       { tid: tenantId }
     );
     return r.rows
-      .filter((row) => Number(row.PARADA_MIN) >= Number(row.TIMEOUT_MIN))
+      .filter((row) => Number(row.PARADA_MIN) >= timeoutMinDe(row.DEFINICAO))
       .map((row) => row.ID);
   });
   for (const id of expirados) runtime.expirar(tenantId, id); // async, isolado

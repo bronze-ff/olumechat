@@ -160,4 +160,62 @@ function traduzir(sql, binds = {}) {
   return { text: saida, values, outNames };
 }
 
-module.exports = { traduzir, tipos };
+/**
+ * Devolve só os NOMES de bind `:nome` usados de fato em `sql`, na ordem da
+ * primeira aparição — mesma varredura ciente de string/identificador/
+ * comentário/`::`/`:=` de `traduzir()` (`::` de cast e `:=` NUNCA são bind).
+ * Existe pra quem precisa dos nomes ANTES de ter os valores prontos (ex.:
+ * bot/runtime.js monta os binds de um SQL livre a partir das variáveis
+ * capturadas) — uma regex `/:nome/` própria erraria em "WHERE id = :x::int"
+ * (o "::int" vira um bind fantasma chamado "int").
+ * @param {string} sql
+ * @returns {string[]}
+ */
+function nomesBinds(sql) {
+  if (typeof sql !== 'string' || !sql.trim()) throw new Error('nomesBinds: SQL vazio');
+  const ordem = [];
+  const vistos = new Set();
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const ch = sql[i];
+    const prox = sql[i + 1];
+
+    if (ch === "'") {
+      let j = i + 1;
+      while (j < n) {
+        if (sql[j] === "'" && sql[j + 1] === "'") { j += 2; continue; }
+        if (sql[j] === "'") { j++; break; }
+        j++;
+      }
+      i = j; continue;
+    }
+    if (ch === '"') {
+      let j = sql.indexOf('"', i + 1);
+      j = j === -1 ? n : j + 1;
+      i = j; continue;
+    }
+    if (ch === '-' && prox === '-') {
+      let j = sql.indexOf('\n', i);
+      j = j === -1 ? n : j;
+      i = j; continue;
+    }
+    if (ch === '/' && prox === '*') {
+      let j = sql.indexOf('*/', i + 2);
+      j = j === -1 ? n : j + 2;
+      i = j; continue;
+    }
+    if (ch === ':' && (prox === ':' || prox === '=')) { i += 2; continue; }
+    if (ch === ':' && /[a-zA-Z_]/.test(prox || '')) {
+      let j = i + 1;
+      while (j < n && /[a-zA-Z0-9_$]/.test(sql[j])) j++;
+      const nome = sql.slice(i + 1, j);
+      if (!vistos.has(nome)) { vistos.add(nome); ordem.push(nome); }
+      i = j; continue;
+    }
+    i++;
+  }
+  return ordem;
+}
+
+module.exports = { traduzir, tipos, nomesBinds };

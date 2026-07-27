@@ -23,8 +23,16 @@ function validarSQL(sqlRaw) {
   // statements). Um ";" que só existisse dentro de um comentário não conta.
   if (sql.includes(';')) erros.push('O SQL não pode conter ";".');
   if (/\bia_config\b/i.test(sql)) erros.push('Tabela protegida não permitida.');
-  if (/\b(pg_sleep|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|dblink|lo_import|lo_export|pg_terminate_backend|pg_cancel_backend)\b/i.test(sql)) {
+  if (/\b(pg_sleep|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|dblink|lo_import|lo_export|pg_terminate_backend|pg_cancel_backend)\b\s*\(/i.test(sql)) {
     erros.push('Função não autorizada.');
+  }
+  // set_config() muda app.current_tenant_id NA MESMA transação — um SUPERVISOR
+  // poderia ler dado de outro tenant contornando a RLS sem nunca sair do
+  // comTenant() corrente. SET/RESET (role, GUC de sessão) é a mesma classe de
+  // ataque por outro caminho. Nenhum SELECT legítimo do nó 'consulta' precisa
+  // desses comandos — bloqueio total, não só dentro de chamada de função.
+  if (/\bset_config\b/i.test(sql) || /(?:^|[^a-z0-9_])(set|reset)\b/i.test(sql)) {
+    erros.push('Comando de sessão/contexto não autorizado.');
   }
   if (/\b(pg_catalog|information_schema)\b/i.test(sql)) erros.push('Catálogo do sistema não permitido.');
   return erros;

@@ -22,6 +22,9 @@ const assert = require('node:assert');
 
 const db = require('../db/pool');
 const presence = require('../realtime/presence');
+const hub = require('../realtime/hub');
+const distribuidor = require('../fila/distribuidor');
+const { invalidar: invalidarConfigCache } = require('../utils/configCache');
 const runtime = require('../bot/runtime');
 
 const TENANT_ID = 1;
@@ -36,6 +39,41 @@ const FLUXO_DEF = {
     { id: 'fim', tipo: 'encerrar', texto: 'Tchau!' },
   ],
 };
+
+const FLUXO_CONSULTA_RUIM = {
+  config: { inicio: 'valida', maxInvalidas: 3 },
+  nos: [
+    { id: 'valida', tipo: 'consulta', sql: 'SELECT nome FROM tabela_que_nao_existe',
+      seEncontrado: 'ok', seNaoEncontrado: 'nao_achou' },
+    { id: 'ok', tipo: 'mensagem', texto: 'Achei!', proximo: 'fim' },
+    { id: 'nao_achou', tipo: 'mensagem', texto: 'Não achei, mas seguimos.', proximo: 'fim' },
+    { id: 'fim', tipo: 'encerrar', texto: 'Tchau!' },
+  ],
+};
+
+/** Fake conn que simula a semântica real do Postgres: uma vez que um comando
+    falha dentro da transação, TODO comando seguinte é recusado com 25P02 até
+    um ROLLBACK (ou ROLLBACK TO SAVEPOINT) — é o que prova que o SAVEPOINT de
+    runtime.js de fato isola a falha em vez de só engolir a exceção em JS. */
+function fakeConnComAbort(handler) {
+  let abortado = false;
+  return {
+    async execute(sql, binds) {
+      if (/^SAVEPOINT/i.test(sql)) return { rows: [] };
+      if (/^RELEASE SAVEPOINT/i.test(sql)) { abortado = false; return { rows: [] }; }
+      if (/^ROLLBACK TO SAVEPOINT/i.test(sql)) { abortado = false; return { rows: [] }; }
+      if (abortado) {
+        const e = new Error('current transaction is aborted, commands ignored until end of transaction block');
+        e.code = '25P02';
+        throw e;
+      }
+      const resultado = handler(sql, binds);
+      if (resultado && resultado.__abortarAPartirDaqui) { abortado = true; throw resultado.erro; }
+      return resultado || { rows: [] };
+    },
+    commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+}
 
 /** Fake conn no nível "já wrapped" — o mesmo formato que db.getConnection()
     devolve de verdade (chaves MAIÚSCULAS, jsonb já parseado). comTenant()
@@ -135,4 +173,85 @@ test('iniciarFluxo: tenantId inválido não chega a abrir conexão nem a enviar 
 
   assert.equal(getConnectionChamado, false, 'comTenant deve validar tenantId antes de abrir a conexão');
   assert.equal(chamouFetch, false);
+});
+
+test('executarConsulta: erro de SQL isola em SAVEPOINT — não aborta o resto da transação', async () => {
+  presence._reset();
+  const capturas = [];
+  const enviados = [];
+  global.fetch = async (url, opts) => {
+    enviados.push(JSON.parse(opts.body));
+    return { ok: true, json: async () => ({ messages: [{ id: 'wamid.Q' + enviados.length }] }) };
+  };
+  const conn = fakeConnComAbort((sql, binds) => {
+    capturas.push({ sql, binds });
+    if (sql.includes('FROM conversa')) {
+      return {
+        rows: [{
+          ID: 77, CONTATO_ID: 3, NUMERO_ID: 2, FILA_STATUS: 'bot', PROTOCOLO: '260610100099',
+          BOT_FLUXO_ID: 10, BOT_NO_ATUAL: null, BOT_VARIAVEIS: null, BOT_INVALIDAS: 0,
+          TELEFONE: '5562999990000', NOME_PERFIL: 'Cliente', PHONE_NUMBER_ID: '1112223334',
+          DEFINICAO: FLUXO_CONSULTA_RUIM,
+        }],
+      };
+    }
+    if (sql.includes('tabela_que_nao_existe')) {
+      return { __abortarAPartirDaqui: true, erro: new Error('relation "tabela_que_nao_existe" does not exist') };
+    }
+    return { rows: [], rowsAffected: 1 };
+  });
+  db.getConnection = async () => conn;
+
+  await runtime.iniciarFluxo(TENANT_ID, 77);
+  await aguardar();
+
+  // Se o SAVEPOINT não isolasse a falha, a transação seguiria abortada e NENHUMA
+  // destas duas operações (enviar as mensagens, encerrar a conversa) teria êxito.
+  assert.equal(enviados.length, 2, 'consulta falhou mas o fluxo seguiu seNaoEncontrado e enviou as mensagens');
+  assert.equal(enviados[0].text.body, 'Não achei, mas seguimos.');
+  assert.equal(enviados[1].text.body, 'Tchau!');
+  const encerrou = capturas.find((c) => c.sql.includes(`status = 'resolvida'`) && c.sql.startsWith('UPDATE'));
+  assert.ok(encerrou, 'o encerramento deve persistir mesmo após a consulta falhar');
+});
+
+test('aplicar: publish/distribuidor.atribuir só depois do commit, e o evento carrega tenantId', async () => {
+  presence._reset();
+  const eventosDaConversa = [];
+  const cancelar = hub.subscribe((evt) => { if (evt.conversaId === 88) eventosDaConversa.push(evt); });
+  const atribuirOriginal = distribuidor.atribuir;
+  const ordem = [];
+  distribuidor.atribuir = () => { ordem.push('atribuir'); };
+  global.fetch = async (url, opts) => ({ ok: true, json: async () => ({ messages: [{ id: 'wamid.o' }] }) });
+  const conn = {
+    async execute(sql) {
+      if (sql.includes('FROM conversa')) {
+        return {
+          rows: [{
+            ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, FILA_STATUS: 'bot', PROTOCOLO: '260610100077',
+            BOT_FLUXO_ID: 9, BOT_NO_ATUAL: 'menu', BOT_VARIAVEIS: {}, BOT_INVALIDAS: 0,
+            TELEFONE: '5562999990000', NOME_PERFIL: 'Cliente', PHONE_NUMBER_ID: '1112223334',
+            DEFINICAO: FLUXO_DEF,
+          }],
+        };
+      }
+      return { rows: [], rowsAffected: 1 };
+    },
+    commit: async () => { ordem.push('commit'); },
+    rollback: async () => {}, close: async () => {},
+  };
+  db.getConnection = async () => conn;
+  try {
+    await runtime.processarEntrada(TENANT_ID, 88, '1');
+    await aguardar();
+
+    assert.deepEqual(ordem, ['commit', 'atribuir'], 'atribuir só pode rodar depois do commit');
+    assert.ok(eventosDaConversa.length >= 2, 'deve publicar fila + mensagem');
+    assert.ok(
+      eventosDaConversa.every((e) => e.tenantId === TENANT_ID),
+      'todo evento publicado pelo bot precisa do tenantId (gate SSE do FIL-64 é fail-closed)'
+    );
+  } finally {
+    cancelar();
+    distribuidor.atribuir = atribuirOriginal;
+  }
 });
