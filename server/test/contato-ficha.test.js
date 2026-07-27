@@ -71,13 +71,12 @@ test('dadosClienteWinthor: sem provedor ou sem código → null', async () => {
 
 // ---------- API /api/contatos (integração leve) ----------
 
-function fakeConn({ contato = { ID: 5, TELEFONE: '5562999990000', NOME_PERFIL: null, NOME_INTERNO: null, CODCLI: null, CGCENT: null, OBSERVACOES: null, TAGS_CONTATO: null, ATUALIZADO_EM: null, ATUALIZADO_POR_NOME: null }, cap = {} } = {}) {
+function fakeConn({ contato = { ID: 5, TELEFONE: '5562999990000', NOME_PERFIL: null, NOME_INTERNO: null, CODIGO_EXTERNO: null, DOCUMENTO: null, OBSERVACOES: null, TAGS_CONTATO: null, ATUALIZADO_EM: null, ATUALIZADO_POR_NOME: null }, cap = {} } = {}) {
   return {
     async execute(sql, binds) {
-      if (sql.includes('FROM MC_ZAP_CONTATO ct')) return { rows: contato ? [contato] : [] };
-      if (sql.startsWith('UPDATE MC_ZAP_CONTATO')) { cap.update = binds; return { rowsAffected: 1 }; }
-      if (sql.includes('INSERT INTO MC_ZAP_AUDITORIA')) { cap.audit = binds; return {}; }
-      if (sql.includes('FROM MCCANAL.PCCLIENT')) return { rows: [] }; // sugestão vazia
+      if (sql.includes('FROM contato ct')) return { rows: contato ? [contato] : [] };
+      if (sql.startsWith('UPDATE contato')) { cap.update = binds; return { rowsAffected: 1 }; }
+      if (sql.includes('INSERT INTO auditoria')) { cap.audit = binds; return {}; }
       return { rows: [], outBinds: {} };
     },
     commit: async () => {}, rollback: async () => {}, close: async () => {},
@@ -88,7 +87,7 @@ function app(conn, perfil = { atendenteId: 9, papel: 'ADMIN', deptoIds: [], nume
   db.getConnection = async () => conn;
   const a = express();
   a.use(express.json());
-  a.use('/api/contatos', (req, res, next) => { req.perfil = perfil; req.user = { matricula: 123 }; next(); }, contatosRoutes);
+  a.use('/api/contatos', (req, res, next) => { req.perfil = perfil; req.user = { matricula: 123 }; req.tenantId = 1; next(); }, contatosRoutes);
   // eslint-disable-next-line no-unused-vars
   a.use((err, req, res, next) => res.status(500).json({ error: err.message }));
   return new Promise((resolve) => { const s = a.listen(0, () => resolve({ server: s, port: s.address().port })); });
@@ -108,9 +107,9 @@ test('PUT /contatos/:id persiste nome interno + grava auditoria', async () => {
   const cap = {};
   const { server, port } = await app(fakeConn({ cap }));
   try {
-    const r = await req(port, 'PUT', '/api/contatos/5', { nomeInterno: 'Padaria do João', codcli: 1234, tags: [1, 2] });
+    const r = await req(port, 'PUT', '/api/contatos/5', { nomeInterno: 'Padaria do João', codigoExterno: 1234, tags: [1, 2] });
     assert.equal(r.status, 200);
-    assert.equal(cap.update.cod.val, 1234);        // CODCLI bindado como número
+    assert.equal(cap.update.cod.val, 1234);        // codigo_externo bindado como número
     assert.equal(cap.update.tags, '[1,2]');         // tags viram JSON
     assert.equal(cap.audit.ENTIDADE ?? 'contato', 'contato');
     assert.match(String(cap.audit.det), /Padaria do João/);

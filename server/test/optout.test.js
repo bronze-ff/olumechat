@@ -34,18 +34,18 @@ test('registrarOpt: optout atualiza contato e grava auditoria', async () => {
   const sqls = [];
   const conn = { async execute(sql, binds) { sqls.push({ sql, binds }); return {}; } };
   await registrarOpt(conn, { contatoId: 5, telefone: '5562999990000', acao: 'optout', origem: 'whatsapp_inbound' });
-  assert.match(sqls[0].sql, /UPDATE MC_ZAP_CONTATO SET OPTIN = 'N'/);
+  assert.match(sqls[0].sql, /UPDATE contato SET optin = 'N'/);
   assert.equal(sqls[0].binds.id, 5);
-  assert.match(sqls[1].sql, /INSERT INTO MC_ZAP_AUDITORIA/);
+  assert.match(sqls[1].sql, /INSERT INTO auditoria/);
   assert.equal(sqls[1].binds.acao, 'optout');
   assert.match(sqls[1].binds.det, /5562999990000/);
 });
 
-test('registrarOpt: optin marca OPTIN=S com origem', async () => {
+test('registrarOpt: optin marca optin=S com origem', async () => {
   const sqls = [];
   const conn = { async execute(sql, binds) { sqls.push({ sql, binds }); return {}; } };
   await registrarOpt(conn, { contatoId: 9, telefone: '5562988887777', acao: 'optin', origem: 'whatsapp_inbound' });
-  assert.match(sqls[0].sql, /OPTIN = 'S'/);
+  assert.match(sqls[0].sql, /optin = 'S'/);
   assert.equal(sqls[0].binds.o, 'whatsapp_inbound');
   assert.equal(sqls[1].binds.acao, 'optin');
 });

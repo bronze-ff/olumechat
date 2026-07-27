@@ -1,6 +1,6 @@
 // api/midia.js — Serve o binário de uma mídia recebida (auth obrigatória).
 // O webhook já baixou o arquivo para o servidor de arquivos (MEDIA_DIR) e
-// gravou o caminho em MC_ZAP_MENSAGEM.MIDIA_CAMINHO. Aqui apenas transmitimos
+// gravou o caminho em mensagem.midia_caminho. Aqui apenas transmitimos
 // o arquivo, validando que o caminho está DENTRO do MEDIA_DIR (anti path-traversal).
 const express = require('express');
 const fs = require('fs');
@@ -15,23 +15,23 @@ router.get('/:id', async (req, res, next) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
 
-  let conn;
   try {
-    conn = await db.getConnection();
-    // Escopo: traz o departamento/número/atendente da conversa da mensagem para
-    // validar que o usuário pode ver esta mídia (fecha IDOR — antes qualquer
-    // atendente baixava anexos de qualquer conversa iterando o ID).
-    const r = await conn.execute(
-      `SELECT m.MIDIA_CAMINHO, m.MIME_TYPE, m.NOME_ARQUIVO,
-              c.DEPARTAMENTO_ID, c.NUMERO_ID, c.ATENDENTE_ID
-         FROM MC_ZAP_MENSAGEM m
-         LEFT JOIN MC_ZAP_CONVERSA c ON c.ID = m.CONVERSA_ID
-        WHERE m.ID = :id`,
-      { id }
-    );
-    if (!r.rows.length) return res.status(404).json({ error: 'Mensagem não encontrada' });
+    const row = await db.comTenant(req.tenantId, async (conn) => {
+      // Escopo: traz o departamento/número/atendente da conversa da mensagem para
+      // validar que o usuário pode ver esta mídia (fecha IDOR — antes qualquer
+      // atendente baixava anexos de qualquer conversa iterando o ID).
+      const r = await conn.execute(
+        `SELECT m.midia_caminho, m.mime_type, m.nome_arquivo,
+                c.departamento_id, c.numero_id, c.atendente_id
+           FROM mensagem m
+           LEFT JOIN conversa c ON c.tenant_id = m.tenant_id AND c.id = m.conversa_id
+          WHERE m.id = :id`,
+        { id }
+      );
+      return r.rows.length ? r.rows[0] : null;
+    });
+    if (!row) return res.status(404).json({ error: 'Mensagem não encontrada' });
 
-    const row = r.rows[0];
     const perfil = req.perfil;
     if (perfil && perfil.papel !== 'ADMIN' && perfil.papel !== 'AUDITOR') {
       const ehMinha = perfil.atendenteId && row.ATENDENTE_ID === perfil.atendenteId;
@@ -66,8 +66,6 @@ router.get('/:id', async (req, res, next) => {
     stream.pipe(res);
   } catch (err) {
     next(err);
-  } finally {
-    if (conn) await conn.close().catch(() => {});
   }
 });
 

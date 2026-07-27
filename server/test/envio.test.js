@@ -28,10 +28,10 @@ function fakeConn({ janelaExpiraEm }) {
     async execute(sql, binds) {
       executed.push({ sql, binds });
       // Guard de escopo (conversaNoEscopo): devolve a conversa p/ a checagem.
-      if (sql.includes('SELECT ID, DEPARTAMENTO_ID, NUMERO_ID, ATENDENTE_ID')) {
+      if (sql.includes('SELECT id, departamento_id, numero_id, atendente_id')) {
         return { rows: [{ ID: 7, DEPARTAMENTO_ID: null, NUMERO_ID: 2, ATENDENTE_ID: null }] };
       }
-      if (sql.includes('FROM MC_ZAP_CONVERSA c')) {
+      if (sql.includes('FROM conversa c')) {
         return {
           rows: [{
             ID: 7, CONTATO_ID: 3, NUMERO_ID: 2, JANELA_EXPIRA_EM: janelaExpiraEm,
@@ -39,8 +39,8 @@ function fakeConn({ janelaExpiraEm }) {
           }],
         };
       }
-      if (sql.includes('FROM MC_ZAP_ATENDENTE')) return { rows: [{ ID: 9 }] };
-      if (sql.startsWith('INSERT INTO MC_ZAP_MENSAGEM')) return { outBinds: { id: [42] } };
+      if (sql.includes('FROM atendente')) return { rows: [{ ID: 9 }] };
+      if (sql.startsWith('INSERT INTO mensagem')) return { outBinds: { id: [42] } };
       return { rows: [] };
     },
     async commit() {},
@@ -53,7 +53,7 @@ function startApp(conn) {
   db.getConnection = async () => conn; // monkey-patch (mesma instância de módulo)
   const app = express();
   app.use('/api', express.json());
-  app.use('/api/conversas', authMiddleware, conversasRoutes);
+  app.use('/api/conversas', authMiddleware, (req, res, next) => { req.tenantId = 1; next(); }, conversasRoutes);
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
   return new Promise((resolve) => {
@@ -101,7 +101,7 @@ test('envio: janela ABERTA → envia pelo número da conversa e persiste (201)',
     // Enviou pelo número DA CONVERSA (multi-número), não pelo default:
     assert.match(captured.url, /\/5550009999\/messages$/);
     // Persistiu a saída:
-    assert.ok(conn.executed.some((e) => e.sql.startsWith('INSERT INTO MC_ZAP_MENSAGEM')));
+    assert.ok(conn.executed.some((e) => e.sql.startsWith('INSERT INTO mensagem')));
   } finally { server.close(); }
 });
 

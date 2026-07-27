@@ -36,15 +36,15 @@ function fakeConn({ deptoDoNumero = null, conversaExistente = null, capturas = [
     capturas,
     async execute(sql, binds) {
       capturas.push({ sql, binds });
-      if (sql.includes('FROM MC_ZAP_NUMERO')) {
-        return { rows: [{ ID: 2, DEPARTAMENTO_PADRAO_ID: deptoDoNumero, FLUXO_ID: null }] };
+      if (sql.includes('FROM numero')) {
+        return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: deptoDoNumero, MODO: 'padrao', FLUXO_ID: null }] };
       }
       if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
-      if (sql.includes('FROM MC_ZAP_CONVERSA')) {
+      if (sql.includes('FROM conversa')) {
         return { rows: conversaExistente ? [conversaExistente] : [] };
       }
       if (sql.includes('MC_ZAP_SEQ_PROTOCOLO')) return { rows: [{ P: '260610100042' }] };
-      if (sql.startsWith('INSERT INTO MC_ZAP_CONVERSA')) return { outBinds: { id: [70] } };
+      if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [70] } };
       return { rows: [], outBinds: {}, rowsAffected: 1 };
     },
     commit: async () => {}, rollback: async () => {}, close: async () => {},
@@ -61,11 +61,11 @@ test('conversa NOVA em número COM depto → entra na fila com protocolo + event
   await processPayload(payloadInbound());
   off();
 
-  const insConversa = capturas.find((c) => c.sql.startsWith('INSERT INTO MC_ZAP_CONVERSA'));
+  const insConversa = capturas.find((c) => c.sql.startsWith('INSERT INTO conversa'));
   assert.equal(insConversa.binds.fst, 'aguardando');
   assert.equal(insConversa.binds.dep, 4);
   assert.equal(insConversa.binds.prot, '260610100042');
-  assert.match(insConversa.sql, /SYSTIMESTAMP/); // FILA_ENTROU_EM
+  assert.match(insConversa.sql, /now\(\)/); // fila_entrou_em
 
   const fila = eventos.find((e) => e.tipo === 'fila');
   assert.equal(fila.departamentoId, 4);
@@ -82,7 +82,7 @@ test('conversa NOVA em número SEM depto → em_atendimento, sem protocolo nem e
   await processPayload(payloadInbound());
   off();
 
-  const ins = capturas.find((c) => c.sql.startsWith('INSERT INTO MC_ZAP_CONVERSA'));
+  const ins = capturas.find((c) => c.sql.startsWith('INSERT INTO conversa'));
   assert.equal(ins.binds.fst, 'em_atendimento');
   assert.equal(ins.binds.prot, null);
   assert.equal(eventos.some((e) => e.tipo === 'fila'), false);
@@ -99,9 +99,9 @@ test('REGRESSÃO: renovar janela de conversa existente NÃO toca FILA_STATUS', a
 
   await processPayload(payloadInbound());
 
-  const upd = capturas.find((c) => c.sql.startsWith('UPDATE MC_ZAP_CONVERSA'));
+  const upd = capturas.find((c) => c.sql.startsWith('UPDATE conversa'));
   assert.ok(upd, 'deve renovar a conversa existente');
-  assert.equal(/FILA_STATUS/.test(upd.sql), false);   // não mexe no ciclo do atendimento
-  assert.equal(/PROTOCOLO/.test(upd.sql), false);     // não gera protocolo novo
-  assert.equal(capturas.some((c) => c.sql.startsWith('INSERT INTO MC_ZAP_CONVERSA')), false);
+  assert.equal(/fila_status/.test(upd.sql), false);   // não mexe no ciclo do atendimento
+  assert.equal(/protocolo/.test(upd.sql), false);     // não gera protocolo novo
+  assert.equal(capturas.some((c) => c.sql.startsWith('INSERT INTO conversa')), false);
 });
