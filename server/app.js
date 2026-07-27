@@ -75,6 +75,10 @@ app.use('/api', express.json({ limit: '1mb' }));
 const presencaRoutes = require('./api/presenca');
 
 app.use('/api/auth', authRoutes);
+// Painel do OPERADOR (FIL-70) — fora do RBAC de tenant: prefixo, middleware e
+// sessão próprios. NÃO passa por authMiddleware/anexarPerfil de propósito;
+// quem autentica é operador/middleware.js, com outro segredo de JWT.
+app.use('/api/operador', require('./operador/routes'));
 app.use('/api/stream', streamRoutes); // SSE: o próprio router controla a auth (ticket)
 app.use('/api/conversas', authMiddleware, anexarPerfil, conversasRoutes);
 app.use('/api/contatos', authMiddleware, anexarPerfil, require('./api/contatos'));

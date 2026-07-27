@@ -98,11 +98,37 @@ Caminhos:
 
 ## Onda 3 — o que o SaaS exige e o fork não tem
 
-### 3.1 Painel do operador (super-admin)
+### 3.1 Painel do operador (super-admin) — ✅ feito (FIL-70)
 
-Fora do RBAC do tenant. Libera acesso a novos clientes, provisiona tenant,
-acompanha uso/licença. Hoje não existe — o RBAC atual só conhece papéis
-*dentro* de uma empresa.
+Fora do RBAC do tenant, em `/api/operador/*` (server/operador/) e `/operador`
+(front): provisiona tenant (empresa + primeiro ADMIN + convite de senha, numa
+transação só), suspende, reativa, renomeia, lista o uso por cliente e abre
+sessão de suporte dentro de um tenant. Sessão separada da do cliente —
+segredo de JWT próprio (`OPERADOR_JWT_SECRET`), claim `escopo: 'operador'` e
+middleware que devolve **403** a um JWT de tenant, inclusive de `ADMIN`.
+
+⚠️ **Este painel ignora a RLS por natureza.** Ele não usa `comTenant()`: usa
+`comOperador()` (`server/operador/db.js`), que roda com o contexto de tenant
+explicitamente NULO — o mesmo "system path" do tick do dispatcher. Dentro dele
+não há rede de segurança: toda query nomeia `tenant_id`. As tabelas `operador`
+e `operador_auditoria` não são tabelas de tenant e são fechadas para o role
+`falatta_app` (REVOKE + policy `USING (false)`, migração 005).
+
+A sessão de suporte é **somente-leitura imposto no middleware de tenant**
+(`auth/middleware.js`), não papel por papel: token com `suporte: true` só passa
+em método de leitura, fora uma allowlist mínima (`/api/auth/logout`,
+`/api/stream/ticket`). O papel `AUDITOR` continua valendo para o escopo de
+leitura, mas não é ele que segura a porta — havia mutação sem guarda de papel
+(`POST /api/atalhos`, `PUT /api/presenca`), e rota nova nasceria igual.
+
+Suspender um tenant reusa `tenant.status`, que o resto do sistema já
+consultava: bloqueia o login (`auth/routes.js::resolverTenant` só resolve slug
+de tenant `ativo`) e pausa os disparos (`campanha/dispatcher.js` só acorda
+campanha de tenant `ativo`). Sessão de tenant já emitida continua valendo até
+expirar — o middleware de tenant não vai ao banco por requisição.
+
+Ainda fora: envio de e-mail do convite (o link volta na resposta da API) e
+seeds por tenant no provisionamento (departamento padrão, textos de config).
 
 ### 3.2 Onboarding Meta via Embedded Signup
 

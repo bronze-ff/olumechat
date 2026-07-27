@@ -99,12 +99,34 @@ function invalidar(matricula) {
   }
 }
 
+/**
+ * Perfil de uma SESSÃO DE SUPORTE do operador (FIL-70). Não vem do banco e
+ * não cria `atendente`: o operador não é funcionário do cliente e não pode
+ * aparecer como autor de mensagem nem entrar na fila.
+ *
+ * AUDITOR = o papel somente-leitura que já existe: enxerga tudo do tenant
+ * (é o ponto do acesso de suporte: diagnosticar) e é barrado nas mutações
+ * (api/conversas.js e api/contatos.js recusam AUDITOR; as rotas de cadastro
+ * exigem ADMIN). `atendenteId: null` é tratado pelos filtros de escopo, que
+ * só o usam quando presente.
+ */
+const PERFIL_SUPORTE = Object.freeze({
+  atendenteId: null, papel: 'AUDITOR', ativo: true,
+  deptoIds: [], numeroIds: [], pausado: false, podeAtivo: false, suporte: true,
+});
+
 /** Middleware: anexa req.perfil. Depende do authMiddleware ter setado req.user
  *  com tenantId e matricula — ambos vêm do JWT emitido pelo login próprio
  *  (FIL-67), e o middleware já rejeita token sem tenantId. A checagem aqui é
  *  defesa em profundidade para quem montar a cadeia de middlewares errada. */
 async function anexarPerfil(req, res, next) {
   try {
+    // Sessão de suporte: tenant explicitamente selecionado no painel do
+    // operador, sem matrícula (não há usuário do cliente por trás dela).
+    if (req.user && req.user.tenantId && req.user.suporte === true) {
+      req.perfil = PERFIL_SUPORTE;
+      return next();
+    }
     if (!req.user || !req.user.matricula || !req.user.tenantId) {
       return res.status(401).json({ error: 'Não autenticado' });
     }
@@ -129,4 +151,4 @@ function exigirPapel(...papeis) {
   };
 }
 
-module.exports = { carregarPerfil, invalidar, anexarPerfil, exigirPapel, PAPEIS };
+module.exports = { carregarPerfil, invalidar, anexarPerfil, exigirPapel, PAPEIS, PERFIL_SUPORTE };

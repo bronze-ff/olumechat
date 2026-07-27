@@ -8,7 +8,8 @@
     "dev": "nodemon app.js",
     "test": "node --test",
     "test-send": "node scripts/testSend.js",
-    "migrar": "node scripts/migrar.js"
+    "migrar": "node scripts/migrar.js",
+    "criar-operador": "node scripts/criar-operador.js"
   },
   "engines": {
     "node": ">=18"

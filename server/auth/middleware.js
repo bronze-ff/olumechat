@@ -18,6 +18,17 @@
 // rbac). Este middleware alimenta AS DUAS com o mesmo valor — corrigir os
 // módulos um a um seria mexer em arquivo de outro ticket, e uma divergência
 // entre as duas seria justamente um buraco de isolamento.
+//
+//  3. SESSÃO DE SUPORTE É SOMENTE-LEITURA, E ISSO É DECIDIDO AQUI (FIL-70).
+//     O operador entra num tenant com um token marcado `suporte: true`. Dar a
+//     ele o papel AUDITOR não basta: AUDITOR só é barrado nas rotas que se
+//     lembram de checar (`exigirPapel`, o guarda `naoAuditor` de conversas e
+//     contatos) — e várias mutações não checam nada (POST/DELETE
+//     /api/atalhos, PUT /api/presenca). Uma promessa de "somente-leitura" que
+//     depende de cada rota lembrar é uma promessa quebrada na próxima rota
+//     nova. Então o bloqueio é AQUI, no único ponto por onde toda rota de
+//     tenant passa, e é FAIL-CLOSED: qualquer método que não seja de leitura
+//     morre na porta, salvo uma allowlist mínima de plumbing de sessão.
 'use strict';
 
 const jwt = require('jsonwebtoken');
@@ -28,6 +39,32 @@ const { SECRET } = require('./secret');
 function tenantValido(v) {
   const n = Number(v);
   return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+const METODOS_DE_LEITURA = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+// Únicos não-GET liberados para a sessão de suporte. Não tocam dado do tenant:
+//  • /api/auth/logout   — encerrar a própria sessão precisa continuar possível;
+//  • /api/stream/ticket — emite um ticket EM MEMÓRIA (auth/sseTicket.js) para
+//    abrir o SSE; sem ele o operador diagnostica um inbox congelado.
+// Qualquer coisa fora desta lista é 403. Acrescentar algo aqui é decisão de
+// segurança, não conveniência.
+const SUPORTE_LIBERADOS = new Set(['/api/auth/logout', '/api/stream/ticket']);
+
+/** Caminho da requisição sem query string e sem barra final. */
+function caminhoDaRequisicao(req) {
+  const bruto = String(req.originalUrl || req.url || '').split('?')[0];
+  return bruto.length > 1 ? bruto.replace(/\/+$/, '') : bruto;
+}
+
+/**
+ * A requisição é permitida para uma sessão de suporte do operador?
+ * Exportada para teste — a regra é curta, mas é a que sustenta a promessa de
+ * "o operador diagnostica, não mexe".
+ */
+function leituraDeSuporte(req) {
+  if (METODOS_DE_LEITURA.has(req.method)) return true;
+  return SUPORTE_LIBERADOS.has(caminhoDaRequisicao(req));
 }
 
 module.exports = function auth(req, res, next) {
@@ -58,7 +95,18 @@ module.exports = function auth(req, res, next) {
     return res.status(401).json({ error: 'Token inválido' });
   }
 
+  // Sessão de suporte do operador: só leitura, decidido antes de qualquer
+  // rota rodar (ver ponto 3 no cabeçalho).
+  if (decoded.suporte === true && !leituraDeSuporte(req)) {
+    return res.status(403).json({
+      error: 'Sessão de suporte é somente-leitura. Peça ao cliente para executar a ação, ou use o painel do operador.',
+    });
+  }
+
   req.user = { ...decoded, tenantId };
   req.tenantId = tenantId;
   next();
 };
+
+module.exports.leituraDeSuporte = leituraDeSuporte; // uso em teste
+module.exports.SUPORTE_LIBERADOS = SUPORTE_LIBERADOS;

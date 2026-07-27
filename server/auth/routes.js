@@ -271,6 +271,17 @@ router.post('/logout', auth, (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/perfil', auth, async (req, res, next) => {
   try {
+    // Sessão de suporte do operador (FIL-70) não tem matrícula — não é gente
+    // do cliente. Mandá-la para carregarPerfil faria o RBAC criar um
+    // `atendente` lazy com matrícula nula (500 no reload da página). Mesmo
+    // perfil fixo que auth/rbac.js::anexarPerfil já dá às rotas REST.
+    if (req.user.suporte === true) {
+      const s = rbac.PERFIL_SUPORTE;
+      return res.json({
+        papel: s.papel, deptoIds: s.deptoIds, atendenteId: s.atendenteId,
+        pausado: s.pausado, podeAtivo: s.podeAtivo, suporte: true,
+      });
+    }
     const p = await rbac.carregarPerfil(req.user.tenantId, req.user.matricula, req.user.nome);
     res.json({
       papel: p.papel, deptoIds: p.deptoIds, atendenteId: p.atendenteId,
