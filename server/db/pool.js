@@ -66,18 +66,43 @@ types.setTypeParser(types.builtins.NUMERIC, (v) => (v === null ? null : Number(v
 
 let pool = null;
 
-/** Cria o pool. DATABASE_URL = connection string POOLED do Neon (PgBouncer). */
+/**
+ * Cria o pool e VERIFICA que o banco responde.
+ * DATABASE_URL = connection string POOLED do Neon (PgBouncer).
+ *
+ * `new Pool()` não conecta — só guarda a configuração. Sem o `SELECT 1` daqui,
+ * uma DATABASE_URL errada passaria batido no boot: o `/health` ficaria verde e
+ * o webhook responderia 200 à Meta sem conseguir persistir o evento. Falhar no
+ * boot é o comportamento certo — quem sobe o serviço vê o erro na hora.
+ *
+ * DB_SKIP_HEALTHCHECK=1 pula a verificação. Existe para cenário de teste que
+ * precise de um pool sem banco atrás; NÃO use em produção (é justamente a
+ * checagem que impede subir apontando para o lugar errado).
+ */
 async function initPool() {
   if (pool) return pool;
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('[db] DATABASE_URL não definida (connection string pooled do Neon)');
-  pool = new Pool({
+  const novo = new Pool({
     connectionString: url,
     max: Number(process.env.DB_POOL_MAX) || 10,
     idleTimeoutMillis: 60_000,
     connectionTimeoutMillis: 30_000,
   });
-  pool.on('error', (err) => console.error('[db] erro em conexão ociosa do pool:', err.message));
+  novo.on('error', (err) => console.error('[db] erro em conexão ociosa do pool:', err.message));
+
+  if (process.env.DB_SKIP_HEALTHCHECK !== '1') {
+    try {
+      const client = await novo.connect();
+      try { await client.query('SELECT 1'); } finally { client.release(); }
+    } catch (err) {
+      // Não deixa o pool meio-criado para trás: um retry precisa começar limpo.
+      await novo.end().catch(() => {});
+      throw new Error(`[db] não foi possível conectar ao Postgres: ${err.message}`);
+    }
+  }
+
+  pool = novo;
   console.log('[db] Pool Postgres inicializado');
   return pool;
 }
