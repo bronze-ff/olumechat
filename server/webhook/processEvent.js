@@ -24,6 +24,7 @@ const { lerConfig } = require('../utils/configCache');
 const { acharContato, variantes, normalizar: normTel } = require('../utils/telefone');
 const { acharClientePorTelefone } = require('../utils/clienteLookup');
 const { foraDeHorario } = require('../utils/horario');
+const { iaAtivaNoInstante } = require('../ia/ativacao');
 const { descreverMensagem } = require('../utils/descreverMensagem');
 const { gerarProtocolo } = require('../fila/protocolo');
 const distribuidor = require('../fila/distribuidor');
@@ -48,7 +49,8 @@ async function resolverNumero(phoneNumberId) {
   const conn = await db.getConnection();
   try {
     const r = await conn.execute(
-      `SELECT n.id, n.tenant_id, n.departamento_padrao_id, n.modo, f.id AS fluxo_id
+      `SELECT n.id, n.tenant_id, n.departamento_padrao_id, n.modo, n.ia_regra, n.ia_modo_teste,
+              f.id AS fluxo_id
          FROM numero n
          LEFT JOIN fluxo f ON f.tenant_id = n.tenant_id AND f.numero_id = n.id AND f.ativo = 'S'
         WHERE n.phone_number_id = :p`,
@@ -62,6 +64,9 @@ async function resolverNumero(phoneNumberId) {
       departamentoPadraoId: row.DEPARTAMENTO_PADRAO_ID || null,
       fluxoAtivoId: row.FLUXO_ID || null,
       modo: row.MODO || 'padrao',
+      // FIL-84: a ativação da IA deixou de ser só o `modo` — ver ia/ativacao.js.
+      iaRegra: row.IA_REGRA || 'sempre',
+      iaModoTeste: row.IA_MODO_TESTE || 'S',
     };
   } finally {
     await conn.close().catch(() => {});
@@ -181,9 +186,11 @@ async function migrarNumeroContato(conn, { telefoneAntigo, telefoneNovo }) {
  * IMPORTANTE: a RENOVAÇÃO nunca toca FILA_STATUS/DEPARTAMENTO (ciclo de vida do
  * atendimento é ortogonal à janela). Conversa NOVA entra na fila do
  * departamento padrão do número (se houver) com protocolo gerado.
+ * @param {boolean} iaAtiva FIL-84 — a IA cobre ESTE canal NESTE instante?
+ *   (ia/ativacao.js: depende da regra de horário, não só de numero.modo)
  * @returns {Promise<{id, criada, departamentoId, protocolo}>}
  */
-async function openOrRenewConversa(conn, contatoId, numero, ts) {
+async function openOrRenewConversa(conn, contatoId, numero, ts, iaAtiva) {
   const expira = new Date(ts.getTime() + 24 * 60 * 60 * 1000);
 
   // Uma conversa por CONTATO + NÚMERO: o mesmo cliente falando no 1061 e no 1090
@@ -213,18 +220,18 @@ async function openOrRenewConversa(conn, contatoId, numero, ts) {
     };
   }
 
-  // Conversa nova: número em MODO='ia' → bot de IA; senão, número com FLUXO
-  // ativo → autoatendimento (bot determinístico); senão, com depto padrão →
-  // fila (aguardando); senão → inbox geral.
+  // Conversa nova: IA ativa NESTE instante (modo + regra de horário) → bot de
+  // IA; senão, número com FLUXO ativo → autoatendimento (bot determinístico);
+  // senão, com depto padrão → fila (aguardando); senão → inbox geral.
   let fluxoId, departamentoId, filaStatus;
-  if (numero.modo === 'ia') {
+  if (iaAtiva) {
     fluxoId = null; departamentoId = null; filaStatus = 'ia';
   } else {
     fluxoId = numero.fluxoAtivoId || null;
     departamentoId = fluxoId ? null : (numero.departamentoPadraoId || null);
     filaStatus = fluxoId ? 'bot' : (departamentoId ? 'aguardando' : 'em_atendimento');
   }
-  const protocolo = (fluxoId || departamentoId || numero.modo === 'ia') ? await gerarProtocolo(conn) : null;
+  const protocolo = (fluxoId || departamentoId || iaAtiva) ? await gerarProtocolo(conn) : null;
 
   const ins = await conn.execute(
     `INSERT INTO conversa
@@ -475,7 +482,14 @@ async function processChange(conn, numero, value) {
       waId: contact.wa_id,
       nome: contact.profile && contact.profile.name,
     });
-    const conversa = await openOrRenewConversa(conn, contatoId, numero, ts);
+    // FIL-84: a IA cobre este canal NESTE instante? A regra 'fora_horario' lê o
+    // expediente já configurado do tenant (lerConfig tem cache de 60s, então
+    // não é uma ida ao banco por mensagem).
+    let iaAtiva = numero.modo === 'ia';
+    if (iaAtiva && numero.iaRegra === 'fora_horario') {
+      iaAtiva = iaAtivaNoInstante(numero, await lerConfig(numero.tenantId, conn), ts);
+    }
+    const conversa = await openOrRenewConversa(conn, contatoId, numero, ts, iaAtiva);
     const conversaId = conversa.id;
     // Medição de consumo (FIL-76/FIL-77): conversa NOVA é evento cobrável —
     // achado de review, não tinha produtor nenhum antes.

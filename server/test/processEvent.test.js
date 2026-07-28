@@ -289,3 +289,88 @@ test('dispatch: "PARAR" em conversa bot registra opt-out, ENCERRA e NÃO aciona 
     runtime.processarEntrada = originalEntrada;
   }
 });
+
+// ---------------------------------------------------------------------------
+// FIL-84 — ativação da IA por canal, com regra de horário.
+//
+// Antes deste ticket, `modo='ia'` mandava TODA conversa nova para a IA, 24/7.
+// A regra 'fora_horario' existe para o caso real: a equipe atende no expediente
+// e a IA cobre a madrugada. A fonte de horário é o expediente já configurado do
+// tenant (zero config nova) — ver server/ia/ativacao.js.
+// ---------------------------------------------------------------------------
+function connCanalIa({ iaRegra = 'sempre', config = [], capturas = [] }) {
+  return {
+    capturas,
+    async execute(sql, binds) {
+      capturas.push({ sql, binds });
+      if (sql.includes('FROM numero n') && sql.includes('phone_number_id')) {
+        return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: 9, MODO: 'ia',
+          IA_REGRA: iaRegra, IA_MODO_TESTE: 'N', FLUXO_ID: null }] };
+      }
+      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (sql.includes('FROM conversa')) return { rows: [] }; // conversa NOVA
+      if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100042' }] };
+      if (sql.includes('FROM config')) return { rows: config };
+      if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [70] } };
+      return { rows: [], outBinds: {}, rowsAffected: 1 };
+    },
+    commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+}
+
+test('FIL-84: canal com IA "sempre" — conversa NOVA nasce em fila_status=ia', async () => {
+  presence._reset();
+  const capturas = [];
+  db.getConnection = async () => connCanalIa({ iaRegra: 'sempre', capturas });
+  require('../utils/configCache').invalidar();
+
+  await processPayload(payloadInbound());
+
+  const ins = capturas.find((c) => c.sql.startsWith('INSERT INTO conversa'));
+  assert.equal(ins.binds.fst, 'ia', 'conversa nova de canal com IA tem que nascer em fila_status=ia');
+  assert.equal(ins.binds.dep, null, 'conversa da IA não entra em departamento nenhum');
+});
+
+test('FIL-84: canal com IA "fora_horario" DENTRO do expediente segue o caminho normal (fila humana)', async () => {
+  presence._reset();
+  const capturas = [];
+  // Expediente que cobre TODOS os dias e todo o dia — assim o teste não depende
+  // do dia/hora em que a suíte roda.
+  const dias = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
+  const horario = Object.fromEntries(dias.map((d) => [d, { inicio: '00:00', fim: '23:59' }]));
+  db.getConnection = async () => connCanalIa({
+    iaRegra: 'fora_horario', capturas,
+    config: [
+      { CHAVE: 'fora_horario_ativo', VALOR: 'S' },
+      { CHAVE: 'horario_atendimento', VALOR: JSON.stringify(horario) },
+    ],
+  });
+  require('../utils/configCache').invalidar();
+
+  await processPayload(payloadInbound());
+
+  const ins = capturas.find((c) => c.sql.startsWith('INSERT INTO conversa'));
+  assert.equal(ins.binds.fst, 'aguardando', 'dentro do expediente a conversa vai para a fila humana');
+  assert.equal(ins.binds.dep, 9);
+  require('../utils/configCache').invalidar();
+});
+
+test('FIL-84: canal com IA "fora_horario" FORA do expediente vai para a IA', async () => {
+  presence._reset();
+  const capturas = [];
+  // Nenhum dia configurado ⇒ utils/horario trata como "não trabalha" = fora.
+  db.getConnection = async () => connCanalIa({
+    iaRegra: 'fora_horario', capturas,
+    config: [
+      { CHAVE: 'fora_horario_ativo', VALOR: 'S' },
+      { CHAVE: 'horario_atendimento', VALOR: '{}' },
+    ],
+  });
+  require('../utils/configCache').invalidar();
+
+  await processPayload(payloadInbound());
+
+  const ins = capturas.find((c) => c.sql.startsWith('INSERT INTO conversa'));
+  assert.equal(ins.binds.fst, 'ia');
+  require('../utils/configCache').invalidar();
+});
