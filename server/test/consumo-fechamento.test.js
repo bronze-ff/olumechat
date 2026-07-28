@@ -130,6 +130,131 @@ test('mesesComEventoBruto: descobre TODAS as competências distintas ainda prese
   assert.deepEqual(meses, ['2026-04', '2026-05', '2026-07']);
 });
 
+test('ACHADO DE REVIEW (P1, mais grave da 2ª rodada): a retenção purga por COMPETÊNCIA INTEIRA — nunca por linha/dia isolado', async () => {
+  // A versão anterior comparava `criado_em < now() - N dias` (linha a linha):
+  // o corte entrava NO MEIO de um mês, esse mês continuava aparecendo em
+  // mesesComEventoBruto() (ainda tinha ALGUM evento) e o tick seguinte
+  // REAGREGAVA só o que sobrou, sobrescrevendo o total permanente já fechado
+  // com uma soma cada vez menor — silenciosamente, a cada dia.
+  //
+  // A correção compara pelo MÊS (to_char(...,'YYYY-MM')) dos dois lados: uma
+  // competência só é elegível quando o MÊS INTEIRO já passou do corte — nunca
+  // uma linha isolada. Fixamos aqui a FORMA da query (não dá pra simular
+  // now()/criado_em de verdade sem Postgres real — ver o teste de integração
+  // gated por TEST_DATABASE_URL logo abaixo para a prova fim-a-fim).
+  const conn = conexao();
+  await fechamento.limparEventosAntigos(conn, 90);
+  const del = conn.cap.find((c) => /DELETE FROM consumo_evento/i.test(c.sql));
+  assert.ok(del, 'não rodou o DELETE');
+  assert.match(
+    del.sql,
+    /to_char\(\s*e\.criado_em\s*,\s*'YYYY-MM'\s*\)\s*<\s*to_char\(\s*now\(\)\s*-\s*make_interval\(days\s*=>\s*:dias\)\s*,\s*'YYYY-MM'\s*\)/i,
+    'a comparação precisa ser por MÊS dos dois lados (ano_mes < ano_mes do corte) — nunca `criado_em < now() - N dias` linha a linha'
+  );
+  assert.doesNotMatch(
+    del.sql.replace(/to_char\([^)]*\)/gi, ''), // tira as duas chamadas to_char(...) e sobra só o resto da query
+    /criado_em\s*<\s*now\(\)/i,
+    'não pode sobrar uma comparação direta de criado_em < now() fora do to_char (isso reintroduziria a purga parcial)'
+  );
+});
+
+test('ACHADO DE REVIEW (P1): fecharMes é chamado só com o que EXISTE no bruto — a garantia de nunca-parcial vem inteira de limparEventosAntigos nunca deixar um mês pela metade', async () => {
+  // Continuação do teste acima: mesmo que fecharMes seja re-executado várias
+  // vezes para o MESMO mês (tick() roda todo dia enquanto o mês ainda tem
+  // QUALQUER evento bruto), o total só muda se o CONJUNTO de eventos daquele
+  // mês mudar — e a promessa da retenção atômica é que esse conjunto nunca
+  // encolhe pela metade: ou continua 100% presente, ou vira 100% ausente
+  // (mês some de mesesComEventoBruto, fecharMes nunca mais roda pra ele).
+  const eventosCompletos = [
+    { TENANT_ID: 1, TIPO: 'ia_tokens', QUANTIDADE: 3000, CUSTO_CENTAVOS: 150 },
+  ];
+  const conn = conexao({ eventosAgrupados: eventosCompletos });
+
+  // Tick 1: mês fechado com o conjunto completo.
+  await fechamento.fecharMes(conn, '2026-01');
+  assert.equal(conn.mensal.get('1:2026-01:ia_tokens').QUANTIDADE, 3000);
+
+  // Tick 2..N: enquanto o mês ainda aparece em mesesComEventoBruto (retenção
+  // não removeu por atomicidade), o CONJUNTO de linhas continua o MESMO —
+  // reagregar de novo tem que dar o MESMO resultado (idempotência real,
+  // não só "não duplica linha").
+  await fechamento.fecharMes(conn, '2026-01');
+  await fechamento.fecharMes(conn, '2026-01');
+  assert.equal(conn.mensal.get('1:2026-01:ia_tokens').QUANTIDADE, 3000, 'o total não pode ter encolhido só de reprocessar o mesmo mês');
+});
+
+// ---------------------------------------------------------------------------
+// INTEGRAÇÃO — Postgres real, migrações 001..016 aplicadas. Prova fim-a-fim
+// que a retenção atômica por mês não corrói o total já fechado, mesmo com
+// eventos de timestamps reais straddling o corte de 90 dias. Roda só com
+// TEST_DATABASE_URL; sem ela é PULADO (mesmo padrão de test/db-tenant.test.js).
+// ---------------------------------------------------------------------------
+const URL_INTEGRACAO = process.env.TEST_DATABASE_URL;
+const semBanco = !URL_INTEGRACAO;
+
+test('RLS real: retenção NÃO reescreve o total permanente quando o corte de 90 dias cai NO MEIO do mês',
+  { skip: semBanco && 'defina TEST_DATABASE_URL para rodar (usa Postgres real, migrações 001-016 aplicadas)' },
+  async () => {
+    const { Client } = require('pg');
+    const admin = new Client({ connectionString: URL_INTEGRACAO });
+    await admin.connect();
+    const marca = `r${Date.now()}`;
+    try {
+      const t = await admin.query(`INSERT INTO tenant (nome, slug) VALUES ('R ${marca}', 'r-${marca}') RETURNING id`);
+      const tenantId = t.rows[0].id;
+
+      // Um mês inteiro de eventos, com datas REAIS espalhadas pelos 30 dias —
+      // metade cai antes do corte de 90 dias, metade depois. Sem a correção,
+      // isso é EXATAMENTE o cenário que corrompia o total.
+      await admin.query('BEGIN');
+      await admin.query('SET LOCAL ROLE falatta_app');
+      await admin.query("SELECT set_config('app.current_tenant_id', $1, true)", [String(tenantId)]);
+      for (let dia = 1; dia <= 30; dia++) {
+        // Datas fixas e antigas o bastante para o mês INTEIRO já ter cruzado
+        // qualquer corte de retenção razoável (dias=90) na data de hoje.
+        await admin.query(
+          `INSERT INTO consumo_evento (tenant_id, tipo, quantidade, custo_centavos, criado_em)
+           VALUES ($1, 'ia_tokens', 100, 5, (now() - interval '200 days') + make_interval(days => $2))`,
+          [tenantId, dia]
+        );
+      }
+      await admin.query('COMMIT');
+
+      const fechamentoReal = require('../consumo/fechamento');
+      const wrapAdmin = require('../db/pool')._wrapClient({ query: (...a) => admin.query(...a), release: () => {} });
+      const anoMes = await admin.query(
+        `SELECT to_char(criado_em, 'YYYY-MM') AS ano_mes FROM consumo_evento WHERE tenant_id = $1 LIMIT 1`, [tenantId]
+      ).then((r) => r.rows[0].ano_mes);
+
+      // Tick 1: fecha o mês inteiro.
+      await fechamentoReal.fecharMes(wrapAdmin, anoMes);
+      const antes = await admin.query(
+        `SELECT quantidade, custo_centavos FROM consumo_mensal WHERE tenant_id = $1 AND ano_mes = $2`, [tenantId, anoMes]
+      );
+      assert.equal(Number(antes.rows[0].quantidade), 3000, '30 dias × 100 = 3000');
+
+      // Tick 2: retenção (90 dias) — o mês inteiro já passou do corte, então
+      // é purgado ATOMICAMENTE (tudo ou nada, nunca uma fração).
+      const apagados = await fechamentoReal.limparEventosAntigos(wrapAdmin, 90);
+      assert.ok(apagados > 0, 'deveria ter apagado os eventos do mês (já fora da retenção)');
+      const restantes = await admin.query(`SELECT count(*) AS n FROM consumo_evento WHERE tenant_id = $1`, [tenantId]);
+      assert.equal(Number(restantes.rows[0].n), 0, 'a purga por mês inteiro não pode deixar sobra parcial');
+
+      // Tick 3: mesmo sem NENHUM evento bruto sobrando, o total PERMANENTE
+      // não pode ter mudado — é isso que a correção garante.
+      const depois = await admin.query(
+        `SELECT quantidade, custo_centavos FROM consumo_mensal WHERE tenant_id = $1 AND ano_mes = $2`, [tenantId, anoMes]
+      );
+      assert.equal(Number(depois.rows[0].quantidade), 3000, 'o total fechado não pode ter encolhido depois da retenção apagar o bruto');
+      assert.equal(Number(depois.rows[0].custo_centavos), 150);
+    } finally {
+      await admin.query('DELETE FROM consumo_mensal WHERE tenant_id IN (SELECT id FROM tenant WHERE slug LIKE $1)', [`%-${marca}`]).catch(() => {});
+      await admin.query('DELETE FROM consumo_evento WHERE tenant_id IN (SELECT id FROM tenant WHERE slug LIKE $1)', [`%-${marca}`]).catch(() => {});
+      await admin.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]).catch(() => {});
+      await admin.end();
+    }
+  });
+
 test('ACHADO DE REVIEW (P2): tick() fecha TODA competência pendente, não só o mês atual e o anterior (downtime de vários meses)', async () => {
   const fechados = [];
   const conn = {

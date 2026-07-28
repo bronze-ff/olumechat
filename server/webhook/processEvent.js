@@ -500,6 +500,12 @@ async function processChange(conn, numero, value) {
     // devolve false. NÃO reprocessa: senão a IA/bot responde de novo, há
     // dupla notificação SSE e opt-out/encerramento/rastro de campanha repetidos.
     if (!novoInbound) continue;
+    // Mede o armazenamento (FIL-77, achado de review P2) — só DEPOIS da
+    // deduplicação: um webhook reentregue não pode contar a mesma mídia duas
+    // vezes. `media` só existe quando safeDownload teve sucesso de verdade.
+    if (media && media.size) {
+      await consumo.registrar(conn, numero.tenantId, { tipo: 'midia_armazenada', quantidade: media.size, referencia: conversaId });
+    }
     // Conversa nova = possível resposta a um disparo de campanha → deixa o rastro.
     if (conversa.criada) {
       await anotarRespostaCampanha(conn, { conversaId, contatoId, telefone: msg.from });

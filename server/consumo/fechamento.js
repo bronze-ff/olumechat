@@ -7,6 +7,11 @@
 // TODOS os tenants numa passada só; cada query nomeia tenant_id explicitamente
 // (ver operador/db.js). Lock de liderança via advisory lock (workers/leaderLock)
 // contra disparo duplicado com mais de uma instância do processo.
+//
+// ⚠️ RETENÇÃO É POR COMPETÊNCIA INTEIRA, NUNCA POR LINHA (achado de review):
+// limparEventosAntigos() só apaga um `ano_mes` de uma vez, nunca parte dele —
+// ver o cabeçalho daquela função para o porquê (purga parcial reescrevia o
+// total permanente já fechado com uma soma cada vez menor).
 'use strict';
 
 const { comOperador } = require('../operador/db');
@@ -63,16 +68,34 @@ async function fecharMes(conn, anoMes) {
 }
 
 /**
- * Apaga eventos brutos com mais de `diasRetencao` dias — SÓ os que já têm um
- * fechamento correspondente em consumo_mensal (mesmo tenant_id + a
- * competência do evento). Nunca perde dado que ainda não virou agregado,
- * mesmo que o tick de fechamento tenha falhado ou atrasado.
+ * Apaga eventos brutos de competências (`ano_mes`) inteiras já fora da janela
+ * de retenção — SÓ as que já têm um fechamento correspondente em
+ * consumo_mensal. Nunca perde dado que ainda não virou agregado, mesmo que o
+ * tick de fechamento tenha falhado ou atrasado.
+ *
+ * ⚠️ Achado de review (P1, o mais grave desta rodada): a versão anterior
+ * apagava POR LINHA (`criado_em < now() - N dias`), então o corte de retenção
+ * entrava NO MEIO de um mês — alguns dias já purgados, outros ainda não. O
+ * tick seguinte via esse mês em mesesComEventoBruto() (ainda tinha ALGUM
+ * evento bruto), reagregava com o subconjunto PARCIAL sobrevivente e o UPSERT
+ * SUBSTITUÍA o total permanente já fechado por essa soma menor. Isso se
+ * repetia a cada tick, encolhendo o agregado de faturamento sozinho até
+ * sobrar só os últimos dias — silenciosamente, sem erro nenhum.
+ *
+ * Correção: purga por COMPETÊNCIA INTEIRA, atomicamente — uma linha de um mês
+ * só é elegível quando o MÊS INTEIRO já passou da retenção (nenhum evento
+ * daquele mês pode ainda estar "parcialmente dentro"). Efeito colateral
+ * aceito: a retenção efetiva de um evento varia entre `diasRetencao` (para um
+ * evento no fim do mês) e quase o dobro (para um evento no início do mês) —
+ * o ticket já falava em "~90 dias", não um corte exato por segundo; a troca
+ * é: nunca mais um mês fica PARCIALMENTE purgado, então nunca mais o
+ * agregado permanente é reescrito com menos do que já tinha.
  * @returns {Promise<number>} linhas apagadas
  */
 async function limparEventosAntigos(conn, diasRetencao = DIAS_RETENCAO_PADRAO) {
   const r = await conn.execute(
     `DELETE FROM consumo_evento e
-      WHERE e.criado_em < now() - make_interval(days => :dias)
+      WHERE to_char(e.criado_em, 'YYYY-MM') < to_char(now() - make_interval(days => :dias), 'YYYY-MM')
         AND EXISTS (
           SELECT 1 FROM consumo_mensal m
            WHERE m.tenant_id = e.tenant_id AND m.ano_mes = to_char(e.criado_em, 'YYYY-MM')
