@@ -211,9 +211,9 @@ function EditarNumero({ num, deptos, onClose }) {
             </select>
             {modo === 'ia' && (
               <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-1.5">
-                Neste modo, <b>só telefones autorizados</b> (aba "Acesso IA") são respondidos pelo bot;
-                os demais ficam <b>sem resposta</b>. Use um número <b>dedicado</b> — nunca a linha
-                principal de atendimento. Autorize os telefones no MESMO número.
+                Quem controla o comportamento da IA neste canal (quando ela atende e se está em
+                modo teste) é o <b>administrador do cliente</b>, no botão <b>Agente de IA</b> da
+                própria linha do canal.
               </p>
             )}
           </div>
@@ -236,6 +236,112 @@ function EditarNumero({ num, deptos, onClose }) {
         <div className="modal-footer">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Cancelar</button>
           <button onClick={() => salvar.mutate()} disabled={salvar.isPending}
+            className="flex-1 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
+            {salvar.isPending ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// FIL-84 — a parte de IA do canal é do ADMIN do cliente. O restante do cadastro
+// (Phone Number ID, filial, limite diário) continua sendo do operador em sessão
+// de suporte auditada — por isso este modal é separado do EditarNumero, e a rota
+// do backend também (PUT /api/numeros/:id/ia).
+function AgenteIaModal({ num, onClose }) {
+  const [ativo, setAtivo] = useState(num.modo === 'ia');
+  const [regra, setRegra] = useState(num.iaRegra || 'sempre');
+  const [modoTeste, setModoTeste] = useState((num.iaModoTeste || 'N') === 'S');
+  const [erro, setErro] = useState('');
+  const qc = useQueryClient();
+
+  // A regra "fora do horário" usa o MESMO expediente do aviso de fora-de-horário
+  // (Configurações). Sem ele ligado, o sistema não sabe o que é "fora" e a IA
+  // nunca assume — a tela precisa dizer isso, senão o admin liga a opção e acha
+  // que está quebrado.
+  const config = useQuery({
+    queryKey: ['config'],
+    queryFn: () => api.get('/config').then((r) => r.data),
+  });
+  const expedienteConfigurado = config.data?.fora_horario_ativo === 'S';
+
+  const salvar = useMutation({
+    mutationFn: () => api.put(`/numeros/${num.id}/ia`, { ativo, regra, modoTeste }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['numeros'] }); onClose(); },
+    onError: (e) => setErro(e.response?.data?.error || 'Falha ao salvar.'),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative w-full sm:max-w-md bg-white rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col">
+        <div className="navy-gradient text-white px-4 py-3 flex items-center gap-2">
+          <span className="section-bar" />
+          <h2 className="font-display font-bold text-base flex-1">Agente de IA neste canal</h2>
+          <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
+        </div>
+        <div className="modal-body space-y-4">
+          <p className="text-xs text-stone-500">
+            {formatPhone(num.displayPhone) || num.nomeExibicao || `Número #${num.id}`}
+          </p>
+
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input type="checkbox" checked={ativo} onChange={(e) => setAtivo(e.target.checked)}
+              className="w-4 h-4 mt-0.5 accent-brand-700" />
+            <span className="text-sm text-stone-700">
+              Atender com o agente de IA
+              <span className="block text-[11px] text-stone-400">
+                Conversas novas deste canal são respondidas pela IA. Ela transfere para a equipe
+                quando o cliente pedir ou quando não conseguir resolver.
+              </span>
+            </span>
+          </label>
+
+          {ativo && (
+            <>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Quando a IA atende</label>
+                <select className="input-field" value={regra} onChange={(e) => setRegra(e.target.value)}>
+                  <option value="sempre">Sempre — a IA atende 24 horas</option>
+                  <option value="fora_horario">Só fora do horário — a equipe atende no expediente</option>
+                </select>
+                {regra === 'fora_horario' && !expedienteConfigurado && (
+                  <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-1.5">
+                    O horário de atendimento ainda não está ligado em <b>Configurações</b>. Sem ele, o
+                    sistema não sabe o que é "fora do horário" e a IA <b>não vai assumir</b> nenhuma
+                    conversa. Configure o expediente antes de usar esta opção.
+                  </p>
+                )}
+              </div>
+
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input type="checkbox" checked={modoTeste} onChange={(e) => setModoTeste(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-brand-700" />
+                <span className="text-sm text-stone-700">
+                  Modo teste (só números autorizados)
+                  <span className="block text-[11px] text-stone-400">
+                    A IA responde apenas os telefones liberados em <b>Permissões da IA</b>; os demais
+                    recebem um aviso de canal restrito. Desmarque para atender qualquer cliente.
+                  </span>
+                </span>
+              </label>
+
+              {!modoTeste && (
+                <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                  Com o modo teste desligado, a IA passa a responder <b>qualquer pessoa</b> que
+                  escrever para este número. Revise as instruções e a base de conhecimento em
+                  <b> Agente de IA</b> antes.
+                </p>
+              )}
+            </>
+          )}
+
+          {erro && <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{erro}</div>}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Cancelar</button>
+          <button onClick={() => { setErro(''); salvar.mutate(); }} disabled={salvar.isPending}
             className="flex-1 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
             {salvar.isPending ? 'Salvando…' : 'Salvar'}
           </button>
@@ -325,6 +431,10 @@ export default function Numeros() {
   const [editando, setEditando] = useState(null);
   const [statusDe, setStatusDe] = useState(null);
   const [cadastrando, setCadastrando] = useState(false);
+  // FIL-84: ligar/desligar a IA do canal é do ADMIN do cliente — não depende de
+  // sessão de suporte do operador (o backend exige ADMIN em PUT /:id/ia).
+  const [iaDe, setIaDe] = useState(null);
+  const podeEditarIa = user?.papel === 'ADMIN';
 
   const numeros = useQuery({
     queryKey: ['numeros'],
@@ -398,7 +508,14 @@ export default function Numeros() {
                   {n.permiteAtivo !== 'N' ? '📣 permite ativa' : 'só receptivo'}
                 </span>
                 {n.modo === 'ia' && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-700">🤖 Bot IA</span>
+                  <>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-700">
+                      🤖 IA {n.iaRegra === 'fora_horario' ? '· fora do horário' : '· sempre'}
+                    </span>
+                    {n.iaModoTeste === 'S' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">modo teste</span>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -407,6 +524,13 @@ export default function Numeros() {
               title="Consultar nome/qualidade/verificação na Meta">
               Status Meta
             </button>
+            {podeEditarIa && (
+              <button onClick={() => setIaDe(n)}
+                className="text-xs px-3 py-1.5 rounded-lg border border-black/15 text-stone-600 hover:bg-paper-50 font-medium"
+                title="Ligar/desligar o agente de IA neste canal">
+                Agente de IA
+              </button>
+            )}
             {podeProvisionar && (
               <button onClick={() => setEditando(n)}
                 className="text-xs px-3 py-1.5 rounded-lg border border-black/15 text-stone-600 hover:bg-paper-50 font-medium">
@@ -422,6 +546,7 @@ export default function Numeros() {
       {editando && <Portal><EditarNumero num={editando} deptos={deptos.data} onClose={() => setEditando(null)} /></Portal>}
       {cadastrando && <Portal><CadastrarNumero deptos={deptos.data} onClose={() => setCadastrando(false)} /></Portal>}
       {statusDe && <Portal><StatusMeta num={statusDe} onClose={() => setStatusDe(null)} /></Portal>}
+      {iaDe && <Portal><AgenteIaModal num={iaDe} onClose={() => setIaDe(null)} /></Portal>}
     </div>
   );
 }
