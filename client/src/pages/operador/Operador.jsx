@@ -1,12 +1,13 @@
 import { useMemo, useState, useEffect } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiOperador, { CHAVE_TOKEN } from '../../services/apiOperador';
 import Spinner from '../../components/ui/Spinner';
 import Confirmar from '../../components/ui/Confirmar';
-import Brand from '../../components/ui/Brand';
 import Icon from '../../components/ui/Icon';
-import ThemeMenu from '../../components/ui/ThemeMenu';
+import OperadorShell from '../../components/layout/OperadorShell';
+import FichaFinanceiraModal from './FichaFinanceiraModal';
+import { SECOES, GRUPOS } from './nav';
 
 const STATUS = {
   ativo: { label: 'Ativo', className: 'bg-emerald-50 text-emerald-800 border-emerald-200', dot: 'bg-emerald-500' },
@@ -315,7 +316,7 @@ function IaModal({ tenant, onClose }) {
   );
 }
 
-function ClientList({ lista, tenants, renomeando, setRenomeando, renomear, setConfirmacao, suporte, alterarStatus, setIaModal }) {
+function ClientList({ lista, tenants, renomeando, setRenomeando, renomear, setConfirmacao, suporte, alterarStatus, setIaModal, setFichaFinanceira }) {
   return (
     <section className="app-panel overflow-hidden">
       <header className="px-5 py-4 flex flex-wrap items-center gap-3 border-b border-paper-300">
@@ -410,6 +411,13 @@ function ClientList({ lista, tenants, renomeando, setRenomeando, renomear, setCo
                 >
                   <Icon name="bot" size={15} />
                   IA
+                </button>
+                <button
+                  onClick={() => setFichaFinanceira(tenant)}
+                  className="min-h-9 px-3 rounded-lg border border-paper-400 bg-white text-stone-700 hover:border-brand-300 hover:text-brand-800 text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Icon name="chart" size={15} />
+                  Financeiro
                 </button>
                 {tenant.status === 'ativo' ? (
                   <button
@@ -511,6 +519,7 @@ export default function Operador({ secao = 'clientes' }) {
   const [renomeando, setRenomeando] = useState(null);
   const [filtroAuditoria, setFiltroAuditoria] = useState('');
   const [iaModal, setIaModal] = useState(null);
+  const [fichaFinanceira, setFichaFinanceira] = useState(null);
 
   const eu = useQuery({ queryKey: ['operador', 'eu'], queryFn: () => apiOperador.get('/eu').then((response) => response.data) });
   const tenants = useQuery({ queryKey: ['operador', 'tenants'], queryFn: () => apiOperador.get('/tenants').then((response) => response.data) });
@@ -578,220 +587,100 @@ export default function Operador({ secao = 'clientes' }) {
     conversas: lista.reduce((sum, tenant) => sum + (tenant.conversasMes || 0), 0),
   }), [lista]);
   const mensagens = useMemo(() => lista.reduce((sum, tenant) => sum + (tenant.mensagensMes || 0), 0), [lista]);
-  const inicial = (eu.data?.nome || eu.data?.email || '?').slice(0, 1).toUpperCase();
-  const secoes = [
-    { id: 'clientes', label: 'Clientes', descricao: 'Carteira e suporte', icon: 'building', to: '/operador/clientes', grupo: 'Carteira' },
-    { id: 'novo-cliente', label: 'Novo cliente', descricao: 'Provisionar empresa', icon: 'plus', to: '/operador/novo-cliente', grupo: 'Carteira' },
-    { id: 'auditoria', label: 'Auditoria', descricao: 'Atividade administrativa', icon: 'history', to: '/operador/auditoria', grupo: 'Governança' },
-  ];
-  const atual = secoes.find((item) => item.id === secao) || secoes[0];
+  const atual = SECOES.find((item) => item.id === secao) || SECOES[0];
+
+  const titulo = {
+    clientes: 'Carteira de clientes',
+    'novo-cliente': 'Cadastrar novo cliente',
+    auditoria: 'Auditoria',
+  }[secao];
+  const descricao = {
+    clientes: 'Acompanhe a carteira, o uso e os acessos de suporte de cada empresa.',
+    'novo-cliente': 'Crie a empresa e entregue ao administrador um acesso pronto para configuração.',
+    auditoria: 'Consulte a trilha das ações realizadas pela equipe de operações.',
+  }[secao];
+  const acao = secao === 'clientes' ? (
+    <Link to="/operador/novo-cliente" className="min-h-10 px-4 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold inline-flex items-center gap-2">
+      <Icon name="plus" size={17} />
+      Novo cliente
+    </Link>
+  ) : (
+    <Link to="/operador/clientes" className="min-h-10 px-4 rounded-lg border border-paper-400 bg-white hover:bg-paper-100 text-stone-700 text-sm font-semibold inline-flex items-center gap-2">
+      <Icon name="arrow" size={15} className="rotate-180" />
+      Voltar aos clientes
+    </Link>
+  );
 
   return (
-    <div className="admin-surface min-h-screen bg-paper-50 lg:flex">
-      <aside className="product-sidebar hidden lg:flex w-[264px] h-screen sticky top-0 self-start bg-ink-950 border-r border-white/10 flex-col shrink-0">
-        <div className="h-[72px] px-5 flex items-center border-b border-white/10">
-          <Brand inverse />
+    <OperadorShell
+      secoes={SECOES}
+      grupos={GRUPOS}
+      atual={atual}
+      eu={eu}
+      onSair={sair}
+      titulo={titulo}
+      descricao={descricao}
+      acao={acao}
+      erro={erro}
+      onFecharErro={() => setErro('')}
+    >
+      {secao === 'clientes' && (
+        <div className="space-y-5">
+          <Summary totais={totais} mensagens={mensagens} />
+          <ClientList
+            lista={lista}
+            tenants={tenants}
+            renomeando={renomeando}
+            setRenomeando={setRenomeando}
+            renomear={renomear}
+            setConfirmacao={setConfirmacao}
+            suporte={suporte}
+            alterarStatus={alterarStatus}
+            setIaModal={setIaModal}
+            setFichaFinanceira={setFichaFinanceira}
+          />
         </div>
+      )}
 
-        <div className="px-3 pt-4">
-          <div className="px-3 py-2.5 rounded-lg border border-white/10 bg-white/[0.05] flex items-center gap-2.5">
-            <span className="w-8 h-8 rounded-lg bg-brand-400 text-ink-950 flex items-center justify-center shrink-0">
-              <Icon name="pulse" size={15} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] text-white/45">Área interna Falatta</p>
-              <p className="text-[13px] font-semibold text-white truncate">Central de operações</p>
-            </div>
-            <span className="w-2 h-2 rounded-full bg-emerald-500" title="Ambiente operacional" />
-          </div>
-        </div>
-
-        <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Painel do operador">
-          {['Carteira', 'Governança'].map((grupo) => (
-            <div key={grupo} className="mt-5 first:mt-4">
-              <p className="px-2.5 mb-1.5 text-[10px] font-semibold text-white/40">{grupo}</p>
-              <div className="space-y-0.5">
-                {secoes.filter((item) => item.grupo === grupo).map((item) => (
-                  <NavLink
-                    key={item.id}
-                    to={item.to}
-                    aria-current={item.id === atual.id ? 'page' : undefined}
-                    className={({ isActive }) => `min-h-10 px-2.5 rounded-lg border flex items-center gap-2.5 text-[13px] font-medium ${
-                      isActive
-                        ? 'bg-brand-400/15 border-brand-400/20 text-brand-300'
-                        : 'border-transparent text-white/70 hover:bg-white/[0.07] hover:text-white'
-                    }`}
-                  >
-                    {({ isActive }) => (
-                      <>
-                        <Icon name={item.icon} size={16} className={isActive ? 'text-brand-300' : 'text-white/45'} />
-                        <span className="truncate">{item.label}</span>
-                      </>
-                    )}
-                  </NavLink>
+      {secao === 'novo-cliente' && (
+        <div className="space-y-5">
+          {convite && <Convite dados={convite} onFechar={() => setConvite(null)} />}
+          <div className="grid xl:grid-cols-[minmax(0,1fr)_320px] gap-5 items-start">
+            <Provisionamento form={form} setForm={setForm} podeProvisionar={podeProvisionar} provisionar={provisionar} />
+            <aside className="app-panel p-5 xl:sticky xl:top-20">
+              <h2 className="font-semibold text-ink-950">Como ativar uma empresa</h2>
+              <ol className="mt-4 space-y-4">
+                {[
+                  ['Cadastre a empresa', 'Informe o identificador e o primeiro administrador.'],
+                  ['Envie o convite', 'Copie o link único e encaminhe por um canal seguro.'],
+                  ['Conecte o WhatsApp', 'O administrador entra no painel e conclui a conexão com a Meta.'],
+                  ['Valide a operação', 'Confirme canais, atendentes e primeiro atendimento antes da entrega.'],
+                ].map(([title, text], index) => (
+                  <li key={title} className="flex gap-3">
+                    <span className="w-7 h-7 rounded-lg bg-paper-200 text-stone-700 flex items-center justify-center text-xs font-semibold shrink-0">{index + 1}</span>
+                    <div>
+                      <p className="text-xs font-semibold text-ink-950">{title}</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-stone-600">{text}</p>
+                    </div>
+                  </li>
                 ))}
-              </div>
-            </div>
-          ))}
-        </nav>
-
-        <div className="p-3 border-t border-white/10">
-          <div className="px-2 py-2 flex items-center gap-2.5">
-            <span className="w-8 h-8 rounded-full bg-white/[0.08] border border-white/10 text-white flex items-center justify-center text-xs font-semibold">{inicial}</span>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold text-white truncate">{eu.data?.nome || eu.data?.email || 'Operador'}</p>
-              <p className="text-[10px] text-white/45 truncate">{eu.data?.email}</p>
-            </div>
-            <button onClick={sair} className="w-9 h-9 rounded-lg flex items-center justify-center text-white/50 hover:bg-white/[0.08] hover:text-white" aria-label="Sair">
-              <Icon name="logout" size={17} />
-            </button>
-          </div>
-        </div>
-      </aside>
-
-      <div className="min-w-0 flex-1">
-        <header className="lg:hidden sticky top-0 z-30 bg-white border-b border-paper-300">
-          <div className="h-16 px-4 flex items-center gap-3">
-            <Brand compact />
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-ink-950 truncate">Central de operações</p>
-              <p className="text-[11px] text-stone-500 truncate">{atual.label}</p>
-            </div>
-            <ThemeMenu />
-            <button onClick={sair} className="w-10 h-10 rounded-lg flex items-center justify-center text-stone-500 hover:bg-paper-100 hover:text-ink-950" aria-label="Sair">
-              <Icon name="logout" />
-            </button>
-          </div>
-          <nav className="flex gap-1 px-3 pb-2 overflow-x-auto" aria-label="Seções do operador">
-            {secoes.map((item) => (
-              <NavLink
-                key={item.id}
-                to={item.to}
-                className={({ isActive }) => `shrink-0 min-h-9 px-3 rounded-lg border flex items-center gap-2 text-xs font-medium ${
-                  isActive
-                    ? 'bg-brand-50 border-brand-100 text-brand-800'
-                    : 'border-transparent text-stone-600 hover:bg-paper-100'
-                }`}
-              >
-                <Icon name={item.icon} size={15} />
-                {item.label}
-              </NavLink>
-            ))}
-          </nav>
-        </header>
-
-        <header className="hidden lg:flex h-[56px] px-6 items-center justify-between bg-white border-b border-paper-300 sticky top-0 z-20">
-          <div className="flex items-center gap-2 text-[13px]">
-            <span className="text-stone-500">Central de operações</span>
-            <Icon name="arrow" size={13} className="text-stone-400" />
-            <span className="text-stone-500">{atual.grupo}</span>
-            <Icon name="arrow" size={13} className="text-stone-400" />
-            <span className="font-semibold text-ink-950">{atual.label}</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-2 text-xs font-medium text-stone-600">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              Ambiente operacional
-            </span>
-            <ThemeMenu />
-          </div>
-        </header>
-
-        <main key={atual.id} className="px-4 py-5 md:px-6 lg:px-6 lg:py-5 animate-slide-up">
-          <div className="max-w-screen-2xl mx-auto">
-            <div className="page-heading">
-              <div>
-                <h1 className="page-title">
-                  {secao === 'clientes' && 'Carteira de clientes'}
-                  {secao === 'novo-cliente' && 'Cadastrar novo cliente'}
-                  {secao === 'auditoria' && 'Auditoria'}
-                </h1>
-                <p className="page-description">
-                  {secao === 'clientes' && 'Acompanhe a carteira, o uso e os acessos de suporte de cada empresa.'}
-                  {secao === 'novo-cliente' && 'Crie a empresa e entregue ao administrador um acesso pronto para configuração.'}
-                  {secao === 'auditoria' && 'Consulte a trilha das ações realizadas pela equipe de operações.'}
+              </ol>
+              <div className="mt-5 pt-4 border-t border-paper-300">
+                <p className="text-xs text-stone-600">
+                  O modo de implantação permite administrar toda a configuração do cliente sem criar o operador como atendente. A sessão é temporária e auditada.
                 </p>
               </div>
-              {secao === 'clientes' && (
-                <Link to="/operador/novo-cliente" className="min-h-10 px-4 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold inline-flex items-center gap-2">
-                  <Icon name="plus" size={17} />
-                  Novo cliente
-                </Link>
-              )}
-              {secao !== 'clientes' && (
-                <Link to="/operador/clientes" className="min-h-10 px-4 rounded-lg border border-paper-400 bg-white hover:bg-paper-100 text-stone-700 text-sm font-semibold inline-flex items-center gap-2">
-                  <Icon name="arrow" size={15} className="rotate-180" />
-                  Voltar aos clientes
-                </Link>
-              )}
-            </div>
-
-            {erro && (
-              <div className="mb-5 p-3.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 flex items-start gap-3" role="alert">
-                <Icon name="alert" size={18} className="mt-0.5 shrink-0" />
-                <span className="flex-1">{erro}</span>
-                <button onClick={() => setErro('')} className="font-semibold" aria-label="Fechar aviso">Fechar</button>
-              </div>
-            )}
-
-            {secao === 'clientes' && (
-              <div className="space-y-5">
-                <Summary totais={totais} mensagens={mensagens} />
-                <ClientList
-                  lista={lista}
-                  tenants={tenants}
-                  renomeando={renomeando}
-                  setRenomeando={setRenomeando}
-                  renomear={renomear}
-                  setConfirmacao={setConfirmacao}
-                  suporte={suporte}
-                  alterarStatus={alterarStatus}
-                  setIaModal={setIaModal}
-                />
-              </div>
-            )}
-
-            {secao === 'novo-cliente' && (
-              <div className="space-y-5">
-                {convite && <Convite dados={convite} onFechar={() => setConvite(null)} />}
-                <div className="grid xl:grid-cols-[minmax(0,1fr)_320px] gap-5 items-start">
-                  <Provisionamento form={form} setForm={setForm} podeProvisionar={podeProvisionar} provisionar={provisionar} />
-                  <aside className="app-panel p-5 xl:sticky xl:top-20">
-                    <h2 className="font-semibold text-ink-950">Como ativar uma empresa</h2>
-                    <ol className="mt-4 space-y-4">
-                      {[
-                        ['Cadastre a empresa', 'Informe o identificador e o primeiro administrador.'],
-                        ['Envie o convite', 'Copie o link único e encaminhe por um canal seguro.'],
-                        ['Conecte o WhatsApp', 'O administrador entra no painel e conclui a conexão com a Meta.'],
-                        ['Valide a operação', 'Confirme canais, atendentes e primeiro atendimento antes da entrega.'],
-                      ].map(([title, text], index) => (
-                        <li key={title} className="flex gap-3">
-                          <span className="w-7 h-7 rounded-lg bg-paper-200 text-stone-700 flex items-center justify-center text-xs font-semibold shrink-0">{index + 1}</span>
-                          <div>
-                            <p className="text-xs font-semibold text-ink-950">{title}</p>
-                            <p className="mt-0.5 text-xs leading-relaxed text-stone-600">{text}</p>
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
-                    <div className="mt-5 pt-4 border-t border-paper-300">
-                      <p className="text-xs text-stone-600">
-                        O modo de implantação permite administrar toda a configuração do cliente sem criar o operador como atendente. A sessão é temporária e auditada.
-                      </p>
-                    </div>
-                  </aside>
-                </div>
-              </div>
-            )}
-
-            {secao === 'auditoria' && (
-              <Audit auditoria={auditoria} filtro={filtroAuditoria} setFiltro={setFiltroAuditoria} lista={lista} />
-            )}
+            </aside>
           </div>
-        </main>
-      </div>
+        </div>
+      )}
+
+      {secao === 'auditoria' && (
+        <Audit auditoria={auditoria} filtro={filtroAuditoria} setFiltro={setFiltroAuditoria} lista={lista} />
+      )}
 
       {iaModal && <IaModal tenant={iaModal} onClose={() => setIaModal(null)} />}
+      {fichaFinanceira && <FichaFinanceiraModal tenant={fichaFinanceira} onClose={() => setFichaFinanceira(null)} />}
 
       {confirmacao && (
         <Confirmar
@@ -805,6 +694,6 @@ export default function Operador({ secao = 'clientes' }) {
           onCancelar={() => setConfirmacao(null)}
         />
       )}
-    </div>
+    </OperadorShell>
   );
 }
