@@ -791,7 +791,7 @@ function AtendimentoRail({ isGestor, suporte, user, secao, onSelect }) {
             </button>
           );
         })}
-        {(isGestor || suporte) && (
+        {(isGestor || suporte || user?.papel === 'AUDITOR') && (
           <Link
             to="/admin"
             title="Gestão"
@@ -848,6 +848,7 @@ const STATUS_HISTORICO = {
 };
 
 function MeuHistorico() {
+  const [busca, setBusca] = useState('');
   const [q, setQ] = useState('');
 
   useEffect(() => {
