@@ -199,3 +199,57 @@ test('compatibilidade: string continua valendo como entrada de texto', async () 
   const turno = conn._ins.find((i) => /INSERT INTO ia_turno/i.test(i.sql) && i.binds.papel === 'user');
   assert.equal(turno.binds.conteudo, 'oi');
 });
+
+// ---------------------------------------------------------------------------
+// FIL-84 — áudio de ponta a ponta.
+// ---------------------------------------------------------------------------
+test('áudio: transcreve, marca o turno e registra o consumo em segundos', async () => {
+  const conn = connComFila(['ia', 'ia']); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  client.chamar = async () => ({ texto: 'Já te mando a segunda via.', toolCalls: [] });
+
+  const stt = require('../ia/stt');
+  const original = stt.transcreverEntrada;
+  stt.transcreverEntrada = async () => ({ ok: true, texto: 'quero a segunda via do boleto', segundos: 7.4 });
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+
+  try {
+    await runtime.processarEntrada(TENANT, 88, {
+      tipo: 'audio', texto: '', midiaCaminho: '1/88/a.ogg', mime: 'audio/ogg', tamanho: 20000, tipoOriginal: 'audio',
+    });
+  } finally { stt.transcreverEntrada = original; }
+
+  const turno = conn._ins.find((i) => /INSERT INTO ia_turno/i.test(i.sql) && i.binds.papel === 'user');
+  assert.match(turno.binds.conteudo, /\[áudio transcrito\]/, 'a transcrição tem que ficar marcada no histórico');
+  assert.match(turno.binds.conteudo, /segunda via do boleto/);
+  assert.equal(turno.binds.cam, '1/88/a.ogg', 'o turno guarda o caminho, não os bytes');
+  const evtConsumo = conn._ins.find((i) => /INSERT INTO consumo_evento/i.test(i.sql) && i.binds.tipo === 'ia_audio_seg');
+  assert.ok(evtConsumo, 'o STT tem que ser medido');
+  assert.equal(evtConsumo.binds.qtd, 8, 'segundos arredondados para cima');
+  assert.ok(enviados.some((e) => /segunda via/i.test(e.text.body)), 'a IA responde normalmente');
+});
+
+test('áudio sem credencial OpenAI: pede texto e não chama o modelo de chat', async () => {
+  const conn = connComFila(['ia', 'ia']); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  let chamouChat = false; client.chamar = async () => { chamouChat = true; return { texto: 'x', toolCalls: [] }; };
+
+  const stt = require('../ia/stt');
+  const original = stt.transcreverEntrada;
+  stt.transcreverEntrada = async () => ({ ok: false, motivo: 'sem_credencial' });
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+
+  try {
+    await runtime.processarEntrada(TENANT, 88, {
+      tipo: 'audio', texto: '', midiaCaminho: '1/88/a.ogg', mime: 'audio/ogg', tamanho: 2000, tipoOriginal: 'audio',
+    });
+  } finally { stt.transcreverEntrada = original; }
+
+  assert.equal(chamouChat, false, 'sem transcrição não há o que perguntar ao modelo');
+  assert.equal(enviados.length, 1, 'nunca silêncio');
+  assert.match(enviados[0].text.body, /escrever/i);
+});

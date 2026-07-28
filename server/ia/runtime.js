@@ -24,6 +24,7 @@ const { partirTexto } = require('./chunk');
 const { publish } = require('../realtime/hub');
 const operacoes = require('./operacoes');
 const distribuidor = require('../fila/distribuidor');
+const stt = require('./stt');
 
 const MAX_ITER = 4;
 const MSG_TETO_ESTOURADO = 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.';
@@ -195,6 +196,11 @@ async function processarEntrada(tenantId, conversaId, entrada) {
     // requisição (o mesmo defeito de conexão aninhada que esta função já
     // corrige para a credencial, ver o comentário acima).
     const preco = config ? await precos.carregarPreco(config.provider, config.modelo) : null;
+    // STT roda AQUI, na fase 2, com ZERO conexão do pool aberta: é chamada de
+    // rede (mais a leitura do storage) e pode levar segundos. Segurar uma
+    // conexão de tenant durante isso esgota o pool sob concorrência — é o mesmo
+    // defeito que as 3 fases existem para evitar. Nunca lança (ver ia/stt.js).
+    const audio = ent.tipo === 'audio' ? await stt.transcreverEntrada(config, ent) : null;
 
     // Fase 3 — nova transação de tenant, só para o que falta.
     await db.comTenant(tenantId, async (conn) => {
@@ -218,8 +224,33 @@ async function processarEntrada(tenantId, conversaId, entrada) {
         return;
       }
 
+      // Áudio que não deu para transcrever (sem credencial OpenAI, formato
+      // recusado, provedor fora do ar): pede texto, uma vez por conversa.
+      // Nunca silêncio.
+      if (ent.tipo === 'audio' && (!audio || !audio.ok)) {
+        if (!(await historico.jaAvisou(conn, tenantId, conversaId, 'audio'))) {
+          const aviso = MSG_NAO_COMPREENDIDO.audio;
+          await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: aviso, aviso: 'audio' });
+          if (await responder(conn, tenantId, cv, [aviso])) posCommit.push(eventoMensagem(tenantId, cv));
+        }
+        return;
+      }
+
+      // A transcrição entra como fala do cliente, MARCADA: o modelo (e o
+      // atendente que ler o histórico depois) precisa saber que aquilo veio de
+      // áudio — transcrição erra nome próprio e número, e tratar como se fosse
+      // digitado esconde a origem do erro.
+      const textoUsuario = ent.tipo === 'audio' ? `[áudio transcrito] ${audio.texto}` : texto;
+      if (ent.tipo === 'audio') {
+        // Consumo em SEGUNDOS — unidade diferente de token. De propósito NÃO
+        // entra no teto mensal de tokens do FIL-78 na v1 (decisão consciente da
+        // spec). Best-effort, como todo consumo.
+        await consumo.registrar(conn, tenantId, {
+          tipo: 'ia_audio_seg', quantidade: Math.ceil(audio.segundos || 0), referencia: conversaId,
+        });
+      }
       await historico.salvar(conn, tenantId, conversaId, 'user', {
-        texto, midiaCaminho: ent.midiaCaminho, midiaMime: ent.mime,
+        texto: textoUsuario, midiaCaminho: ent.midiaCaminho, midiaMime: ent.mime,
       });
       let mensagens = await historico.carregar(conn, tenantId, conversaId);
 
