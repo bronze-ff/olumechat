@@ -3,6 +3,13 @@
 // real por chamada (sugestão de IA, envio pela Cloud API da Meta): um teto por
 // IP sozinho deixaria vários usuários atrás do mesmo NAT/proxy corporativo
 // dividirem o mesmo limite, e não impede um único usuário trocando de IP.
+//
+// Sessão de suporte do operador (FIL-70) não tem `matricula` nem `usuarioId`
+// — só `operadorId` (não é gente do cliente). Sem esse fallback, ela caía
+// direto no bucket por IP: vários operadores atrás do mesmo NAT dividiriam a
+// mesma cota, e um operador trocando de IP escapava dela. Prioridade da
+// chave: usuário do tenant (matricula/usuarioId) → operador de suporte
+// (operadorId) → IP, só quando nenhum dos dois existe.
 'use strict';
 
 const rateLimit = require('express-rate-limit');
@@ -16,12 +23,17 @@ function chavePorIp(req) {
 }
 
 /** Chave por usuário DENTRO do tenant (mesmo par usado no cache do RBAC — ver
- *  auth/rbac.js). Cai para IP só se a rota for alcançada sem perfil autenticado
- *  (não deveria acontecer atrás de authMiddleware; evita chave global `undefined`). */
+ *  auth/rbac.js). Sessão de suporte (sem matrícula/usuarioId) cai para o
+ *  operadorId, escopado ao tenant — não para o IP. Só cai para IP se a rota
+ *  for alcançada sem perfil autenticado nenhum (não deveria acontecer atrás
+ *  de authMiddleware; evita chave global `undefined`). */
 function chavePorUsuario(req) {
   const tenantId = req.tenantId ?? (req.user && req.user.tenantId);
   const usuario = req.user && (req.user.matricula ?? req.user.usuarioId);
-  return usuario != null ? `u:${tenantId}:${usuario}` : `ip:${chavePorIp(req)}`;
+  if (usuario != null) return `u:${tenantId}:${usuario}`;
+  const operadorId = req.user && req.user.operadorId;
+  if (operadorId != null) return `op:${tenantId}:${operadorId}`;
+  return `ip:${chavePorIp(req)}`;
 }
 
 /** @param {{windowMs:number, max:number, mensagem?:string}} opts */
