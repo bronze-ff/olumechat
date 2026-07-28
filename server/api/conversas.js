@@ -16,8 +16,27 @@ const { acharClientePorTelefone } = require('../utils/clienteLookup');
 const { exigirPapel } = require('../auth/rbac');
 const iaConfigStore = require('../ia/iaConfigStore');
 const sugestaoResposta = require('../ia/sugestaoResposta');
+const { limiterPorUsuario } = require('../utils/rateLimitPorUsuario');
 
 const router = express.Router();
+
+// B2: cada chamada de sugestão custa dinheiro de verdade no provedor de LLM.
+// Teto conservador por usuário (não só IP), configurável por env.
+const sugestaoIaLimiter = limiterPorUsuario({
+  windowMs: 60 * 60 * 1000,
+  max: Number(process.env.SUGESTAO_IA_RATE_LIMIT_MAX) || 20,
+  mensagem: 'Muitas sugestões de IA nesta hora. Aguarde antes de pedir outra.',
+});
+
+// B3: cada envio (texto OU arquivo) é uma chamada paga à Cloud API da Meta —
+// as duas rotas dividem o mesmo teto por usuário. 60/min é generoso pro
+// atendimento humano (cobre rajada de ~1 msg/seg) e ainda barra um script
+// disparando em loop. Configurável por env.
+const envioLimiter = limiterPorUsuario({
+  windowMs: 60 * 1000,
+  max: Number(process.env.ENVIO_RATE_LIMIT_MAX) || 60,
+  mensagem: 'Muitos envios em pouco tempo. Aguarde um instante antes de continuar.',
+});
 
 /** Curto-circuito para responder HTTP de dentro de um callback comTenant() sem
     que vire um 500: a rota captura e responde com o status/body pedidos. */
@@ -507,7 +526,7 @@ router.get('/:id/mensagens', async (req, res, next) => {
 // (gera custo no provedor de IA e não é uma ação de diagnóstico) e exige que o
 // recurso esteja ligado em Ajustes (config.ia_sugestao_ativa) — desligado por
 // padrão até o admin optar e configurar um provedor.
-router.post('/:id/sugestao-resposta', naoAuditor, naoSuporte, async (req, res, next) => {
+router.post('/:id/sugestao-resposta', naoAuditor, naoSuporte, sugestaoIaLimiter, async (req, res, next) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
@@ -542,7 +561,7 @@ router.post('/:id/sugestao-resposta', naoAuditor, naoSuporte, async (req, res, n
 // POST /api/conversas/:id/mensagens — envia TEXTO LIVRE dentro da janela 24h.
 // Regras: janela aberta obrigatória (fora dela = só template, fase de campanhas).
 // Envia pelo número da conversa (multi-número); fallback = número padrão do .env.
-router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
+router.post('/:id/mensagens', naoAuditor, envioLimiter, async (req, res, next) => {
   const id = Number(req.params.id);
   const texto = String((req.body && req.body.texto) || '').trim();
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
@@ -668,7 +687,7 @@ const upload = multer({
   },
 });
 
-router.post('/:id/arquivos', naoAuditor, (req, res, next) => {
+router.post('/:id/arquivos', naoAuditor, envioLimiter, (req, res, next) => {
   upload.single('arquivo')(req, res, (err) => {
     if (err) {
       const msg = err.code === 'LIMIT_FILE_SIZE' ? 'Arquivo excede 16MB.'
