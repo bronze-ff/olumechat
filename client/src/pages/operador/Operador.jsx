@@ -216,10 +216,17 @@ function IaModal({ tenant, onClose }) {
     }
   }, [cfg.data]);
 
-  const habilitada = tenant.iaHabilitada === 'S';
+  // `tenant` é um snapshot tirado no clique que abriu o modal — invalidar a
+  // lista refaz o fetch em segundo plano, mas não atualiza essa prop (o modal
+  // continua de pé com o objeto antigo). Estado local, atualizado a partir do
+  // valor que a MUTATION confirmou, é o que mantém o toggle em sincronia.
+  const [habilitadaLocal, setHabilitadaLocal] = useState(tenant.iaHabilitada === 'S');
   const alternarHabilitada = useMutation({
     mutationFn: (valor) => apiOperador.post(`/tenants/${tenant.id}/ia`, { habilitada: valor }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['operador', 'tenants'] }),
+    onSuccess: (_dados, valor) => {
+      setHabilitadaLocal(valor);
+      qc.invalidateQueries({ queryKey: ['operador', 'tenants'] });
+    },
   });
 
   const prov = IA_PROVEDORES.find((p) => p.id === provider) || IA_PROVEDORES[0];
@@ -259,7 +266,7 @@ function IaModal({ tenant, onClose }) {
               <span className="block text-sm font-medium text-ink-950">IA incluída no plano</span>
               <span className="block text-xs text-stone-500 mt-0.5">Liga/desliga o add-on de IA para este cliente.</span>
             </span>
-            <input type="checkbox" checked={habilitada} disabled={alternarHabilitada.isPending}
+            <input type="checkbox" checked={habilitadaLocal} disabled={alternarHabilitada.isPending}
               onChange={(e) => alternarHabilitada.mutate(e.target.checked)}
               className="w-5 h-5 accent-brand-700 shrink-0" />
           </label>
