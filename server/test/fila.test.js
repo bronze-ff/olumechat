@@ -238,12 +238,13 @@ test('distribuidor: aviso de indisponibilidade atualiza ultima_msg_em NA MESMA t
   const fechouEntreOsDois = capturas.slice(idxInsert, idxUpdateUltima + 1).some((c) => c.sql === '__CLOSE__');
   assert.equal(fechouEntreOsDois, false, 'não deveria fechar a conexão entre o insert e o update (mesma transação)');
 
-  // FIL-77, achado de review (P1): todo caminho de envio grava consumo — o
-  // aviso de indisponibilidade é uma mensagem REAL enviada pelo WhatsApp.
-  const evento = capturas.find((c) => /INSERT INTO consumo_evento/i.test(c.sql));
-  assert.ok(evento, 'o aviso de indisponibilidade deveria virar evento de consumo');
-  assert.equal(evento.binds.tipo, 'mensagem_enviada');
-  assert.equal(evento.binds.tenantId, TENANT);
+  // FIL-76/FIL-77 (achado de review): aviso de indisponibilidade não tinha
+  // produtor de mensagem_enviada nenhum — é uma mensagem REAL enviada pelo
+  // WhatsApp.
+  const evt = capturas.find((c) => /INSERT INTO consumo_evento/i.test(c.sql));
+  assert.ok(evt, 'não gravou o evento de consumo do aviso');
+  assert.equal(evt.binds.tipo, 'mensagem_enviada');
+  assert.equal(evt.binds.tenantId, TENANT);
 });
 
 test('distribuidor: acesso por número — só quem atende o número da conversa recebe', async () => {

@@ -79,9 +79,10 @@ test('imagem recebida do cliente: safeDownload com sucesso grava midia_armazenad
 
   await processPayload(payloadImagem());
 
-  const evento = capturas.find((c) => /INSERT INTO consumo_evento/i.test(c.sql));
+  // A mesma mensagem também é uma conversa NOVA (FIL-76) — filtra por tipo
+  // pra isolar só o evento de armazenamento de mídia.
+  const evento = capturas.find((c) => /INSERT INTO consumo_evento/i.test(c.sql) && c.binds.tipo === 'midia_armazenada');
   assert.ok(evento, 'a mídia recebida deveria virar evento de consumo');
-  assert.equal(evento.binds.tipo, 'midia_armazenada');
   assert.equal(evento.binds.qtd, 54321, 'quantidade = tamanho REAL devolvido pela Meta (file_size), nunca estimado');
   assert.equal(evento.binds.tenantId, 701);
 });
@@ -93,7 +94,10 @@ test('imagem recebida mas download FALHA: não grava midia_armazenada (nada foi 
 
   await assert.doesNotReject(processPayload(payloadImagem({ wamid: 'wamid.IMG2' })));
 
-  assert.equal(capturas.filter((c) => /INSERT INTO consumo_evento/i.test(c.sql)).length, 0);
+  // A conversa NOVA (FIL-76) ainda conta — só a mídia (que falhou) não.
+  const eventos = capturas.filter((c) => /INSERT INTO consumo_evento/i.test(c.sql));
+  assert.equal(eventos.filter((e) => e.binds.tipo === 'midia_armazenada').length, 0, 'download falhou — nada foi de fato armazenado');
+  assert.equal(eventos.filter((e) => e.binds.tipo === 'conversa_iniciada').length, 1, 'a conversa em si nasceu mesmo com a mídia falhando');
   // A mensagem em si ainda é gravada (sem mídia) — safeDownload nunca perde a mensagem por causa da mídia.
   assert.ok(capturas.some((c) => c.sql.startsWith('INSERT INTO mensagem')));
 });
@@ -126,6 +130,9 @@ test('REGRESSÃO (dedup): webhook REENTREGUE (mesmo WAMID) não conta a mesma m�
   await processPayload(payload);
   await processPayload(payload); // reentrega do MESMO webhook
 
-  const eventos = capturas.filter((c) => /INSERT INTO consumo_evento/i.test(c.sql));
+  // Filtra por midia_armazenada: o fake sempre devolve "conversa não existe"
+  // (não modela persistência entre chamadas), então conversa_iniciada (FIL-76)
+  // dispara em cada entrega neste teste — o que importa aqui é só a mídia.
+  const eventos = capturas.filter((c) => /INSERT INTO consumo_evento/i.test(c.sql) && c.binds.tipo === 'midia_armazenada');
   assert.equal(eventos.length, 1, 'a reentrega não pode contar a mídia de novo');
 });

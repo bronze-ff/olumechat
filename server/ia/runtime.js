@@ -25,6 +25,7 @@ const SISTEMA_FALLBACK = 'Você é o assistente da Multicanal Atacado no WhatsAp
   + 'e em português. Use SOMENTE as ferramentas disponíveis para obter números; nunca invente dados. '
   + 'Formate valores em R$ e datas em DD/MM/AAAA.';
 const MAX_ITER = 4;
+const MSG_TETO_ESTOURADO = 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.';
 
 /** System prompt curado vem do mc-OS (sync) em CONHECIMENTO_DIR/system-prompt.md;
     o fallback embutido só cobre instalação sem o arquivo. */
@@ -61,8 +62,10 @@ async function responder(conn, tenantId, cv, textos) {
         `INSERT INTO mensagem (tenant_id, CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
          VALUES (:tenantId, :cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, now())`,
         { tenantId, cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt: pedaco, st: status });
-      // Mede o envio (FIL-77) — só o que REALMENTE saiu (achado de review:
-      // medir todo caminho de envio, não só as rotas manuais de conversas.js).
+      // Medição de consumo (FIL-76/FIL-77): achado de review — resposta do
+      // bot de IA não tinha produtor de mensagem_enviada nenhum (só ia_tokens
+      // já existia; medir todo caminho de envio, não só as rotas manuais de
+      // conversas.js). Só o que REALMENTE saiu é cobrável.
       if (status === 'sent') {
         await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: cv.conversaId });
       }
@@ -100,7 +103,7 @@ async function processarEntrada(tenantId, conversaId, texto) {
       // token no provedor. Mensagem genérica — nunca fala de custo/tokens
       // (ver ia/limitePlano.js).
       if (await limitePlano.estourouTeto(conn, tenantId)) {
-        await responder(conn, tenantId, cv, ['O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.']);
+        await responder(conn, tenantId, cv, [MSG_TETO_ESTOURADO]);
         return null;
       }
 
@@ -191,7 +194,7 @@ async function processarEntrada(tenantId, conversaId, texto) {
         // Mesma mensagem genérica da fase 1 (nunca fala de custo/tokens) —
         // consistente para o cliente, não importa em qual ponto o teto bateu.
         respostaFinal = tetoEstourouNoMeio
-          ? 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.'
+          ? MSG_TETO_ESTOURADO
           : 'Não consegui responder agora — o assistente está indisponível no momento. Tente de novo em instantes.';
       }
       await responder(conn, tenantId, cv, [respostaFinal]);

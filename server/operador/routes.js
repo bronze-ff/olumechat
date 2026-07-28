@@ -33,6 +33,8 @@ const auditoria = require('./auditoria');
 const tenants = require('./tenants');
 const credencialIa = require('./credencialIa');
 const consumo = require('./consumo');
+const contrato = require('./contrato');
+const implementacao = require('./implementacao');
 const precos = require('../consumo/precos');
 const iaConfigStore = require('../ia/iaConfigStore');
 const onboarding = require('./onboarding');
@@ -534,6 +536,142 @@ router.put(
     }
   }
 );
+
+// ---------------------------------------------------------------------------
+// GET  /api/operador/tenants/:id/contrato — histórico de contratos (FIL-76).
+// POST /api/operador/tenants/:id/contrato — cria um contrato novo; se já
+// existe um ATIVO, encerra-o (fim_vigencia = hoje) e insere o novo na mesma
+// transação — é assim que "trocar de plano" funciona (nunca sobrescreve, ver
+// operador/contrato.js). Nenhuma rota de tenant expõe isto (ver docs/SEGURANCA.md).
+// ---------------------------------------------------------------------------
+router.get('/tenants/:id/contrato', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await contrato.listarContratos(id));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.post('/tenants/:id/contrato', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.status(201).json(await contrato.criarOuTrocarContrato({
+      operador: req.operador, tenantId: id, dados: req.body || {},
+      ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Itens do contrato (implementação, add-on de IA, número extra, excedente de
+// mensagem, desconto, avulso) — só podem ser alterados enquanto o contrato
+// dono ainda está ativo (ver operador/contrato.js::exigirContratoAtivo).
+// ---------------------------------------------------------------------------
+router.get('/tenants/:id/contrato/:contratoId/itens', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const contratoId = tenants.idValido(req.params.contratoId);
+  if (!contratoId) return res.status(400).json({ error: 'ID de contrato inválido' });
+  try {
+    res.json(await contrato.listarItens({ tenantId: id, contratoId }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.post('/tenants/:id/contrato/:contratoId/itens', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const contratoId = tenants.idValido(req.params.contratoId);
+  if (!contratoId) return res.status(400).json({ error: 'ID de contrato inválido' });
+  try {
+    res.status(201).json(await contrato.adicionarItem({
+      operador: req.operador, tenantId: id, contratoId, dados: req.body || {},
+      ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.patch('/tenants/:id/contrato/:contratoId/itens/:itemId', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const contratoId = tenants.idValido(req.params.contratoId);
+  const itemId = tenants.idValido(req.params.itemId);
+  if (!contratoId || !itemId) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    res.json(await contrato.atualizarItem({
+      operador: req.operador, tenantId: id, contratoId, itemId, dados: req.body || {},
+      ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.delete('/tenants/:id/contrato/:contratoId/itens/:itemId', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const contratoId = tenants.idValido(req.params.contratoId);
+  const itemId = tenants.idValido(req.params.itemId);
+  if (!contratoId || !itemId) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    res.json(await contrato.removerItem({
+      operador: req.operador, tenantId: id, contratoId, itemId,
+      ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Implementação (projeto de entrada do cliente) — FIL-76. Ligada ao tenant,
+// não ao contrato: sobrevive a uma troca de plano posterior.
+// ---------------------------------------------------------------------------
+router.get('/tenants/:id/implementacao', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await implementacao.obterImplementacao(id));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.post('/tenants/:id/implementacao', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.status(201).json(await implementacao.criarImplementacao({
+      operador: req.operador, tenantId: id, dados: req.body || {},
+      ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.patch('/tenants/:id/implementacao/:implementacaoId', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const implementacaoId = tenants.idValido(req.params.implementacaoId);
+  if (!implementacaoId) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    res.json(await implementacao.atualizarImplementacao({
+      operador: req.operador, tenantId: id, implementacaoId, dados: req.body || {},
+      ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // GET /api/operador/onboarding — progresso do onboarding assistido da Meta

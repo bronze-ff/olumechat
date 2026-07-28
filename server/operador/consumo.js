@@ -10,8 +10,7 @@
 
 const { comOperador } = require('./db');
 const { ErroOperador } = require('./erroOperador');
-
-const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
+const { validarDataYYYYMMDD } = require('../utils/data');
 
 /**
  * Regex + round-trip por Date: barra data de calendário IMPOSSÍVEL
@@ -23,13 +22,7 @@ const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
  */
 function validarData(v, nomeCampo, padrao) {
   if (v === undefined || v === null || v === '') return padrao;
-  const s = String(v);
-  if (!RE_DATA.test(s)) throw new ErroOperador(400, `${nomeCampo} inválida — use AAAA-MM-DD.`);
-  const d = new Date(`${s}T00:00:00Z`);
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
-    throw new ErroOperador(400, `${nomeCampo} inválida — data de calendário inexistente.`);
-  }
-  return s;
+  return validarDataYYYYMMDD(v, nomeCampo, ErroOperador);
 }
 
 /**
@@ -51,7 +44,7 @@ function numOuNull(v) {
  * Série de consumo por tipo (quantidade + custo) de um tenant, no período
  * [de, ate] (inclusive). Sem `de`/`ate`, usa o mês corrente.
  *
- * ⚠️ Achado de review (P2): meses fora do corrente vêm de `consumo_mensal`
+ * Achado de review (P2): meses fora do corrente vêm de `consumo_mensal`
  * (agregado permanente, fechado por server/consumo/fechamento.js) — nunca só
  * de `consumo_evento`, que a retenção já pode ter apagado (90 dias por
  * padrão). Só o mês CORRENTE (que o tick de fechamento ainda pode não ter

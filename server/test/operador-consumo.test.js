@@ -37,7 +37,7 @@ test('consumoDoTenant: 404 se o tenant não existe', async () => {
   );
 });
 
-test('consumoDoTenant: devolve série por tipo com custo e quantidade', async () => {
+test('consumoDoTenant: devolve série por tipo com custo e quantidade (mês corrente, do bruto)', async () => {
   const conn = conexao({
     linhas: [
       { TIPO: 'ia_tokens', QUANTIDADE: 15000, CUSTO_CENTAVOS: 340.5, EVENTOS: 12 },
@@ -45,12 +45,13 @@ test('consumoDoTenant: devolve série por tipo com custo e quantidade', async ()
     ],
   });
   db.getConnection = async () => conn;
-  const r = await consumo.consumoDoTenant({ tenantId: 5, de: '2026-07-01', ate: '2026-07-31' });
+  const anoMesAtual = new Date().toISOString().slice(0, 7);
+  const r = await consumo.consumoDoTenant({ tenantId: 5, de: `${anoMesAtual}-01`, ate: `${anoMesAtual}-28` });
   assert.equal(r.tenantId, 5);
   assert.equal(r.serie.length, 2);
-  assert.equal(r.serie[0].tipo, 'ia_tokens');
-  assert.equal(r.serie[0].custoCentavos, 340.5);
-  assert.equal(r.serie[0].quantidade, 15000);
+  const iaTokens = r.serie.find((s) => s.tipo === 'ia_tokens');
+  assert.equal(iaTokens.custoCentavos, 340.5);
+  assert.equal(iaTokens.quantidade, 15000);
   const consulta = conn.cap.find((c) => /FROM consumo_evento/i.test(c.sql));
   assert.equal(consulta.binds.tenantId, 5, 'filtra explicitamente pelo tenant pedido (cross-tenant de propósito, ver operador/db.js)');
 });

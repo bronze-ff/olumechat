@@ -100,7 +100,9 @@ async function enviarMensagens(conn, tenantId, cv, mensagens) {
        VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, now())`,
       { cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt, st: status }
     );
-    // Mede o envio (FIL-77) — só o que REALMENTE saiu.
+    // Medição de consumo (FIL-76/FIL-77): achado de review — envio do bot
+    // determinístico não tinha produtor nenhum antes. Só o que REALMENTE saiu
+    // (status sent) é cobrável; falha de envio não é.
     if (status === 'sent') {
       await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: cv.conversaId });
     }

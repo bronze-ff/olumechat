@@ -72,6 +72,23 @@ test('cada chamada ao provedor grava um evento ia_tokens com os TOKENS REAIS dev
   assert.ok(envio, 'a resposta do bot deveria contar como mensagem_enviada');
 });
 
+test('FIL-76 (achado de review): a resposta final enviada ao cliente grava um evento mensagem_enviada (não existia produtor)', async () => {
+  const conn = connConversa();
+  db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'claude-sonnet-5', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  precos.carregarPreco = async () => null;
+  client.chamar = async () => ({ texto: 'Tudo certo!', toolCalls: [], uso: { tokensEntrada: 10, tokensSaida: 5 } });
+  global.fetch = async (u, o) => ({ ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) });
+
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
+
+  const evt = conn.ins.find((i) => /INSERT INTO consumo_evento/i.test(i.sql) && i.binds.tipo === 'mensagem_enviada');
+  assert.ok(evt, 'não gravou o evento de mensagem_enviada da resposta do bot de IA');
+  assert.equal(evt.binds.tenantId, TENANT_A);
+  assert.equal(evt.binds.qtd, 1);
+});
+
 test('sem `usage` na resposta do provedor: nenhum evento ia_tokens é gravado (nunca estima por caractere) — mas a resposta enviada ainda conta como mensagem_enviada', async () => {
   const conn = connConversa();
   db.getConnection = async () => conn;

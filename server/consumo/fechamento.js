@@ -40,7 +40,8 @@ function mesAnteriorDe(data) {
  * em "grátis" — e como o bruto é apagado depois (limparEventosAntigos), essa
  * incerteza se perderia PARA SEMPRE. Por isso: se QUALQUER evento do grupo
  * tem custo desconhecido, o agregado inteiro fica NULL (custo indisponível/
- * parcial), nunca um número que pareça completo mas não é.
+ * parcial), nunca um número que pareça completo mas não é (ver migração 016:
+ * `consumo_mensal.custo_centavos` é NULLABLE de propósito).
  * @param {object} conn conexão de operador (comOperador) já aberta
  * @param {string} anoMes 'YYYY-MM'
  * @returns {Promise<number>} quantas linhas (tenant_id+tipo) foram fechadas
@@ -133,8 +134,8 @@ async function tick() {
     await comOperador(async (conn) => {
       if (!(await tentarGlobal(conn, 'consumo'))) return; // outra instância já está rodando o tick
       const meses = await mesesComEventoBruto(conn);
-      const anoMesAtual = anoMesDe(new Date());
-      if (!meses.includes(anoMesAtual)) meses.push(anoMesAtual); // fecha o mês corrente mesmo sem evento ainda
+      const atual = anoMesDe(new Date());
+      if (!meses.includes(atual)) meses.push(atual); // fecha o mês corrente mesmo sem evento ainda
       for (const anoMes of meses) await fecharMes(conn, anoMes);
       await limparEventosAntigos(conn);
     });

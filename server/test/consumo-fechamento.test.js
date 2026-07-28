@@ -15,19 +15,25 @@ const { tentarGlobal } = require('../workers/leaderLock');
 /** Simula consumo_evento (linhas fixas) + consumo_mensal (mapa mutável, para
  *  provar a idempotência de verdade: rodar fecharMes duas vezes não deveria
  *  mudar o estado final nem duplicar linha). */
-function conexao({ eventosAgrupados = [] } = {}) {
+function conexao({ eventosAgrupados = [], mesesPendentes = [] } = {}) {
   const mensal = new Map(); // `${tenantId}:${anoMes}:${tipo}` -> linha
   const cap = [];
   return {
     cap, mensal,
     async execute(sql, binds = {}) {
       cap.push({ sql, binds });
+      if (/SELECT DISTINCT to_char\(criado_em, 'YYYY-MM'\) AS ano_mes FROM consumo_evento/i.test(sql)) {
+        return { rows: mesesPendentes.map((anoMes) => ({ ANO_MES: anoMes })) };
+      }
       if (/SELECT tenant_id, tipo,[\s\S]*FROM consumo_evento/i.test(sql)) {
         return { rows: eventosAgrupados };
       }
       if (/INSERT INTO consumo_mensal/i.test(sql)) {
         const chave = `${binds.tenantId}:${binds.anoMes}:${binds.tipo}`;
-        mensal.set(chave, { TENANT_ID: binds.tenantId, ANO_MES: binds.anoMes, TIPO: binds.tipo, QUANTIDADE: binds.qtd, CUSTO_CENTAVOS: binds.custo });
+        mensal.set(chave, {
+          TENANT_ID: binds.tenantId, ANO_MES: binds.anoMes, TIPO: binds.tipo,
+          QUANTIDADE: binds.qtd, CUSTO_CENTAVOS: binds.custo,
+        });
         return { rows: [] };
       }
       if (/DELETE FROM consumo_evento/i.test(sql)) {

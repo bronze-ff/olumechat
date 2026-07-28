@@ -303,8 +303,8 @@ router.post('/', naoAuditor, async (req, res, next) => {
         { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo,
           id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
       );
-      // Mede o envio (FIL-77) — achado de review: o template de conversa ativa
-      // ficou de fora da instrumentação original.
+      // Medição de consumo (FIL-76/FIL-77): achado de review — disparo manual
+      // de template (conversa ativa) não tinha produtor de mensagem_enviada.
       await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: ins.outBinds.id[0] });
       return { id: conversaId, contatoId, telefone, departamentoId: departamentoId || null, wamid };
     });
