@@ -9,10 +9,10 @@ const { comOperador } = require('./db');
 const auditoria = require('./auditoria');
 const { ErroOperador } = require('./erroOperador');
 const { mapRow } = require('../utils/linhas');
+const { validarDataYYYYMMDD } = require('../utils/data');
 
 const FORMAS_PAGAMENTO = Object.freeze(['a_vista', 'parcelado']);
 const STATUS = Object.freeze(['a_iniciar', 'em_andamento', 'entregue']);
-const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
 
 function inteiro(v, nomeCampo, { min, max } = {}) {
   const n = Number(v);
@@ -24,9 +24,7 @@ function inteiro(v, nomeCampo, { min, max } = {}) {
 
 function validarDataOpcional(v, nomeCampo) {
   if (v === undefined || v === null || v === '') return null;
-  const s = String(v);
-  if (!RE_DATA.test(s)) throw new ErroOperador(400, `${nomeCampo} inválida — use AAAA-MM-DD.`);
-  return s;
+  return validarDataYYYYMMDD(v, nomeCampo, ErroOperador);
 }
 
 function textoOpcional(v, max) {

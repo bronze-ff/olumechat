@@ -161,3 +161,45 @@ test('invalidarGlobal() força nova leitura da credencial do operador', async ()
   await store.carregar(TENANT_Z); // tenant novo, cache global agora vazio
   assert.equal(consultasAoGlobal, 2, 'invalidarGlobal() força nova leitura da credencial do operador');
 });
+
+test('FIL-76: invalidarGlobal() evicta também a entrada do TENANT que já tinha caído no fallback global', async () => {
+  // Achado de review: invalidarGlobal() só apagava CHAVE_GLOBAL — um tenant
+  // sem chave própria que já tinha resolvido (e cacheado, por tenantId) a
+  // credencial global continuava servindo a chave VELHA por até 60s depois
+  // de o operador rotacionar, mesmo chamando invalidarGlobal() explicitamente
+  // na rota (operador/routes.js::PUT /ia-credencial).
+  store.invalidar(); store.invalidarGlobal();
+  const TENANT_Q = 95;
+  let versaoGlobal = 'sk-antiga';
+  db.getConnection = async () => conexao({
+    global: { PROVIDER: 'anthropic', MODELO_PADRAO: 'm', BASE_URL: null, API_KEY_CRIPTOGRAFADA: cifrar(versaoGlobal) },
+  });
+
+  const antes = await store.carregar(TENANT_Q);
+  assert.equal(antes.apiKey, 'sk-antiga');
+
+  versaoGlobal = 'sk-nova'; // o operador rotacionou a credencial
+  store.invalidarGlobal();
+
+  const depois = await store.carregar(TENANT_Q); // MESMO tenant, TTL dele ainda não tinha expirado
+  assert.equal(depois.apiKey, 'sk-nova', 'não pode continuar servindo a chave velha da própria entrada do tenant');
+});
+
+test('invalidarGlobal() NÃO evicta tenant com chave PRÓPRIA (nunca veio do fallback global)', async () => {
+  store.invalidar(); store.invalidarGlobal();
+  const cifradaTenant = criptografar('sk-do-tenant-fixa', TENANT_A);
+  let consultasIaConfig = 0;
+  db.getConnection = async () => {
+    const conn = conexao({ propria: { PROVIDER: 'anthropic', MODELO: 'm', BASE_URL: null, API_KEY_CRIPTOGRAFADA: cifradaTenant } });
+    const executeOriginal = conn.execute.bind(conn);
+    conn.execute = async (sql, binds) => { if (/FROM ia_config/.test(sql)) consultasIaConfig += 1; return executeOriginal(sql, binds); };
+    return conn;
+  };
+  await store.carregar(TENANT_A);
+  assert.equal(consultasIaConfig, 1);
+
+  store.invalidarGlobal();
+  const cfg = await store.carregar(TENANT_A); // ainda dentro do TTL do tenant — não devia reconsultar
+  assert.equal(consultasIaConfig, 1, 'chave própria não é "deGlobal" — invalidarGlobal() não deveria evictar essa entrada');
+  assert.equal(cfg.apiKey, 'sk-do-tenant-fixa');
+});

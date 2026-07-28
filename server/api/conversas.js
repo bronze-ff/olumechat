@@ -301,6 +301,9 @@ router.post('/', naoAuditor, async (req, res, next) => {
          VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())`,
         { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo }
       );
+      // Medição de consumo (FIL-76/FIL-77): achado de review — disparo manual
+      // de template (conversa ativa) não tinha produtor de mensagem_enviada.
+      await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: conversaId });
       return { id: conversaId, contatoId, telefone, departamentoId: departamentoId || null, wamid };
     });
 

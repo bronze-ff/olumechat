@@ -237,6 +237,13 @@ test('distribuidor: aviso de indisponibilidade atualiza ultima_msg_em NA MESMA t
   assert.equal(idxUpdateUltima, idxInsert + 1, 'UPDATE deveria vir logo após o INSERT, na mesma transação');
   const fechouEntreOsDois = capturas.slice(idxInsert, idxUpdateUltima + 1).some((c) => c.sql === '__CLOSE__');
   assert.equal(fechouEntreOsDois, false, 'não deveria fechar a conexão entre o insert e o update (mesma transação)');
+
+  // FIL-76 (achado de review): aviso de indisponibilidade não tinha produtor
+  // de mensagem_enviada nenhum.
+  const evt = capturas.find((c) => /INSERT INTO consumo_evento/i.test(c.sql));
+  assert.ok(evt, 'não gravou o evento de consumo do aviso');
+  assert.equal(evt.binds.tipo, 'mensagem_enviada');
+  assert.equal(evt.binds.tenantId, TENANT);
 });
 
 test('distribuidor: acesso por número — só quem atende o número da conversa recebe', async () => {
