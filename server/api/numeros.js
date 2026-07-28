@@ -10,6 +10,7 @@ const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
 const { graphGet, graphPost } = require('../graph/client');
 const handoff = require('../ia/handoff');
+const { exigirIaHabilitada } = require('../ia/gate');
 
 const router = express.Router();
 
@@ -80,7 +81,8 @@ router.get('/', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req, res, 
       const r = await conn.execute(
         `SELECT n.id, n.phone_number_id, n.display_phone, n.nome_exibicao,
                 n.departamento_padrao_id, n.codfilial, n.quality_rating,
-                n.messaging_tier, n.limite_diario, n.permite_ativo, n.modo, n.ativo, n.criado_em,
+                n.messaging_tier, n.limite_diario, n.permite_ativo, n.modo,
+                n.ia_regra, n.ia_modo_teste, n.ativo, n.criado_em,
                 d.nome AS departamento_padrao_nome
            FROM numero n
            LEFT JOIN departamento d ON d.id = n.departamento_padrao_id
@@ -169,6 +171,81 @@ router.post('/', exigirSuporteOperador, async (req, res, next) => {
     if (err.code === '23503') return res.status(400).json({ error: 'Departamento inexistente' });
     next(err);
   }
+});
+
+// PUT /api/numeros/:id/ia — { ativo?, regra?, modoTeste? } (ADMIN do cliente).
+//
+// Rota SEPARADA do PUT /:id de propósito. O cadastro técnico do canal
+// (phone_number_id, filial, limite diário) continua sendo do operador em sessão
+// de suporte auditada — abrir o PUT inteiro para o ADMIN entregaria isso junto.
+// O que muda aqui é decisão de NEGÓCIO do cliente: ligar a IA no canal, escolher
+// se ela cobre 24/7 ou só fora do expediente, e abrir ou fechar o modo teste.
+router.put('/:id/ia', exigirPapel('ADMIN'), exigirIaHabilitada, async (req, res, next) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
+  const b = req.body || {};
+
+  // Validação ANTES de tocar o banco: valor fora do enum estouraria o CHECK da
+  // migração 021 como 500, em vez de virar um 400 com mensagem clara.
+  let modo = null;
+  if (b.ativo !== undefined) modo = b.ativo === true || b.ativo === 'S' ? 'ia' : 'padrao';
+  let regra = null;
+  if (b.regra !== undefined) {
+    if (!['sempre', 'fora_horario'].includes(b.regra)) {
+      return res.status(400).json({ error: 'Regra inválida. Use "sempre" ou "fora_horario".' });
+    }
+    regra = b.regra;
+  }
+  let teste = null;
+  if (b.modoTeste !== undefined) teste = b.modoTeste === true || b.modoTeste === 'S' ? 'S' : 'N';
+  if (modo === null && regra === null && teste === null) {
+    return res.status(400).json({ error: 'Nada para atualizar.' });
+  }
+
+  try {
+    const encontrado = await db.comTenant(req.tenantId, async (conn) => {
+      const upd = await conn.execute(
+        `UPDATE numero
+            SET modo          = COALESCE(:modo, modo),
+                ia_regra      = COALESCE(:regra, ia_regra),
+                ia_modo_teste = COALESCE(:teste, ia_modo_teste)
+          WHERE tenant_id = :tenantId AND id = :id`,
+        { tenantId: req.tenantId, modo, regra, teste, id }
+      );
+      if (!upd.rowsAffected) return false;
+
+      // Desligar a IA precisa liberar as conversas que já estavam em
+      // fila_status='ia' — é a MESMA cascata do PUT /:id (ia/handoff.js). Sem
+      // ela, quem testou a IA e desligou fica preso no "canal restrito" para
+      // sempre nessas conversas antigas.
+      if (modo === 'padrao') {
+        const destino = await handoff.resolverDestino(conn, req.tenantId, id, { permitirFluxo: true });
+        const numOuNull = (v) => ({ type: db.tipos.NUMBER, val: v });
+        await conn.execute(
+          `UPDATE conversa
+              SET fila_status = :st,
+                  bot_fluxo_id = :flx,
+                  departamento_id = :dep,
+                  fila_entrou_em = CASE WHEN :dep IS NOT NULL THEN now() ELSE fila_entrou_em END,
+                  bot_ultima_interacao = CASE WHEN :flx IS NOT NULL THEN now() ELSE bot_ultima_interacao END
+            WHERE tenant_id = :tenantId AND numero_id = :id AND fila_status = 'ia' AND status = 'aberta'`,
+          { tenantId: req.tenantId, st: destino.filaStatus,
+            flx: numOuNull(destino.fluxoId), dep: numOuNull(destino.departamentoId), id }
+        );
+      }
+
+      await conn.execute(
+        `INSERT INTO auditoria (tenant_id, atendente_id, matricula, acao, entidade, entidade_id, detalhe)
+         VALUES (:tenantId, :atd, :mat, 'ia_canal_alterado', 'numero', :id, :det)`,
+        { tenantId: req.tenantId, atd: (req.perfil && req.perfil.atendenteId) || null,
+          mat: req.user && req.user.matricula, id,
+          det: JSON.stringify({ modo, regra, modoTeste: teste }) }
+      );
+      return true;
+    });
+    if (!encontrado) return res.status(404).json({ error: 'Número não encontrado' });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
 });
 
 // PUT /api/numeros/:id — { nomeExibicao?, departamentoPadraoId?, codfilial?, ativo?, modo? } (ADMIN).
