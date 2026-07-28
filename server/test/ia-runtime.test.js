@@ -99,6 +99,45 @@ test('tenantId inválido não toca o banco nem envia mensagem', async () => {
   assert.equal(enviados.length, 0);
 });
 
+test('FIL-78: tenant que estourou o teto do plano recebe recado genérico e NÃO chama o provedor', async () => {
+  const conn = {
+    _ins: [], async execute(sql, binds) {
+      if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'S' }] };
+      if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
+      if (sql.includes('ia_teto_tokens_mes')) return { rows: [{ IA_TETO_TOKENS_MES: 1000 }] };
+      if (sql.includes('FROM ia_consumo_mensal')) return { rows: [{ TOKENS_USADOS: 1000 }] }; // já bateu o teto
+      this._ins.push({ sql, binds }); return { rows: [] };
+    }, commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+  db.getConnection = async () => conn;
+  auth.autorizado = async () => true;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  let chamouModelo = false; client.chamar = async () => { chamouModelo = true; return {}; };
+  const enviados = []; global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+  await runtime.processarEntrada(TENANT_A, 88, 'vendas de hoje?');
+  assert.equal(chamouModelo, false, 'não pode gastar 1 token sequer no provedor');
+  assert.ok(enviados.length >= 1, 'manda um recado ao usuário');
+  assert.ok(!/custo|token|R\$/i.test(enviados[0].text.body), 'a mensagem não pode expor custo/tokens');
+});
+
+test('teto configurado mas AINDA não estourado: chama o provedor normalmente', async () => {
+  const conn = connConversa();
+  const original = conn.execute.bind(conn);
+  conn.execute = async (sql, binds) => {
+    if (sql.includes('ia_teto_tokens_mes')) return { rows: [{ IA_TETO_TOKENS_MES: 1_000_000 }] };
+    if (sql.includes('FROM ia_consumo_mensal')) return { rows: [{ TOKENS_USADOS: 10 }] };
+    return original(sql, binds);
+  };
+  db.getConnection = async () => conn;
+  auth.autorizado = async () => true;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  let chamouModelo = false;
+  client.chamar = async () => { chamouModelo = true; return { texto: 'ok', toolCalls: [] }; };
+  global.fetch = async (u, o) => ({ ok: true, json: async () => ({ messages: [{ id: 'w' }] }) });
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
+  assert.equal(chamouModelo, true, 'abaixo do teto, o bot funciona normalmente');
+});
+
 test('SEGURANÇA: toda leitura/gravação da conversa leva o tenant_id do chamador', async () => {
   const conn = connConversa(); db.getConnection = async () => conn;
   store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });

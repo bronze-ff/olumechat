@@ -27,18 +27,10 @@ const auditoria = require('./auditoria');
 const tokenSenha = require('../auth/tokenSenha');
 const { criptografar } = require('../ia/crypto');
 const iaConfigStore = require('../ia/iaConfigStore');
+const { ErroOperador } = require('./erroOperador');
+const { IA_PROVEDORES, validarProviderModeloBaseUrl } = require('./validacaoIa');
 
 const STATUS = Object.freeze(['ativo', 'suspenso', 'encerrado']);
-const IA_PROVEDORES = Object.freeze(['anthropic', 'openai', 'openrouter', 'ollama', 'vllm', 'groq']);
-
-/** Erro de negócio com status HTTP — o router traduz sem inspecionar mensagem. */
-class ErroOperador extends Error {
-  constructor(status, mensagem) {
-    super(mensagem);
-    this.status = status;
-    this.deOperador = true;
-  }
-}
 
 const normalizarEmail = (v) => String(v || '').trim().toLowerCase();
 
@@ -70,6 +62,7 @@ async function listarComUso() {
   return comOperador(async (conn) => {
     const r = await conn.execute(
       `SELECT t.id, t.nome, t.slug, t.status, t.criado_em, t.ia_habilitada,
+              t.ia_teto_tokens_mes,
               (SELECT count(*) FROM conversa c
                 WHERE c.tenant_id = t.id
                   AND c.criado_em >= date_trunc('month', now()))        AS conversas_mes,
@@ -81,7 +74,19 @@ async function listarComUso() {
               (SELECT count(*) FROM numero n
                 WHERE n.tenant_id = t.id AND n.ativo = 'S')             AS numeros_conectados,
               (SELECT count(*) FROM usuario u
-                WHERE u.tenant_id = t.id AND u.ativo = 'S')             AS usuarios_ativos
+                WHERE u.tenant_id = t.id AND u.ativo = 'S')             AS usuarios_ativos,
+              -- FIL-78: chave própria (ia_config) ainda não migrada pro
+              -- operador — o painel usa isto pra saber quem falta migrar.
+              (EXISTS (SELECT 1 FROM ia_config ic
+                WHERE ic.tenant_id = t.id AND ic.id = 1 AND ic.ativo = 'S')) AS ia_chave_propria,
+              -- Consumo do mês corrente (ia_consumo_mensal): FIL-77 é quem
+              -- incrementa; aqui só lemos o que já foi registrado.
+              COALESCE((SELECT cm.tokens_usados FROM ia_consumo_mensal cm
+                         WHERE cm.tenant_id = t.id AND cm.ano_mes = to_char(now(), 'YYYY-MM')), 0) AS ia_tokens_usados_mes,
+              (t.ia_teto_tokens_mes IS NOT NULL AND
+               COALESCE((SELECT cm.tokens_usados FROM ia_consumo_mensal cm
+                          WHERE cm.tenant_id = t.id AND cm.ano_mes = to_char(now(), 'YYYY-MM')), 0) >= t.ia_teto_tokens_mes
+              ) AS ia_teto_estourado
          FROM tenant t
         ORDER BY t.nome`
     );
@@ -334,29 +339,21 @@ async function carregarIaConfig(tenantId) {
 }
 
 /**
- * Grava/atualiza provider+modelo+chave de um tenant. SÓ o operador chama isto
- * (rota /api/operador/tenants/:id/ia-config) — mesma validação e mesma
- * cifragem que o antigo PUT /api/ia-config do painel do cliente usava, só que
- * `entrarNoTenant` troca o contexto pro DEFAULT tenant_atual() de ia_config
- * apontar certo; comOperador já roda com BYPASSRLS (ver operador/db.js), então
- * a escrita em si não depende de policy.
+ * Grava/atualiza provider+modelo+chave de UM tenant (chave própria — legado
+ * pré-FIL-78). SÓ o operador chama isto (rota
+ * /api/operador/tenants/:id/ia-config) — `entrarNoTenant` troca o contexto pro
+ * DEFAULT tenant_atual() de ia_config apontar certo; comOperador já roda com
+ * BYPASSRLS (ver operador/db.js), então a escrita em si não depende de policy.
+ *
+ * FIL-78: a credencial GLOBAL do operador (operador/credencialIa.js) é o
+ * caminho novo — esta função continua existindo só para os tenants que JÁ
+ * têm chave própria continuarem funcionando e o operador poder ajustá-la; não
+ * é mais o fluxo recomendado para clientes novos.
  */
 async function salvarIaConfig({ operador, tenantId, provider, modelo, baseUrl, apiKey, ip }) {
-  if (!IA_PROVEDORES.includes(provider)) throw new ErroOperador(400, 'Provedor inválido.');
-  const modeloTrim = String(modelo || '').trim();
-  if (!modeloTrim) throw new ErroOperador(400, 'Modelo obrigatório.');
-  if (/^https?:\/\//i.test(modeloTrim)) {
-    throw new ErroOperador(400, 'Modelo não pode ser uma URL — use só o ID (ex.: gpt-4o-mini). A URL vai no campo Base URL.');
-  }
-  let baseNorm = null;
-  if (provider !== 'anthropic') {
-    const raw = String(baseUrl || '').trim();
-    if (!raw) throw new ErroOperador(400, 'Base URL obrigatória para provedores compatíveis.');
-    let u;
-    try { u = new URL(raw); } catch { throw new ErroOperador(400, 'Base URL inválida — use algo como https://openrouter.ai/api/v1'); }
-    if (!/^https?:$/.test(u.protocol)) throw new ErroOperador(400, 'Base URL deve ser http(s)://…');
-    baseNorm = raw.replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
-  }
+  const v = validarProviderModeloBaseUrl({ provider, modelo, baseUrl });
+  const modeloTrim = v.modelo;
+  const baseNorm = v.baseUrl;
   const temChaveNova = apiKey && String(apiKey).trim();
 
   return comOperador(async (conn) => {
@@ -390,8 +387,62 @@ async function salvarIaConfig({ operador, tenantId, provider, modelo, baseUrl, a
   });
 }
 
+/**
+ * Aposenta a chave própria de UM tenant (FIL-78, achado de review P2): sem
+ * isto, a migração gradual anunciada no ticket — "tenants com chave própria
+ * continuam funcionando até o operador migrar manualmente" — não tinha
+ * caminho pela aplicação; `ia_config.ativo='S'` sempre vencia a credencial
+ * global e `salvarIaConfig` só sabe gravar `ativo='S'`, nunca desligar.
+ *
+ * Marca `ativo='N'` (NÃO apaga a linha nem a chave cifrada — histórico e
+ * reversibilidade, mesmo racional de definirIa) e invalida o cache do
+ * iaConfigStore na hora: a próxima chamada de IA deste tenant já cai no
+ * fallback da credencial global do operador.
+ */
+async function desativarIaConfig({ operador, tenantId, ip }) {
+  return comOperador(async (conn) => {
+    const antes = await carregarTenant(conn, tenantId);
+    const ex = await conn.execute(`SELECT ativo FROM ia_config WHERE tenant_id = :id AND id = 1`, { id: tenantId });
+    if (!ex.rows.length || ex.rows[0].ATIVO !== 'S') {
+      throw new ErroOperador(409, 'Este cliente não tem chave própria ativa para desativar.');
+    }
+    await entrarNoTenant(conn, tenantId);
+    await conn.execute(`UPDATE ia_config SET ativo = 'N', atualizado_em = now() WHERE tenant_id = :id AND id = 1`, { id: tenantId });
+    await sairDoTenant(conn);
+    await auditoria.registrar(conn, {
+      operador, tenantId, acao: 'ia_config_desativada_pelo_operador', entidade: 'ia_config', entidadeId: 1,
+      detalhe: { slug: antes.SLUG }, ip,
+    });
+    iaConfigStore.invalidar(tenantId);
+    return { id: tenantId, nome: antes.NOME, slug: antes.SLUG, chaveProprAtiva: false };
+  });
+}
+
+/**
+ * Define (ou remove, com `null`) o teto mensal de tokens do add-on de IA de
+ * UM tenant (FIL-78, achado de review P2): sem rota pra configurar o valor,
+ * o teto (ia/limitePlano.js) nunca dispara na prática — fica sempre NULL.
+ * O CONSUMO em si (o que é comparado contra este teto) é o FIL-77.
+ */
+async function definirTetoIa({ operador, tenantId, tetoTokensMes, ip }) {
+  const valor = tetoTokensMes === null || tetoTokensMes === undefined ? null : Number(tetoTokensMes);
+  if (valor !== null && (!Number.isFinite(valor) || !Number.isInteger(valor) || valor < 0)) {
+    throw new ErroOperador(400, 'Teto mensal de tokens deve ser um inteiro ≥ 0 (ou nulo, pra remover o teto).');
+  }
+  return comOperador(async (conn) => {
+    const antes = await carregarTenant(conn, tenantId);
+    await conn.execute(`UPDATE tenant SET ia_teto_tokens_mes = :v WHERE id = :id`, { v: valor, id: tenantId });
+    await auditoria.registrar(conn, {
+      operador, tenantId, acao: 'ia_teto_definido', entidade: 'tenant', entidadeId: tenantId,
+      detalhe: { slug: antes.SLUG, tetoTokensMes: valor }, ip,
+    });
+    return { id: tenantId, nome: antes.NOME, slug: antes.SLUG, tetoTokensMes: valor };
+  });
+}
+
 module.exports = {
   listarComUso, provisionar, renomear, alterarStatus, abrirAcessoSuporte,
-  listarAuditoria, definirIa, carregarIaConfig, salvarIaConfig,
-  validarSlug, normalizarSlug, ErroOperador, STATUS, idValido,
+  listarAuditoria, definirIa, carregarIaConfig, salvarIaConfig, desativarIaConfig,
+  definirTetoIa, validarSlug, normalizarSlug, ErroOperador, STATUS, idValido,
+  IA_PROVEDORES, validarProviderModeloBaseUrl,
 };

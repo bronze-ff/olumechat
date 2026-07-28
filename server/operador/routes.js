@@ -31,6 +31,8 @@ const autenticarOperador = require('./middleware');
 const contas = require('./contas');
 const auditoria = require('./auditoria');
 const tenants = require('./tenants');
+const credencialIa = require('./credencialIa');
+const iaConfigStore = require('../ia/iaConfigStore');
 const onboarding = require('./onboarding');
 const { trocarCodigo } = require('../api/meta');
 const { guardar } = require('../meta/connection');
@@ -395,6 +397,85 @@ router.put(
         baseUrl: req.body.baseUrl, apiKey: req.body.apiKey,
         ip: auditoria.ipDaRequisicao(req),
       }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/operador/tenants/:id/ia-config/desativar — aposenta a chave
+// própria do tenant (FIL-78: migração gradual pra credencial global). A
+// próxima chamada de IA deste tenant já usa a credencial do operador.
+// ---------------------------------------------------------------------------
+router.post('/tenants/:id/ia-config/desativar', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await tenants.desativarIaConfig({ operador: req.operador, tenantId: id, ip: auditoria.ipDaRequisicao(req) }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/operador/tenants/:id/ia-teto  { tetoTokensMes: number|null }
+// Define o teto mensal de tokens do add-on de IA do tenant (null = sem
+// teto). Ver ia/limitePlano.js — quem INCREMENTA o consumo é o FIL-77.
+// ---------------------------------------------------------------------------
+router.post(
+  '/tenants/:id/ia-teto',
+  body('tetoTokensMes').optional({ nullable: true }).isInt({ min: 0 }).toInt(),
+  async (req, res, next) => {
+    const id = idDaRota(req, res);
+    if (!id) return;
+    if (checarValidacao(req, res)) return;
+    try {
+      const tetoTokensMes = req.body.tetoTokensMes === undefined ? null : req.body.tetoTokensMes;
+      res.json(await tenants.definirTetoIa({
+        operador: req.operador, tenantId: id, tetoTokensMes, ip: auditoria.ipDaRequisicao(req),
+      }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/operador/ia-credencial — credenciais do PROVEDOR configuradas
+// (histórico por provider), sem a chave.
+// PUT /api/operador/ia-credencial { provider, modeloPadrao, baseUrl?, apiKey? }
+// Grava/atualiza e torna esta A credencial ativa (FIL-78: fim da chave por
+// tenant — o operador é dono de UMA conta do provedor, compartilhada por
+// todos os tenants sem chave própria). Ver operador/credencialIa.js.
+// ---------------------------------------------------------------------------
+router.get('/ia-credencial', async (req, res, next) => {
+  try {
+    res.json(await credencialIa.listarCredenciais());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.put(
+  '/ia-credencial',
+  body('provider').isString(),
+  body('modeloPadrao').isString(),
+  body('baseUrl').optional({ nullable: true }).isString(),
+  body('apiKey').optional({ nullable: true }).isString(),
+  async (req, res, next) => {
+    if (checarValidacao(req, res)) return;
+    try {
+      const r = await credencialIa.salvarCredencial({
+        operador: req.operador,
+        provider: req.body.provider, modeloPadrao: req.body.modeloPadrao,
+        baseUrl: req.body.baseUrl, apiKey: req.body.apiKey,
+        ip: auditoria.ipDaRequisicao(req),
+      });
+      // Sem isto, o runtime (ia/iaConfigStore.js) seguiria servindo a
+      // credencial antiga do cache até o TTL de 60s expirar sozinho.
+      iaConfigStore.invalidarGlobal();
+      res.json(r);
     } catch (err) {
       tratar(err, res, next);
     }

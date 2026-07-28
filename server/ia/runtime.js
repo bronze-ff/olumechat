@@ -16,6 +16,7 @@ const client = require('./client');
 const toolExec = require('./toolExecutor');
 const auth = require('./autorizacao');
 const historico = require('./historico');
+const limitePlano = require('./limitePlano');
 const { partirTexto } = require('./chunk');
 
 const SISTEMA_FALLBACK = 'Você é o assistente da Multicanal Atacado no WhatsApp. Responda de forma objetiva '
@@ -62,24 +63,53 @@ async function responder(conn, tenantId, cv, textos) {
   }
 }
 
+/**
+ * FIL-78 (achado de review): resolver a credencial (store.carregar) exige
+ * NÃO segurar a conexão de tenant ao mesmo tempo — na falta de chave própria
+ * ela abre sua própria transação de operador (ver ia/iaConfigStore.js), e
+ * duas conexões seguradas por uma mesma requisição esgotam o pool sob
+ * concorrência. Por isso o processamento roda em 3 fases sequenciais, nunca
+ * duas conexões abertas ao mesmo tempo:
+ *   1) comTenant — valida conversa, plano (ia_habilitada + teto) e
+ *      autorização; já pode terminar aqui (e manda um recado) sem nunca
+ *      precisar da credencial.
+ *   2) SEM conexão nenhuma aberta — resolve a credencial.
+ *   3) comTenant (nova transação) — histórico, loop de tool-calls, resposta.
+ */
 async function processarEntrada(tenantId, conversaId, texto) {
   try {
-    await db.comTenant(tenantId, async (conn) => {
+    const cv = await db.comTenant(tenantId, async (conn) => {
       const cv = await carregarConversa(conn, tenantId, conversaId);
-      if (!cv) return;
+      if (!cv) return null;
 
       // IA é add-on vendido à parte (FIL-70-ia): plano desligado ⇒ o bot nem
       // tenta responder, mesmo que ia_config ainda tenha um provedor salvo de
       // uma configuração anterior do operador. Checagem server-side, não só
       // de UI — quem liga/desliga é operador/tenants.js::definirIa.
       const tenantRow = await conn.execute(`SELECT ia_habilitada FROM tenant WHERE id = :tenantId`, { tenantId });
-      if ((tenantRow.rows[0] || {}).IA_HABILITADA !== 'S') return;
+      if ((tenantRow.rows[0] || {}).IA_HABILITADA !== 'S') return null;
+
+      // Teto mensal do add-on (FIL-78): estourar bloqueia ANTES de gastar 1
+      // token no provedor. Mensagem genérica — nunca fala de custo/tokens
+      // (ver ia/limitePlano.js).
+      if (await limitePlano.estourouTeto(conn, tenantId)) {
+        await responder(conn, tenantId, cv, ['O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.']);
+        return null;
+      }
 
       if (!(await auth.autorizado(conn, tenantId, cv.telefone, cv.numeroId))) {
         await responder(conn, tenantId, cv, ['Olá! Este canal é restrito. Fale com a TI da Multicanal para liberar seu acesso.']);
-        return;
+        return null;
       }
-      const config = await store.carregar(conn, tenantId);
+      return cv;
+    });
+    if (!cv) return;
+
+    // Fase 2 — nenhuma conexão do pool aberta aqui.
+    const config = await store.carregar(tenantId);
+
+    // Fase 3 — nova transação de tenant, só para o que falta.
+    await db.comTenant(tenantId, async (conn) => {
       if (!config) {
         await responder(conn, tenantId, cv, ['O assistente está temporariamente indisponível (provedor de IA não configurado).']);
         return;
