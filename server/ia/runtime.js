@@ -22,6 +22,8 @@ const consumo = require('../consumo/registrar');
 const precos = require('../consumo/precos');
 const { partirTexto } = require('./chunk');
 const { publish } = require('../realtime/hub');
+const operacoes = require('./operacoes');
+const distribuidor = require('../fila/distribuidor');
 
 const MAX_ITER = 4;
 const MSG_TETO_ESTOURADO = 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.';
@@ -221,10 +223,42 @@ async function processarEntrada(tenantId, conversaId, texto) {
           if (out.toolCalls && out.toolCalls.length) {
             for (const tc of out.toolCalls) {
               await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: out.texto, toolCallId: tc.id, nome: tc.nome, args: tc.args });
+              // FIL-84: dois executores. Operação NOMEADA (efeito no código) →
+              // ia/operacoes.js; o resto continua no toolExecutor de SQL em
+              // disco. O modelo não sabe da diferença — quem roteia é aqui.
+              const op = operacoes.porNome(tc.nome);
               let resultado;
-              try { const r = await toolExec.executar(conn, tc.nome, tc.args); resultado = JSON.stringify(r.linhas); }
-              catch (e) { resultado = JSON.stringify({ erro: e.message }); }
+              let transferencia = null;
+              try {
+                if (op) {
+                  const r = await op.executar(conn, tenantId,
+                    { conversaId, contatoId: cv.contatoId, numeroId: cv.numeroId }, tc.args || {});
+                  if (r.transferido) transferencia = r;
+                  resultado = JSON.stringify(r);
+                } else {
+                  const r = await toolExec.executar(conn, tc.nome, tc.args);
+                  resultado = JSON.stringify(r.linhas);
+                }
+              } catch (e) { resultado = JSON.stringify({ erro: e.message }); }
               await historico.salvar(conn, tenantId, conversaId, 'tool', { toolCallId: tc.id, nome: tc.nome, resultado });
+
+              // Transferiu ⇒ o turno ACABA aqui. Deixar o modelo escrever mais
+              // uma volta seria fala descartada (fila_status já não é 'ia') e o
+              // cliente ficaria em silêncio. Enviamos a despedida fixa da
+              // operação e devolvemos os eventos de fila para publicar.
+              if (transferencia) {
+                await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: transferencia.mensagemCliente });
+                if (await responder(conn, tenantId, cv, [transferencia.mensagemCliente])) {
+                  posCommit.push(eventoMensagem(tenantId, cv));
+                }
+                for (const evt of transferencia.eventos || []) {
+                  posCommit.push(() => publish({ ...evt, tenantId }));
+                  if (evt.tipo === 'fila' && evt.departamentoId) {
+                    posCommit.push(() => distribuidor.atribuir(evt.departamentoId));
+                  }
+                }
+                return;
+              }
             }
             mensagens = await historico.carregar(conn, tenantId, conversaId);
             continue;

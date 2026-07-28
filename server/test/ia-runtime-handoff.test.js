@@ -114,3 +114,47 @@ test('o publish só sai DEPOIS do commit (nunca de dentro da transação)', asyn
   assert.ok(ordem.indexOf('publish') > ordem.lastIndexOf('commit'),
     'o SSE reagiu a um estado que ainda não estava visível fora da transação');
 });
+
+// ---------------------------------------------------------------------------
+// FIL-84 — a IA decide escalar: fim a fim, do tool-call ao evento de fila.
+//
+// Obstáculo 4 do ticket: `ia/tools.js` tinha `TOOLS = []` literal e o
+// toolExecutor só sabia rodar SQL de disco. Uma ferramenta de "transferir" não
+// cabia naquele modelo — daí o executor de operações NOMEADAS.
+// ---------------------------------------------------------------------------
+test('IA chama transferir_para_humano: muda a fila, avisa o cliente e para de responder', async () => {
+  const conn = connComFila(['ia', 'ia', 'ia']); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+
+  // A conexão precisa responder também às queries do handoff.
+  const executeBase = conn.execute.bind(conn);
+  conn.execute = async (sql, binds) => {
+    if (/FROM departamento/i.test(sql)) return { rows: [{ ID: 5, NOME: 'Financeiro' }] };
+    if (/SELECT fila_status, protocolo FROM conversa/i.test(sql)) return { rows: [{ FILA_STATUS: 'ia', PROTOCOLO: 'P1' }] };
+    if (/^UPDATE conversa/i.test(sql)) { conn._ins.push({ sql, binds }); return { rowsAffected: 1 }; }
+    return executeBase(sql, binds);
+  };
+
+  let volta = 0;
+  client.chamar = async () => (volta++ === 0
+    ? { texto: '', toolCalls: [{ id: 't1', nome: 'transferir_para_humano', args: { departamento: 'Financeiro', motivo: 'cliente pediu boleto' } }] }
+    : { texto: 'ESTA FALA NAO PODE SAIR', toolCalls: [] });
+
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) }; };
+
+  const eventos = [];
+  const cancelar = subscribe((e) => eventos.push(e));
+  try {
+    await runtime.processarEntrada(TENANT, 88, 'quero falar com alguém sobre o boleto');
+  } finally { cancelar(); }
+
+  assert.equal(volta, 1, 'depois de transferir, o modelo NÃO pode ser chamado de novo');
+  assert.equal(enviados.length, 1, 'só a despedida sai');
+  assert.match(enviados[0].text.body, /atendente/i);
+  assert.ok(!enviados.some((e) => /NAO PODE SAIR/.test(e.text.body)));
+  assert.ok(conn._ins.some((i) => /^UPDATE conversa/i.test(i.sql) && /fila_status/i.test(i.sql)), 'a fila tem que mudar');
+  assert.ok(eventos.some((e) => e.tipo === 'fila' && e.departamentoId === 5 && e.tenantId === TENANT),
+    'a conversa tem que aparecer na fila do departamento na hora');
+});
