@@ -63,7 +63,9 @@ test('Meta: token persistido é cifrado e nunca aparece em resposta ou log', asy
     const { router } = require('../api/meta');
     const app = express();
     app.use(express.json());
-    app.use((req, _res, next) => { req.tenantId = A; next(); });
+    // /signup/exchange exige sessão de suporte do operador (B9) — simula o
+    // req.user marcado pelo JWT curto de implantação (ver auth/middleware.js).
+    app.use((req, _res, next) => { req.tenantId = A; req.user = { suporte: true }; next(); });
     app.use('/meta', router);
     const oldFetch = global.fetch;
     global.fetch = async () => ({ ok: true, json: async () => ({ access_token: TOKEN_A }) });

@@ -3,8 +3,23 @@
 const express = require('express');
 const db = require('../db/pool');
 const { guardar } = require('../meta/connection');
+const { exigirPapel } = require('../auth/rbac');
 
 const router = express.Router();
+
+/**
+ * O cliente administra a operação, mas não credenciais/IDs da Meta. Trocar o
+ * code do Embedded Signup grava o access_token e faz UPSERT no `numero` do
+ * tenant — sobrescreve o canal oficial já conectado. Mesmo padrão do
+ * api/numeros.js::exigirSuporteOperador: é tarefa técnica do operador dentro
+ * da sessão de suporte auditada, não de um ATENDENTE/SUPERVISOR do cliente.
+ */
+function exigirSuporteOperador(req, res, next) {
+  if (req.user && req.user.suporte === true) return next();
+  return res.status(403).json({
+    error: 'A conexão do canal com a Meta é realizada pelo operador em um acesso de suporte.',
+  });
+}
 
 // Troca o código de curta duração emitido pelo Embedded Signup. O app secret
 // nunca sai do servidor e o token recebido nunca é devolvido ao navegador.
@@ -21,7 +36,7 @@ async function trocarCodigo(code) {
   return json;
 }
 
-router.post('/signup/exchange', async (req, res, next) => {
+router.post('/signup/exchange', exigirSuporteOperador, async (req, res, next) => {
   const { code, wabaId, phoneNumberId, displayPhone, nomeExibicao } = req.body || {};
   if (!code || !phoneNumberId) return res.status(400).json({ error: 'code e phoneNumberId são obrigatórios' });
   try {
@@ -39,7 +54,9 @@ router.post('/signup/exchange', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.get('/status', async (req, res, next) => {
+// waba_id/qualidade do número são info operacional do canal, não dado de
+// atendimento — mesmo gate de leitura usado em numeros.js.
+router.get('/status', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req, res, next) => {
   try {
     const rows = await db.comTenant(req.tenantId, async (conn) => {
       const r = await conn.execute(
