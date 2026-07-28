@@ -25,6 +25,7 @@ const { publish } = require('../realtime/hub');
 const operacoes = require('./operacoes');
 const distribuidor = require('../fila/distribuidor');
 const stt = require('./stt');
+const anexos = require('./anexos');
 
 const MAX_ITER = 4;
 const MSG_TETO_ESTOURADO = 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.';
@@ -253,6 +254,12 @@ async function processarEntrada(tenantId, conversaId, entrada) {
         texto: textoUsuario, midiaCaminho: ent.midiaCaminho, midiaMime: ent.mime,
       });
       let mensagens = await historico.carregar(conn, tenantId, conversaId);
+      // FIL-84: reanexa no máximo as 2 imagens mais recentes (ia/anexos.js); as
+      // antigas viram placeholder. Os bytes são lidos UMA vez por turno e
+      // reaproveitados nas recargas do loop de tool-calls — que só acrescentam
+      // turnos de texto, nunca imagem nova.
+      const cacheImagens = await anexos.carregarImagens(anexos.selecionar(mensagens));
+      mensagens = anexos.aplicar(mensagens, cacheImagens);
 
       let respostaFinal = '';
       // FIL-83: o system prompt vem do BANCO, por empresa (instruções + ficha +
@@ -330,7 +337,7 @@ async function processarEntrada(tenantId, conversaId, entrada) {
                 return;
               }
             }
-            mensagens = await historico.carregar(conn, tenantId, conversaId);
+            mensagens = anexos.aplicar(await historico.carregar(conn, tenantId, conversaId), cacheImagens);
             continue;
           }
           respostaFinal = (out.texto || '').trim();

@@ -34,3 +34,58 @@ test('erro HTTP do provedor vira Error', async () => {
   global.fetch = async () => ({ ok: false, status: 401, json: async () => ({ error: 'x' }) });
   await assert.rejects(() => chamar({ config: { provider: 'anthropic', modelo: 'm', apiKey: 'k' }, sistema: 's', mensagens: [] }), /401/);
 });
+
+// ---------------------------------------------------------------------------
+// FIL-84 — a IA vê imagem. Os dois provedores aceitam, com formatos DIFERENTES:
+// Anthropic usa blocos {type:'image', source:{type:'base64'}}; OpenAI usa
+// {type:'image_url'} com data URI. Errar o formato é 400 do provedor, que o
+// runtime transforma em fallback genérico — o cliente nunca saberia por quê.
+// ---------------------------------------------------------------------------
+test('Anthropic: turno com imagem vira bloco image + bloco text', async () => {
+  let corpo = null;
+  global.fetch = async (u, o) => {
+    corpo = JSON.parse(o.body);
+    return { ok: true, json: async () => ({ content: [{ type: 'text', text: 'ok' }], usage: {} }) };
+  };
+  await chamar({
+    config: { provider: 'anthropic', modelo: 'm', apiKey: 'k' },
+    sistema: 'S',
+    mensagens: [{ papel: 'user', texto: 'olha o defeito', imagem: { mime: 'image/jpeg', base64: 'QUJD' } }],
+  });
+  const conteudo = corpo.messages[0].content;
+  assert.ok(Array.isArray(conteudo));
+  const imagem = conteudo.find((b) => b.type === 'image');
+  assert.equal(imagem.source.type, 'base64');
+  assert.equal(imagem.source.media_type, 'image/jpeg');
+  assert.equal(imagem.source.data, 'QUJD');
+  assert.ok(conteudo.some((b) => b.type === 'text' && b.text === 'olha o defeito'));
+});
+
+test('OpenAI: turno com imagem vira image_url com data URI', async () => {
+  let corpo = null;
+  global.fetch = async (u, o) => {
+    corpo = JSON.parse(o.body);
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }], usage: {} }) };
+  };
+  await chamar({
+    config: { provider: 'openai', modelo: 'm', apiKey: 'k', baseUrl: 'https://api.openai.com/v1' },
+    sistema: 'S',
+    mensagens: [{ papel: 'user', texto: 'olha', imagem: { mime: 'image/png', base64: 'QUJD' } }],
+  });
+  const conteudo = corpo.messages.find((m) => m.role === 'user').content;
+  assert.ok(Array.isArray(conteudo));
+  assert.equal(conteudo.find((b) => b.type === 'image_url').image_url.url, 'data:image/png;base64,QUJD');
+});
+
+test('turno SEM imagem continua string simples (nada muda para quem nunca mandou foto)', async () => {
+  let corpo = null;
+  global.fetch = async (u, o) => {
+    corpo = JSON.parse(o.body);
+    return { ok: true, json: async () => ({ content: [{ type: 'text', text: 'ok' }], usage: {} }) };
+  };
+  await chamar({
+    config: { provider: 'anthropic', modelo: 'm', apiKey: 'k' },
+    sistema: 'S', mensagens: [{ papel: 'user', texto: 'oi' }],
+  });
+  assert.equal(corpo.messages[0].content, 'oi');
+});

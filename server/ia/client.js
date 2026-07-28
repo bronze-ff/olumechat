@@ -22,7 +22,20 @@ function toolsOpenAI() {
 function msgsAnthropic(mensagens) {
   const out = [];
   for (const m of mensagens) {
-    if (m.papel === 'user') { out.push({ role: 'user', content: m.texto || '.' }); continue; }
+    if (m.papel === 'user') {
+      // FIL-84: turno com imagem vira lista de blocos; sem imagem continua
+      // string simples (o formato que o provedor já recebia — nada muda para
+      // quem nunca mandou foto).
+      if (m.imagem) {
+        out.push({ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: m.imagem.mime, data: m.imagem.base64 } },
+          { type: 'text', text: m.texto || '.' },
+        ] });
+      } else {
+        out.push({ role: 'user', content: m.texto || '.' });
+      }
+      continue;
+    }
     if (m.papel === 'assistant') {
       const content = [];
       if (m.texto) content.push({ type: 'text', text: m.texto });
@@ -39,7 +52,21 @@ function msgsAnthropic(mensagens) {
 function msgsOpenAI(sistema, mensagens) {
   const out = [{ role: 'system', content: sistema }];
   for (const m of mensagens) {
-    if (m.papel === 'user') { out.push({ role: 'user', content: m.texto || '.' }); continue; }
+    if (m.papel === 'user') {
+      // FIL-84: OpenAI recebe imagem como data URI em `image_url` — formato
+      // DIFERENTE do bloco `source.base64` da Anthropic. Errar aqui é 400 do
+      // provedor, que o runtime transforma em fallback genérico: o cliente
+      // nunca saberia por quê.
+      if (m.imagem) {
+        out.push({ role: 'user', content: [
+          { type: 'text', text: m.texto || '.' },
+          { type: 'image_url', image_url: { url: `data:${m.imagem.mime};base64,${m.imagem.base64}` } },
+        ] });
+      } else {
+        out.push({ role: 'user', content: m.texto || '.' });
+      }
+      continue;
+    }
     if (m.papel === 'assistant') {
       const toolCalls = m.toolCallId
         ? [{ id: m.toolCallId, type: 'function', function: { name: m.nome, arguments: JSON.stringify(m.args || {}) } }]

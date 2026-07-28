@@ -253,3 +253,49 @@ test('áudio sem credencial OpenAI: pede texto e não chama o modelo de chat', a
   assert.equal(enviados.length, 1, 'nunca silêncio');
   assert.match(enviados[0].text.body, /escrever/i);
 });
+
+// ---------------------------------------------------------------------------
+// FIL-84 — imagem de ponta a ponta.
+// ---------------------------------------------------------------------------
+test('imagem: o turno guarda o caminho e o provedor recebe os bytes', async () => {
+  const conn = connComFila(['ia', 'ia']);
+  const turnos = [];
+  const executeBase = conn.execute.bind(conn);
+  conn.execute = async (sql, binds) => {
+    if (/INSERT INTO ia_turno/i.test(sql)) {
+      turnos.push(binds);
+      conn._ins.push({ sql, binds });
+      return { rows: [] };
+    }
+    if (/SELECT PAPEL, CONTEUDO/i.test(sql)) {
+      return { rows: turnos.map((t) => ({ PAPEL: t.papel, CONTEUDO: t.conteudo, TOOL_JSON: t.tj,
+        MIDIA_CAMINHO: t.cam, MIDIA_MIME: t.mime })) };
+    }
+    return executeBase(sql, binds);
+  };
+  db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+
+  const { storage } = require('../storage');
+  const lerOriginal = storage.ler;
+  storage.ler = async () => Buffer.from('ABC');
+
+  let recebidas = null;
+  client.chamar = async ({ mensagens }) => { recebidas = mensagens; return { texto: 'Recebi a foto!', toolCalls: [] }; };
+  global.fetch = async () => ({ ok: true, json: async () => ({ messages: [{ id: 'w' }] }) });
+
+  try {
+    await runtime.processarEntrada(TENANT, 88, {
+      tipo: 'imagem', texto: 'olha o defeito', midiaCaminho: '1/88/a.jpg', mime: 'image/jpeg',
+      tamanho: 1000, tipoOriginal: 'image',
+    });
+  } finally { storage.ler = lerOriginal; }
+
+  const turnoUser = turnos.find((t) => t.papel === 'user');
+  assert.equal(turnoUser.cam, '1/88/a.jpg', 'o turno guarda o caminho, nunca os bytes');
+  assert.equal(turnoUser.mime, 'image/jpeg');
+  const comImagem = (recebidas || []).filter((m) => m.imagem);
+  assert.equal(comImagem.length, 1, 'a imagem tem que chegar ao provedor');
+  assert.equal(comImagem[0].imagem.base64, Buffer.from('ABC').toString('base64'));
+});
