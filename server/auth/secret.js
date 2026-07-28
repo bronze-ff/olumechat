@@ -41,8 +41,18 @@ if (!SECRET || SECRET.length < 32) {
   process.env.JWT_SECRET = SECRET;
   if (process.env.NODE_ENV === 'production') {
     const ok = persistir(SECRET);
-    console.warn(`[auth] JWT_SECRET ${motivo} — gerado um forte automaticamente`
-      + (ok ? ' e gravado no .env.' : ' (NÃO persistido — defina JWT_SECRET no .env; o segredo muda a cada reinício).'));
+    if (!ok) {
+      // Sem persistir, CADA RÉPLICA gera o próprio segredo em memória — elas
+      // assinam diferente entre si e derrubam sessão de usuário aleatoriamente
+      // a cada deploy/restart (um token válido na réplica A vira 401 na B).
+      // Falha o boot: mesmo padrão do db/pool.js::initPool p/ config crítica
+      // ausente/quebrada.
+      throw new Error(
+        '[auth] JWT_SECRET ausente e não foi possível persistir um novo em produção '
+        + '(container com FS read-only?) — defina JWT_SECRET no ambiente antes de subir.'
+      );
+    }
+    console.warn(`[auth] JWT_SECRET ${motivo} — gerado um forte automaticamente e gravado no .env.`);
   } else {
     console.warn(`[auth] JWT_SECRET ${motivo} — usando um segredo aleatório de sessão (dev/teste; não persistido).`);
   }

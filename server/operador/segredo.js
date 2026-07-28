@@ -52,19 +52,31 @@ if (!SECRET || SECRET.length < 32) {
   process.env.OPERADOR_JWT_SECRET = SECRET;
   if (process.env.NODE_ENV === 'production') {
     const ok = persistir(SECRET);
-    console.warn(`[operador] OPERADOR_JWT_SECRET ${motivo} — gerado um forte automaticamente`
-      + (ok ? ' e gravado no .env.' : ' (NÃO persistido — defina OPERADOR_JWT_SECRET no .env; o segredo muda a cada reinício).'));
+    if (!ok) {
+      // Mesmo risco do auth/secret.js: sem persistir, cada réplica assina
+      // diferente e derruba sessão de operador aleatoriamente. Aqui é ainda
+      // mais sensível — é a credencial de super-admin.
+      throw new Error(
+        '[operador] OPERADOR_JWT_SECRET ausente e não foi possível persistir um novo em produção '
+        + '(container com FS read-only?) — defina OPERADOR_JWT_SECRET no ambiente antes de subir.'
+      );
+    }
+    console.warn(`[operador] OPERADOR_JWT_SECRET ${motivo} — gerado um forte automaticamente e gravado no .env.`);
   } else {
     console.warn(`[operador] OPERADOR_JWT_SECRET ${motivo} — usando um segredo aleatório de sessão (dev/teste; não persistido).`);
   }
 }
 
-// Configuração idêntica nos dois lados anula a separação criptográfica. Não dá
-// para "consertar" sozinho (trocar aqui derrubaria as sessões de tenant), mas
-// tem que gritar: é erro de operação, não detalhe.
+// Configuração idêntica nos dois lados anula a separação criptográfica: um
+// token de tenant passaria a verificar como token de operador (e vice-versa).
+// Não dá para "consertar" sozinho (trocar aqui derrubaria as sessões de
+// tenant) — a separação das duas sessões é a fronteira do super-admin, então
+// falha o boot em vez de só logar erro.
 if (SECRET === SECRET_TENANT) {
-  console.error('[operador] ⚠️ OPERADOR_JWT_SECRET é IGUAL ao JWT_SECRET do painel do cliente.'
-    + ' Gere um segredo próprio para o operador — a separação de sessões depende disso.');
+  throw new Error(
+    '[operador] OPERADOR_JWT_SECRET é IGUAL ao JWT_SECRET do painel do cliente — '
+    + 'gere um segredo próprio para o operador (a separação de sessões depende disso).'
+  );
 }
 
 // Sessão de operador é curta de propósito: é a credencial mais poderosa do
