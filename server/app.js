@@ -167,6 +167,8 @@ async function start() {
     require('./campanha/dispatcher').iniciar();
     // Fechamento mensal + retenção de consumo (FIL-77).
     require('./consumo/fechamento').iniciar();
+    // financeiro: geração mensal de fatura + marcação de atrasadas (FIL-79).
+    require('./financeiro/faturamento').iniciar();
     // Telemetria/licença (Pulso) — opcional: sem PULSO_* no .env fica inerte (não derruba o app).
     require('./telemetria/pulso-agent').iniciar({
       app: 'mc-atendimentos',

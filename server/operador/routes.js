@@ -35,6 +35,7 @@ const credencialIa = require('./credencialIa');
 const consumo = require('./consumo');
 const contrato = require('./contrato');
 const implementacao = require('./implementacao');
+const fatura = require('./fatura');
 const precos = require('../consumo/precos');
 const iaConfigStore = require('../ia/iaConfigStore');
 const { trocarCodigo } = require('../api/meta');
@@ -633,6 +634,186 @@ router.patch('/tenants/:id/implementacao/:implementacaoId', async (req, res, nex
     tratar(err, res, next);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Faturamento, pagamentos e inadimplência (FIL-79). Mesma regra de contrato/
+// implementação: nenhuma rota de tenant expõe isto (ver docs/SEGURANCA.md).
+//
+// A geração automática roda 1x/dia em financeiro/faturamento.js::tick (fatura
+// `prevista` idempotente por competência). Esta rota só dispara a MESMA
+// rotina sob demanda, sem esperar o tick — útil para gerar a fatura do mês
+// assim que o operador terminar de configurar um contrato.
+// ---------------------------------------------------------------------------
+router.post(
+  '/faturas/gerar',
+  body('competencia').optional({ nullable: true }).isString(),
+  body('tenantId').optional({ nullable: true }).isInt({ min: 1 }),
+  async (req, res, next) => {
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(await fatura.gerarManual({
+        operador: req.operador, competencia: req.body.competencia,
+        tenantId: req.body.tenantId ? Number(req.body.tenantId) : undefined,
+        ip: auditoria.ipDaRequisicao(req),
+      }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// GET /api/operador/inadimplencia — faturas atrasadas de todos os tenants.
+// A suspensão em si continua ação explícita do operador (POST /tenants/:id/suspender) — nunca automática.
+router.get('/inadimplencia', async (req, res, next) => {
+  try {
+    res.json(await fatura.listarInadimplencia());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.get('/tenants/:id/faturas', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await fatura.listarFaturas(id));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.get('/tenants/:id/faturas/:faturaId', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const faturaId = tenants.idValido(req.params.faturaId);
+  if (!faturaId) return res.status(400).json({ error: 'ID de fatura inválido' });
+  try {
+    res.json(await fatura.obterFatura({ tenantId: id, faturaId }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.get('/tenants/:id/faturas/:faturaId/pagamentos', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const faturaId = tenants.idValido(req.params.faturaId);
+  if (!faturaId) return res.status(400).json({ error: 'ID de fatura inválido' });
+  try {
+    res.json(await fatura.listarPagamentos({ tenantId: id, faturaId }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.post(
+  '/tenants/:id/faturas/:faturaId/pagamentos',
+  body('valorCentavos').isInt({ min: 1 }),
+  body('data').isString(),
+  body('meio').isString(),
+  body('comprovante').optional({ nullable: true }).isString(),
+  async (req, res, next) => {
+    const id = idDaRota(req, res);
+    if (!id) return;
+    const faturaId = tenants.idValido(req.params.faturaId);
+    if (!faturaId) return res.status(400).json({ error: 'ID de fatura inválido' });
+    if (checarValidacao(req, res)) return;
+    try {
+      res.status(201).json(await fatura.registrarPagamento({
+        operador: req.operador, tenantId: id, faturaId, dados: req.body || {},
+        ip: auditoria.ipDaRequisicao(req),
+      }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// Itens manuais (avulso/desconto) — só enquanto a fatura ainda é `prevista`.
+router.post('/tenants/:id/faturas/:faturaId/itens', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const faturaId = tenants.idValido(req.params.faturaId);
+  if (!faturaId) return res.status(400).json({ error: 'ID de fatura inválido' });
+  try {
+    res.status(201).json(await fatura.adicionarItem({
+      operador: req.operador, tenantId: id, faturaId, dados: req.body || {},
+      ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.delete('/tenants/:id/faturas/:faturaId/itens/:itemId', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const faturaId = tenants.idValido(req.params.faturaId);
+  const itemId = tenants.idValido(req.params.itemId);
+  if (!faturaId || !itemId) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    res.json(await fatura.removerItem({
+      operador: req.operador, tenantId: id, faturaId, itemId,
+      ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.post('/tenants/:id/faturas/:faturaId/emitir', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  const faturaId = tenants.idValido(req.params.faturaId);
+  if (!faturaId) return res.status(400).json({ error: 'ID de fatura inválido' });
+  try {
+    res.json(await fatura.emitirFatura({
+      operador: req.operador, tenantId: id, faturaId, ip: auditoria.ipDaRequisicao(req),
+    }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.post(
+  '/tenants/:id/faturas/:faturaId/cancelar',
+  body('motivo').optional({ nullable: true }).isString().isLength({ max: 200 }).trim(),
+  async (req, res, next) => {
+    const id = idDaRota(req, res);
+    if (!id) return;
+    const faturaId = tenants.idValido(req.params.faturaId);
+    if (!faturaId) return res.status(400).json({ error: 'ID de fatura inválido' });
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(await fatura.cancelarFatura({
+        operador: req.operador, tenantId: id, faturaId, motivo: req.body.motivo,
+        ip: auditoria.ipDaRequisicao(req),
+      }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+router.post(
+  '/tenants/:id/faturas/:faturaId/negociacao',
+  body('motivo').optional({ nullable: true }).isString().isLength({ max: 200 }).trim(),
+  async (req, res, next) => {
+    const id = idDaRota(req, res);
+    if (!id) return;
+    const faturaId = tenants.idValido(req.params.faturaId);
+    if (!faturaId) return res.status(400).json({ error: 'ID de fatura inválido' });
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(await fatura.marcarEmNegociacao({
+        operador: req.operador, tenantId: id, faturaId, motivo: req.body.motivo,
+        ip: auditoria.ipDaRequisicao(req),
+      }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
 
 // ---------------------------------------------------------------------------
 // GET /api/operador/auditoria?tenantId=&limite= — trilha do operador.
