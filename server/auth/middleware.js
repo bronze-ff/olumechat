@@ -19,14 +19,21 @@
 // módulos um a um seria mexer em arquivo de outro ticket, e uma divergência
 // entre as duas seria justamente um buraco de isolamento.
 //
-//  3. SESSÃO DE IMPLANTAÇÃO DO OPERADOR É ADMINISTRATIVA E AUDITADA.
+//  3. SESSÃO DE SUPORTE TEM CRUD COMPLETO, E ISSO É DECISÃO DE PRODUTO (FIL-70).
 //     O operador entra em UM tenant escolhido com um token curto marcado
-//     `suporte: true`. A fronteira continua sendo o tenantId assinado no token,
-//     mas as mutações são permitidas porque o time Falatta precisa implantar e
-//     configurar clientes que não têm equipe técnica. Toda tentativa de escrita
-//     é registrada AQUI, antes da rota, inclusive nas rotas que não possuem
-//     auditoria própria. O operador não vira atendente nem entra na distribuição
-//     de filas: essa separação continua no perfil fixo de auth/rbac.js.
+//     `suporte: true`, para IMPLANTAR e CONFIGURAR o tenant de clientes que não
+//     têm equipe técnica própria: criar departamentos, atendentes, fluxos,
+//     tags, atalhos, ajustar configurações, campanhas, IA — o mesmo CRUD de um
+//     ADMIN do cliente que logou com email e senha próprios. NENHUMA rota
+//     diferencia suporte de ADMIN em permissão (as poucas exceções pontuais,
+//     como `exigirSuporteOperador` em api/numeros.js/meta.js, vão no sentido
+//     contrário: restringem o ADMIN comum, não o suporte).
+//     A CONTRAPARTIDA DESSE PODER, NÃO UM SUBSTITUTO DELE, É A AUDITORIA:
+//     toda mutação de uma sessão de suporte é registrada AQUI, antes da rota,
+//     inclusive nas rotas que não têm auditoria própria — e cai na trilha que
+//     o PRÓPRIO CLIENTE lê no painel dele. Não reintroduza um bloqueio central
+//     de escrita aqui sem alinhar com produto: já foi tentado (FIL-70 original
+//     e uma reversão temporária deste ticket) e revertido nas duas vezes.
 'use strict';
 
 const jwt = require('jsonwebtoken');

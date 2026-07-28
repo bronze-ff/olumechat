@@ -302,7 +302,10 @@ test('acesso de suporte devolve ADMIN temporário do tenant escolhido e auditado
   assert.equal(leitura.body.papel, 'ADMIN');
   assert.equal(leitura.body.atendenteId, null, 'o operador não pode virar autor de nada no tenant');
 
-  // ...e pode executar uma rota que exige ADMIN.
+  // ...e pode executar uma rota que exige ADMIN. Decisão de produto (FIL-70):
+  // quem implanta e configura o tenant de um cliente sem equipe técnica é o
+  // operador, com o mesmo CRUD de um ADMIN — a contrapartida é a auditoria,
+  // não um bloqueio de escrita.
   const escrita = await req(ctx.port, 'POST', '/api/atendentes/1', { tok: r.body.token, body: { papel: 'ADMIN' } });
   assert.equal(escrita.status, 200);
   assert.ok(
@@ -316,12 +319,22 @@ test('acesso de suporte devolve ADMIN temporário do tenant escolhido e auditado
 });
 
 // ---------------------------------------------------------------------------
-// Administração de suporte: escrita liberada e auditada CENTRALMENTE.
+// Administração de suporte: CRUD completo, auditado CENTRALMENTE.
+//
+// Decisão de produto (FIL-70): o cliente final muitas vezes não sabe mexer
+// com tecnologia — quem implanta e configura o tenant (departamentos,
+// atendentes, fluxos, tags, atalhos, ajustes, campanhas, IA) é o operador,
+// numa sessão de suporte com o MESMO CRUD de um ADMIN do cliente. Isso já foi
+// tratado como regressão neste mesmo ticket (FIL-70 original bloqueava a
+// escrita) e revertido de propósito — a proteção do cliente não é um bloqueio
+// de escrita, é a AUDITORIA: toda mutação de suporte fica registrada, visível
+// na trilha que o próprio cliente lê. NÃO reintroduza um deny aqui sem
+// alinhar com produto.
 // ---------------------------------------------------------------------------
-test('suporte pode mutar rotas sem guarda de papel e cada tentativa é auditada', async () => {
+test('suporte muta rotas sem guarda de papel e cada tentativa é auditada', async () => {
   const tok = await tokenDeSuporte();
   // Estas três não têm exigirPapel nem o guarda de AUDITOR no repo real —
-  // se o bloqueio dependesse da rota, passariam.
+  // a auditoria central precisa registrar mesmo assim.
   const casos = [
     ['POST', '/api/atalhos', { atalho: 'oi', conteudo: 'texto' }],
     ['DELETE', '/api/atalhos/1', undefined],
@@ -342,10 +355,15 @@ test('suporte pode mutar rotas sem guarda de papel e cada tentativa é auditada'
   );
 });
 
-test('o mesmo bloqueio não atinge o usuário legítimo do tenant', async () => {
+test('a auditoria de suporte não atinge o usuário legítimo do tenant', async () => {
   const r = await req(ctx.port, 'POST', '/api/atalhos', { tok: tokenTenant(), body: { atalho: 'oi' } });
-  assert.equal(r.status, 200, 'o deny do suporte não pode pegar quem é do cliente');
+  assert.equal(r.status, 200);
   assert.equal(mutacoesExecutadas.length, 1);
+  assert.equal(
+    estado.auditoriaTenant.filter((item) => item.ACAO === 'suporte_mutacao').length,
+    0,
+    'mutação de usuário legítimo do tenant não é auditoria de SUPORTE'
+  );
 });
 
 test('suporte lê normalmente e mantém logout e ticket de SSE', async () => {

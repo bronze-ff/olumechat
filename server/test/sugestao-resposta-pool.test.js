@@ -11,6 +11,14 @@ process.env.WA_TOKEN = 'token_abc';
 process.env.WA_PHONE_NUMBER_ID = '1112223334';
 process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
 process.env.JWT_SECRET = 'segredo-de-teste-com-mais-de-32-chars-1234567890';
+// Impede que a blacklist compartilhada (utils/tokenBlacklist.js) tente
+// acessar o banco real do ambiente de dev. Sem isto, se a máquina tiver um
+// .env com DATABASE_URL de verdade, authMiddleware->blacklist.has() abre e
+// fecha uma SEGUNDA conexão (a checagem de jti) além da do handler da rota —
+// duas devoluções legítimas ao pool, mas o teste abaixo só espera uma,
+// porque assume (como auth-middleware.test.js e operador-tenants.test.js já
+// assumem, com o mesmo comentário) que a blacklist cai no cache local.
+process.env.DATABASE_URL = '';
 
 const test = require('node:test');
 const assert = require('node:assert');
