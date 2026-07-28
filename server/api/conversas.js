@@ -17,6 +17,8 @@ const { exigirPapel } = require('../auth/rbac');
 const iaConfigStore = require('../ia/iaConfigStore');
 const sugestaoResposta = require('../ia/sugestaoResposta');
 const limitePlano = require('../ia/limitePlano');
+const consumo = require('../consumo/registrar');
+const precos = require('../consumo/precos');
 const { limiterPorUsuario } = require('../utils/rateLimitPorUsuario');
 
 const router = express.Router();
@@ -293,12 +295,17 @@ router.post('/', naoAuditor, async (req, res, next) => {
         conversaId = insC.outBinds.id[0];
       }
       const conteudo = b.preview ? String(b.preview) : `[template: ${templateName}]`;
-      await conn.execute(
+      const ins = await conn.execute(
         `INSERT INTO mensagem
            (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())`,
-        { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo }
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())
+         RETURNING id INTO :id`,
+        { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo,
+          id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
       );
+      // Mede o envio (FIL-77) — achado de review: o template de conversa ativa
+      // ficou de fora da instrumentação original.
+      await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: ins.outBinds.id[0] });
       return { id: conversaId, contatoId, telefone, departamentoId: departamentoId || null, wamid };
     });
 
@@ -564,7 +571,28 @@ router.post('/:id/sugestao-resposta', naoAuditor, sugestaoIaLimiter, async (req,
     if (!config) {
       return res.status(400).json({ error: 'Nenhum provedor de IA configurado. Configure em Administração → Agente de IA.' });
     }
-    const sugestao = await sugestaoResposta.gerarComContexto(config, mensagens);
+    // Preço (FIL-77) resolvido AQUI — fora de qualquer comTenant() em
+    // andamento. Mesma regra do achado de review do FIL-78 (ver cabeçalho de
+    // ia/iaConfigStore.js): consumo/precos.js abre sua própria transação de
+    // operador; chamá-lo dentro de um comTenant() prenderia 2 conexões do
+    // pool ao mesmo tempo pela mesma requisição.
+    const preco = await precos.carregarPreco(config.provider, config.modelo);
+    const { texto: sugestao, uso } = await sugestaoResposta.gerarComContexto(config, mensagens);
+
+    // Mede o consumo desta chamada (FIL-77) — só abre uma conexão nova se o
+    // provedor realmente devolveu uso; nunca atrasa nem quebra a resposta já
+    // gerada (best-effort, ver consumo/registrar.js). registrarIaTokens só
+    // grava/soma na conexão de tenant já aberta aqui — não faz mais nenhuma
+    // consulta de preço por baixo dos panos (o `preco` já vem pronto).
+    if (uso && (uso.tokensEntrada > 0 || uso.tokensSaida > 0)) {
+      try {
+        await db.comTenant(req.tenantId, (conn) => consumo.registrarIaTokens(conn, req.tenantId, {
+          tokensEntrada: uso.tokensEntrada, tokensSaida: uso.tokensSaida, preco, referencia: id,
+        }));
+      } catch (err) {
+        console.error('[consumo] falha ao registrar consumo da sugestão (não afeta a resposta):', err.message);
+      }
+    }
     res.json({ sugestao });
   } catch (err) {
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
@@ -649,6 +677,12 @@ router.post('/:id/mensagens', naoAuditor, envioLimiter, async (req, res, next) =
           WHERE id = :id`,
         { id: cv.ID }
       );
+
+      // Mede o envio (FIL-77) — best-effort, ver consumo/registrar.js.
+      await consumo.registrar(conn, req.tenantId, {
+        tipo: 'mensagem_enviada', quantidade: 1, referencia: ins.outBinds.id[0],
+      });
+
       return {
         msgId: ins.outBinds.id[0], wamid, conversaId: cv.ID, contatoId: cv.CONTATO_ID,
         departamentoId: cv.DEPARTAMENTO_ID || null, textoEnviado,
@@ -779,6 +813,15 @@ router.post('/:id/arquivos', naoAuditor, envioLimiter, (req, res, next) => {
           WHERE id = :id`,
         { id: cv.ID }
       );
+
+      // Mede o envio E o armazenamento da mídia (FIL-77) — best-effort.
+      await consumo.registrar(conn, req.tenantId, {
+        tipo: 'mensagem_enviada', quantidade: 1, referencia: ins.outBinds.id[0],
+      });
+      await consumo.registrar(conn, req.tenantId, {
+        tipo: 'midia_armazenada', quantidade: req.file.size, referencia: ins.outBinds.id[0],
+      });
+
       return {
         id: ins.outBinds.id[0], tipo, nomeArquivo: nomeOriginal, wamid,
         conversaId: cv.ID, contatoId: cv.CONTATO_ID, departamentoId: cv.DEPARTAMENTO_ID || null,
@@ -1212,6 +1255,9 @@ router.post('/:id/encerrar', naoAuditor, async (req, res, next) => {
               txt: despedidaIdentificada,
             }
           );
+          // Mede o envio (FIL-77) — achado de review: a despedida opcional
+          // ficou de fora da instrumentação original.
+          await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: id });
         } catch (e) {
           console.error('[conversas] despedida falhou (encerrando mesmo assim):', e.message);
         }

@@ -27,6 +27,7 @@ const { foraDeHorario } = require('../utils/horario');
 const { descreverMensagem } = require('../utils/descreverMensagem');
 const { gerarProtocolo } = require('../fila/protocolo');
 const distribuidor = require('../fila/distribuidor');
+const consumo = require('../consumo/registrar');
 
 const PG_UNIQUE_VIOLATION = '23505';
 const MEDIA_TYPES = ['image', 'document', 'audio', 'video', 'sticker'];
@@ -332,6 +333,11 @@ async function confirmarEncerramento(evt) {
          VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', now())`,
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: texto }
       );
+      // Mede o envio (FIL-77) — só chegamos aqui com wamid preenchido quando
+      // o sendText acima teve sucesso; se falhou, wamid fica null mas o
+      // status ainda seria 'sent' hardcoded (comportamento pré-existente) —
+      // por isso a condição real é "resp existiu", checada logo acima.
+      if (wamid) await consumo.registrar(conn, evt.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: evt.conversaId });
     });
   } catch (err) {
     console.error('[webhook] persistência da confirmação falhou:', err.message);
@@ -361,6 +367,9 @@ async function enviarAvisoForaHorario(evt) {
          VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', now())`,
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: evt.texto }
       );
+      // Mede o envio (FIL-77) — chegamos aqui só depois do sendText (acima)
+      // ter tido sucesso (senão a função já teria retornado no catch).
+      await consumo.registrar(conn, evt.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: evt.conversaId });
     });
     publish({ tipo: 'mensagem', direcao: 'out', conversaId: evt.conversaId, contatoId: evt.contatoId, tenantId: evt.tenantId });
   } catch (err) {
@@ -491,6 +500,12 @@ async function processChange(conn, numero, value) {
     // devolve false. NÃO reprocessa: senão a IA/bot responde de novo, há
     // dupla notificação SSE e opt-out/encerramento/rastro de campanha repetidos.
     if (!novoInbound) continue;
+    // Mede o armazenamento (FIL-77, achado de review P2) — só DEPOIS da
+    // deduplicação: um webhook reentregue não pode contar a mesma mídia duas
+    // vezes. `media` só existe quando safeDownload teve sucesso de verdade.
+    if (media && media.size) {
+      await consumo.registrar(conn, numero.tenantId, { tipo: 'midia_armazenada', quantidade: media.size, referencia: conversaId });
+    }
     // Conversa nova = possível resposta a um disparo de campanha → deixa o rastro.
     if (conversa.criada) {
       await anotarRespostaCampanha(conn, { conversaId, contatoId, telefone: msg.from });

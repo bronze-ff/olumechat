@@ -166,6 +166,8 @@ async function start() {
     require('./bot/sweeper').iniciar();
     // Dispatcher de campanha de cobrança em lote.
     require('./campanha/dispatcher').iniciar();
+    // Fechamento mensal + retenção de consumo (FIL-77).
+    require('./consumo/fechamento').iniciar();
     // Telemetria/licença (Pulso) — opcional: sem PULSO_* no .env fica inerte (não derruba o app).
     require('./telemetria/pulso-agent').iniciar({
       app: 'mc-atendimentos',

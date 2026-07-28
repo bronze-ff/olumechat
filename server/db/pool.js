@@ -228,11 +228,51 @@ async function comTenant(tenantId, fn) {
   }
 }
 
+// Contador só para dar nomes ÚNICOS a savepoints concorrentes na MESMA
+// transação (loops que chamam comSavepoint várias vezes) — não precisa ser
+// por-conexão nem persistir entre chamadas.
+let savepointSeq = 0;
+
+/**
+ * Roda `fn()` isolado num SAVEPOINT da transação corrente: se `fn` lançar,
+ * só o que ELE tentou fazer sofre ROLLBACK — a transação do CHAMADOR continua
+ * saudável e pode seguir commitando o resto do trabalho.
+ *
+ * Existe porque, sem savepoint, QUALQUER statement que falhe (constraint,
+ * RLS, tabela ausente) marca a transação Postgres INTEIRA como abortada —
+ * capturar a exceção em JS não desfaz isso: todo comando seguinte (exceto
+ * ROLLBACK) devolve 25P02, e o COMMIT final vira ROLLBACK silencioso. É o
+ * mesmo padrão já usado em lotes de mutação (api/conversas.js) e no bot
+ * (bot/runtime.js) — centralizado aqui para quem faz escrita BEST-EFFORT
+ * dentro da transação de alguém (ex.: consumo/registrar.js, FIL-77: medir
+ * consumo não pode derrubar o envio da mensagem que já saiu pelo WhatsApp).
+ *
+ * Ainda assim RELANÇA o erro original (quem chama decide se ignora/loga —
+ * ver o padrão em consumo/registrar.js) — só isola o dano no Postgres.
+ * @param {object} conn conexão da transação em andamento
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ * @template T
+ */
+async function comSavepoint(conn, fn) {
+  const nome = `sp_${++savepointSeq}`;
+  await conn.execute(`SAVEPOINT ${nome}`);
+  try {
+    const resultado = await fn();
+    await conn.execute(`RELEASE SAVEPOINT ${nome}`);
+    return resultado;
+  } catch (err) {
+    await conn.execute(`ROLLBACK TO SAVEPOINT ${nome}`).catch(() => {});
+    throw err;
+  }
+}
+
 module.exports = {
   initPool,
   getConnection,
   closePool,
   comTenant,
+  comSavepoint,
   tipos,
   _wrapClient: wrapClient, // uso em teste
 };

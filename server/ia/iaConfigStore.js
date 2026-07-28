@@ -98,10 +98,21 @@ function invalidar(tenantId) {
   else cache.delete(String(tenantId));
 }
 
-/** Invalida só o cache da credencial global — chamada por
- *  operador/credencialIa.js::salvarCredencial após trocar a credencial. */
+/**
+ * Invalida o cache da credencial global — chamada por
+ * operador/credencialIa.js::salvarCredencial após trocar a credencial.
+ *
+ * ⚠️ Achado de review (P2): tenants que caem no fallback global guardam o
+ * valor RESOLVIDO (a chave em claro) sob a própria chave de tenant em
+ * carregar() — apagar só CHAVE_GLOBAL deixava esses tenants servindo a chave
+ * ANTIGA por até 60s depois da rotação (e falhando de vez se a chave antiga
+ * já tiver sido revogada no provedor). Sem como saber, sem bookkeeping
+ * extra, QUAIS entradas de tenant vieram do fallback global, limpa o cache
+ * inteiro — rotação de credencial é ação rara do operador; o custo é, no
+ * pior caso, um tenant com chave PRÓPRIA reconsultar à toa uma vez.
+ */
 function invalidarGlobal() {
-  cache.delete(CHAVE_GLOBAL);
+  cache.clear();
 }
 
 module.exports = { carregar, invalidar, invalidarGlobal };
