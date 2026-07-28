@@ -112,9 +112,16 @@ test('sugestao-resposta: a conexao do pool e devolvida ANTES da chamada ao prove
     const r = await post(port);
     assert.equal(r.status, 200);
     assert.equal(r.body.sugestao, 'Claro, posso ajudar!');
-    // A conexão precisa ter sido devolvida ANTES da chamada externa começar —
-    // não depois (senão ela ficou presa no pool durante o tempo de rede/LLM).
-    assert.deepEqual(ordem, ['conexao-devolvida-ao-pool', 'chamada-externa-ao-provedor']);
+    // A(s) conexão(ões) do pool — a do contexto da conversa e, se precisar
+    // resolver a credencial (FIL-78, ia/iaConfigStore.js, que abre a sua
+    // própria transação de operador), essa também — precisam ter sido
+    // devolvidas ANTES da chamada externa começar, nunca depois (senão
+    // ficaram presas no pool durante o tempo de rede/LLM). Não fixamos a
+    // QUANTIDADE de devoluções (pode crescer conforme a resolução da
+    // credencial muda) — só que a chamada externa é sempre a ÚLTIMA coisa.
+    assert.ok(ordem.length >= 2, `esperava ao menos 1 devolução de conexão + 1 chamada externa: ${JSON.stringify(ordem)}`);
+    assert.deepEqual(ordem.slice(0, -1), ordem.slice(0, -1).map(() => 'conexao-devolvida-ao-pool'));
+    assert.equal(ordem[ordem.length - 1], 'chamada-externa-ao-provedor');
   } finally {
     global.fetch = oldFetch;
     server.close();

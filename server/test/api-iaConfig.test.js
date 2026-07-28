@@ -9,6 +9,8 @@ const assert = require('node:assert');
 const http = require('node:http');
 const express = require('express');
 const db = require('../db/pool');
+const iaConfigStore = require('../ia/iaConfigStore');
+const { cifrar } = require('../ia/credencialOperador');
 
 function servidor(papel = 'ADMIN', tenantId = 1) {
   const app = express();
@@ -79,4 +81,75 @@ test('não existe mais PUT nesta rota — configurar é só via painel do operad
   db.getConnection = async () => ({ async execute() { return { rows: [] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
   const res = await req(servidor(), 'PUT');
   assert.equal(res.status, 404);
+});
+
+// ---------------------------------------------------------------------------
+// FIL-78 (achado de review, P1): sem chave própria, o status precisa
+// reconhecer a credencial GLOBAL do operador — sem nunca expor detalhe dela.
+// Tenant exclusivo (55501) pra não colidir com o cache do iaConfigStore de
+// outros arquivos da suíte, que também usam tenantId pequenos.
+// ---------------------------------------------------------------------------
+const TENANT_GLOBAL = 55501;
+
+test('FIL-78: sem chave própria, mas COM credencial global ativa → ativo=true, origem=operador, SEM detalhe nenhum', async () => {
+  iaConfigStore.invalidar(TENANT_GLOBAL); iaConfigStore.invalidarGlobal();
+  db.getConnection = async () => ({
+    async execute(sql) {
+      if (sql.includes('FROM tenant')) return { rows: [{ IA_HABILITADA: 'S' }] };
+      if (sql.includes('FROM ia_config')) return { rows: [] }; // sem chave própria
+      if (sql.includes('FROM provedor_credencial WHERE ativo')) {
+        return { rows: [{ PROVIDER: 'openrouter', MODELO_PADRAO: 'openai/gpt-4o-mini', BASE_URL: 'https://openrouter.ai/api/v1', API_KEY_CRIPTOGRAFADA: cifrar('sk-global-secreta') }] };
+      }
+      return { rows: [] };
+    },
+    commit: async()=>{}, rollback: async()=>{}, close: async()=>{},
+  });
+  const res = await req(servidor('ADMIN', TENANT_GLOBAL));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.habilitada, true);
+  assert.equal(res.body.ativo, true, 'a IA está de fato configurada (via credencial global) — não pode dizer "não configurado"');
+  assert.equal(res.body.origem, 'operador');
+  assert.equal(res.body.provider, null, 'credencial global não expõe provider por rota de tenant');
+  assert.equal(res.body.modelo, null);
+  assert.equal(res.body.baseUrl, null);
+  assert.equal(res.body.atualizadoEm, null);
+  assert.ok(!JSON.stringify(res.body).includes('sk-global-secreta'), 'a chave nunca aparece na resposta');
+  assert.ok(!JSON.stringify(res.body).toLowerCase().includes('openrouter'), 'nem o nome do provedor global aparece na resposta');
+});
+
+test('FIL-78: sem chave própria e sem credencial global → ativo=false, origem=null', async () => {
+  const TENANT_SEM_NADA = 55502;
+  iaConfigStore.invalidar(TENANT_SEM_NADA); iaConfigStore.invalidarGlobal();
+  db.getConnection = async () => ({
+    async execute(sql) {
+      if (sql.includes('FROM tenant')) return { rows: [{ IA_HABILITADA: 'S' }] };
+      return { rows: [] }; // nem ia_config nem provedor_credencial têm linha
+    },
+    commit: async()=>{}, rollback: async()=>{}, close: async()=>{},
+  });
+  const res = await req(servidor('ADMIN', TENANT_SEM_NADA));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.habilitada, true);
+  assert.equal(res.body.ativo, false);
+  assert.equal(res.body.origem, null);
+});
+
+test('FIL-78: com chave PRÓPRIA ativa, origem=tenant e o global nem é consultado', async () => {
+  const TENANT_PROPRIA = 55503;
+  iaConfigStore.invalidar(TENANT_PROPRIA); iaConfigStore.invalidarGlobal();
+  let consultouGlobal = false;
+  db.getConnection = async () => ({
+    async execute(sql) {
+      if (sql.includes('FROM tenant')) return { rows: [{ IA_HABILITADA: 'S' }] };
+      if (sql.includes('FROM provedor_credencial')) consultouGlobal = true;
+      if (sql.includes('FROM ia_config')) return { rows: [{ PROVIDER: 'anthropic', MODELO: 'claude-sonnet-5', BASE_URL: null, ATIVO: 'S', ATUALIZADO_EM: new Date() }] };
+      return { rows: [] };
+    },
+    commit: async()=>{}, rollback: async()=>{}, close: async()=>{},
+  });
+  const res = await req(servidor('ADMIN', TENANT_PROPRIA));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.origem, 'tenant');
+  assert.equal(res.body.provider, 'anthropic');
+  assert.equal(consultouGlobal, false, 'com chave própria ativa, nem precisa consultar a credencial global');
 });

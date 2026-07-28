@@ -524,11 +524,18 @@ router.post('/:id/sugestao-resposta', naoAuditor, sugestaoIaLimiter, async (req,
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
-    // Carrega config/contexto DENTRO da transação, mas devolve a conexão ao
-    // pool ANTES de chamar o provedor de IA (a chamada externa pode levar até
-    // 45s). Com pool de 10, dez sugestões simultâneas presas em comTenant()
-    // esgotariam o pool inteiro e derrubariam o webhook e o resto da API.
-    const { config, mensagens } = await db.comTenant(req.tenantId, async (conn) => {
+    // Carrega o CONTEXTO (conversa/gates/mensagens) DENTRO da transação, mas
+    // devolve a conexão ao pool ANTES de resolver a credencial e de chamar o
+    // provedor de IA (a chamada externa pode levar até 45s). Com pool de 10,
+    // dez sugestões simultâneas presas em comTenant() esgotariam o pool
+    // inteiro e derrubariam o webhook e o resto da API.
+    //
+    // FIL-78 (achado de review): iaConfigStore.carregar() NÃO pode rodar
+    // aqui dentro — na falta de chave própria do tenant ela abre sua própria
+    // transação de operador (ver ia/iaConfigStore.js), e duas conexões
+    // seguradas pela mesma requisição esgotam o pool sob concorrência. Por
+    // isso ela roda DEPOIS deste bloco, com a conexão de tenant já devolvida.
+    const { mensagens } = await db.comTenant(req.tenantId, async (conn) => {
       if (!(await conversaNoEscopo(conn, id, req.perfil))) {
         throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
       }
@@ -548,15 +555,15 @@ router.post('/:id/sugestao-resposta', naoAuditor, sugestaoIaLimiter, async (req,
       if ((cfgRow.rows[0] || {}).VALOR !== 'S') {
         throw new RespostaHttp(400, { error: 'Sugestão de resposta por IA está desativada. Ative em Administração → Agente de IA.' });
       }
-      const config = await iaConfigStore.carregar(conn, req.tenantId);
-      if (!config) {
-        throw new RespostaHttp(400, { error: 'Nenhum provedor de IA configurado. Configure em Administração → Agente de IA.' });
-      }
       const mensagens = await sugestaoResposta.carregarContexto(conn, id);
-      return { config, mensagens };
+      return { mensagens };
     });
 
-    // A conexão JÁ FOI DEVOLVIDA ao pool aqui — a chamada externa roda livre.
+    // A conexão de tenant JÁ FOI DEVOLVIDA ao pool aqui.
+    const config = await iaConfigStore.carregar(req.tenantId);
+    if (!config) {
+      return res.status(400).json({ error: 'Nenhum provedor de IA configurado. Configure em Administração → Agente de IA.' });
+    }
     const sugestao = await sugestaoResposta.gerarComContexto(config, mensagens);
     res.json({ sugestao });
   } catch (err) {

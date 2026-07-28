@@ -403,6 +403,44 @@ router.put(
 );
 
 // ---------------------------------------------------------------------------
+// POST /api/operador/tenants/:id/ia-config/desativar — aposenta a chave
+// própria do tenant (FIL-78: migração gradual pra credencial global). A
+// próxima chamada de IA deste tenant já usa a credencial do operador.
+// ---------------------------------------------------------------------------
+router.post('/tenants/:id/ia-config/desativar', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await tenants.desativarIaConfig({ operador: req.operador, tenantId: id, ip: auditoria.ipDaRequisicao(req) }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/operador/tenants/:id/ia-teto  { tetoTokensMes: number|null }
+// Define o teto mensal de tokens do add-on de IA do tenant (null = sem
+// teto). Ver ia/limitePlano.js — quem INCREMENTA o consumo é o FIL-77.
+// ---------------------------------------------------------------------------
+router.post(
+  '/tenants/:id/ia-teto',
+  body('tetoTokensMes').optional({ nullable: true }).isInt({ min: 0 }).toInt(),
+  async (req, res, next) => {
+    const id = idDaRota(req, res);
+    if (!id) return;
+    if (checarValidacao(req, res)) return;
+    try {
+      const tetoTokensMes = req.body.tetoTokensMes === undefined ? null : req.body.tetoTokensMes;
+      res.json(await tenants.definirTetoIa({
+        operador: req.operador, tenantId: id, tetoTokensMes, ip: auditoria.ipDaRequisicao(req),
+      }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
 // GET /api/operador/ia-credencial — credenciais do PROVEDOR configuradas
 // (histórico por provider), sem a chave.
 // PUT /api/operador/ia-credencial { provider, modeloPadrao, baseUrl?, apiKey? }
