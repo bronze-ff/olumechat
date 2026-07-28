@@ -208,8 +208,29 @@ CREATE TABLE IF NOT EXISTS contato (
   CONSTRAINT fk_contato_atd       FOREIGN KEY (tenant_id, atualizado_por)
     REFERENCES atendente (tenant_id, id)
 );
-CREATE INDEX IF NOT EXISTS ix_contato_codcli ON contato (tenant_id, codcli);
-CREATE INDEX IF NOT EXISTS ix_contato_cgcent ON contato (tenant_id, cgcent);
+-- Em instalações já migradas, 002 renomeou CODCLI/CGCENT. Um rerun da 001
+-- precisa escolher o nome de coluna que existe hoje, sem falhar no parse.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'contato' AND column_name = 'codcli'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_contato_codcli ON contato (tenant_id, codcli)';
+  ELSE
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_contato_codigo_externo ON contato (tenant_id, codigo_externo)';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'contato' AND column_name = 'cgcent'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_contato_cgcent ON contato (tenant_id, cgcent)';
+  ELSE
+    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_contato_documento ON contato (tenant_id, documento)';
+  END IF;
+END
+$$;
 
 -- ----------------------------------------------------------------------------
 -- tag — catálogo de etiquetas (a atribuição fica em conversa.tags / jsonb).

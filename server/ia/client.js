@@ -64,12 +64,17 @@ async function fetchComTimeout(url, opts) {
   finally { clearTimeout(t); }
 }
 
-async function chamar({ config, sistema, mensagens }) {
+// `semFerramentas`: usos leves (sugestão de resposta, sentimento, correção de
+// texto) não devem ganhar acesso às tools do bot (consulta de cliente/cobrança)
+// nem pagar o custo de descrevê-las a cada chamada — só o runtime do bot precisa.
+async function chamar({ config, sistema, mensagens, semFerramentas = false }) {
   if (config.provider === 'anthropic') {
+    const body = { model: config.modelo, max_tokens: 1024, system: sistema, messages: msgsAnthropic(mensagens) };
+    if (!semFerramentas) body.tools = toolsAnthropic();
     const res = await fetchComTimeout('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: config.modelo, max_tokens: 1024, system: sistema, tools: toolsAnthropic(), messages: msgsAnthropic(mensagens) }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Provedor anthropic ${res.status}: ${JSON.stringify((await res.json().catch(() => ({}))).error || {})}`);
     const json = await res.json();
@@ -79,10 +84,12 @@ async function chamar({ config, sistema, mensagens }) {
   }
   // OpenAI-compatível
   const base = (config.baseUrl || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
+  const body = { model: config.modelo, messages: msgsOpenAI(sistema, mensagens) };
+  if (!semFerramentas) body.tools = toolsOpenAI();
   const res = await fetchComTimeout(`${base}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ model: config.modelo, tools: toolsOpenAI(), messages: msgsOpenAI(sistema, mensagens) }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Provedor ${config.provider} ${res.status}: ${JSON.stringify((await res.json().catch(() => ({}))).error || {})}`);
   const json = await res.json();

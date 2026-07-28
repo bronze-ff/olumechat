@@ -81,6 +81,52 @@ const SELECT_BASE = `
     LEFT JOIN numero n ON n.tenant_id = c.tenant_id AND n.id = c.numero_id`;
 
 // GET /api/historico?pagina=1&… — lista paginada + total.
+router.get('/me', async (req, res, next) => {
+  const atendenteId = Number(req.perfil && req.perfil.atendenteId);
+  if (!Number.isInteger(atendenteId) || atendenteId <= 0) {
+    return res.status(403).json({ error: 'Perfil de atendente não disponível.' });
+  }
+
+  const q = String(req.query.q || '').trim();
+  const binds = { tenantId: req.tenantId, atendenteId };
+  const conds = [
+    'c.tenant_id = :tenantId',
+    `(c.atendente_id = :atendenteId OR EXISTS (
+       SELECT 1
+         FROM auditoria au
+        WHERE au.tenant_id = c.tenant_id
+          AND au.entidade = 'conversa'
+          AND au.entidade_id = c.id
+          AND au.atendente_id = :atendenteId
+     ))`,
+  ];
+  if (q) {
+    conds.push(`(
+      UPPER(ct.nome_perfil) LIKE UPPER('%'||:q||'%')
+      OR ct.telefone LIKE '%'||:qd||'%'
+      OR c.protocolo LIKE '%'||:q||'%'
+    )`);
+    binds.q = q;
+    binds.qd = q.replace(/\D/g, '') || ' ';
+  }
+
+  try {
+    const rows = await db.comTenant(req.tenantId, async (conn) => {
+      const resultado = await conn.execute(
+        `${SELECT_BASE}
+          WHERE ${conds.join(' AND ')}
+          ORDER BY COALESCE(c.resolvida_em, c.criado_em) DESC NULLS LAST, c.id DESC
+          FETCH FIRST 100 ROWS ONLY`,
+        binds
+      );
+      return resultado.rows;
+    });
+    res.json({ itens: mapRows(rows), total: rows.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req, res, next) => {
   const pagina = Math.max(1, Number(req.query.pagina) || 1);
   const porPagina = TAMANHOS_PAGINA.includes(Number(req.query.porPagina)) ? Number(req.query.porPagina) : POR_PAGINA;
@@ -113,7 +159,11 @@ router.get('/', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req, res, 
 
 function csvEscape(v) {
   if (v === null || v === undefined) return '';
-  const s = String(v);
+  let s = String(v);
+  // CSV injection: Excel/Sheets executa a célula como fórmula se ela COMEÇAR
+  // com =, +, - ou @. NOME_PERFIL vem do WhatsApp — quem manda a mensagem
+  // controla o valor. Um apóstrofo na frente neutraliza sem mudar o texto.
+  if (/^[=+\-@]/.test(s)) s = `'${s}`;
   return /[";\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -242,3 +292,4 @@ router.get('/:id/atendimento', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), as
 });
 
 module.exports = router;
+module.exports.csvEscape = csvEscape; // uso em teste

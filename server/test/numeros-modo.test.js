@@ -18,7 +18,8 @@ const { SECRET } = require('../auth/secret');
 const authMiddleware = require('../auth/middleware');
 const numerosRoutes = require('../api/numeros');
 
-const TOKEN = jwt.sign({ jti: 'n1', tenantId: 1, matricula: 1, nome: 'Admin' }, SECRET, { expiresIn: '1h' });
+const TOKEN = jwt.sign({ jti: 'n1', tenantId: 1, nome: 'Operador', suporte: true }, SECRET, { expiresIn: '1h' });
+const TOKEN_ADMIN = jwt.sign({ jti: 'n2', tenantId: 1, matricula: 1, nome: 'Admin' }, SECRET, { expiresIn: '1h' });
 const PERFIL_ADMIN = { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true };
 
 function startApp(conn, perfil) {
@@ -33,12 +34,12 @@ function startApp(conn, perfil) {
   });
 }
 
-function req(port, method, path, body) {
+function req(port, method, path, body, token = TOKEN) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
     const r = http.request(
       { method, hostname: '127.0.0.1', port, path,
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}`,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`,
                    ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } },
       (res) => { let o = ''; res.on('data', (c) => (o += c)); res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(o || '{}') })); }
     );
@@ -87,5 +88,15 @@ test('PUT /numeros/:id ignora modo invalido (bind vira null, nao altera coluna)'
     assert.equal(r.status, 200);
     const upd = capturas.find((c) => c.sql.includes('UPDATE numero'));
     assert.equal(upd.binds.modo, null);
+  } finally { server.close(); }
+});
+
+test('PUT /numeros/:id recusa administrador do cliente fora do suporte do operador', async () => {
+  const capturas = [];
+  const { server, port } = await startApp(fakeConn(capturas), PERFIL_ADMIN);
+  try {
+    const r = await req(port, 'PUT', '/api/numeros/7', { modo: 'ia' }, TOKEN_ADMIN);
+    assert.equal(r.status, 403);
+    assert.equal(capturas.some((c) => c.sql.includes('UPDATE numero')), false);
   } finally { server.close(); }
 });

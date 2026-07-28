@@ -43,6 +43,11 @@ const numerosRoutes = require('../api/numeros');
 const configCache = require('../utils/configCache');
 
 const TOKEN = jwt.sign({ jti: 'ct1', tenantId: 1, matricula: 1, nome: 'Admin' }, SECRET, { expiresIn: '1h' });
+const tokenSuporte = (tenantId) => jwt.sign(
+  { jti: `cts-${tenantId}`, tenantId, nome: 'Operador', suporte: true },
+  SECRET,
+  { expiresIn: '1h' }
+);
 const PERFIL_ADMIN = { atendenteId: 1, papel: 'ADMIN', deptoIds: [], ativo: true };
 
 // ---------------------------------------------------------------------------
@@ -125,12 +130,12 @@ function startApp(caminho, router, tenantId) {
   });
 }
 
-function post(port, path, body) {
+function post(port, path, body, token = TOKEN) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const rq = http.request(
       { method: 'POST', hostname: '127.0.0.1', port, path,
-        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), authorization: `Bearer ${TOKEN}` } },
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), authorization: `Bearer ${token}` } },
       (res) => { let o = ''; res.on('data', (c) => (o += c)); res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(o || '{}') })); }
     );
     rq.on('error', reject); rq.write(data); rq.end();
@@ -187,12 +192,12 @@ test('cadastros: phone_number_id é único GLOBAL — segundo tenant recebe 409,
   const restaurar = comConexaoFixa(client);
   try {
     const { server: s1, port: p1 } = await startApp('/api/numeros', numerosRoutes, 1);
-    const r1 = await post(p1, '/api/numeros', { phoneNumberId: 'pnid-compartilhado' });
+    const r1 = await post(p1, '/api/numeros', { phoneNumberId: 'pnid-compartilhado' }, tokenSuporte(1));
     s1.close();
     assert.equal(r1.status, 201, JSON.stringify(r1.body));
 
     const { server: s2, port: p2 } = await startApp('/api/numeros', numerosRoutes, 2);
-    const r2 = await post(p2, '/api/numeros', { phoneNumberId: 'pnid-compartilhado' });
+    const r2 = await post(p2, '/api/numeros', { phoneNumberId: 'pnid-compartilhado' }, tokenSuporte(2));
     s2.close();
     assert.equal(r2.status, 409, 'segundo tenant conseguiu registrar o mesmo phone_number_id — VAZAMENTO');
     assert.match(r2.body.error, /já está cadastrado/i);

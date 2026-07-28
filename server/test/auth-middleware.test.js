@@ -13,6 +13,9 @@ process.env.WEBHOOK_VERIFY_TOKEN = 'verify123';
 process.env.WA_TOKEN = 'token_abc';
 process.env.WA_PHONE_NUMBER_ID = '1112223334';
 process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
+// A blacklist deste teste usa deliberadamente o cache local; não deve gravar
+// no banco de desenvolvimento configurado na máquina que executa a suíte.
+process.env.DATABASE_URL = '';
 
 const test = require('node:test');
 const assert = require('node:assert');

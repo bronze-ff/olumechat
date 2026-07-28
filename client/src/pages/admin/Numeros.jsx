@@ -29,7 +29,8 @@ function Linha({ rotulo, children }) {
 
 // Modal "Status na Meta" — a consulta sai do servidor (que alcança a Graph API).
 function StatusMeta({ num, onClose }) {
-  const { isAdmin } = useAuth();
+  const { user } = useAuth();
+  const podeProvisionar = user?.suporte === true;
   const [pin, setPin] = useState('');
   const [okMsg, setOkMsg] = useState('');
   const q = useQuery({
@@ -56,7 +57,7 @@ function StatusMeta({ num, onClose }) {
           <h2 className="font-display font-bold text-base flex-1">Status na Meta</h2>
           <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
         </div>
-        <div className="p-4">
+        <div className="modal-body">
           {q.isLoading && <div className="py-6 flex justify-center"><Spinner /></div>}
           {q.isError && (
             <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
@@ -88,7 +89,7 @@ function StatusMeta({ num, onClose }) {
             </p>
           )}
 
-          {q.data && isAdmin && (
+          {q.data && podeProvisionar && (
             <div className="mt-4 pt-3 border-t border-black/[0.06]">
               <p className="text-sm font-semibold text-stone-800">Mudar o nome de exibição</p>
               <p className="text-[11px] text-stone-500 mt-0.5 mb-2">
@@ -107,7 +108,7 @@ function StatusMeta({ num, onClose }) {
             </div>
           )}
 
-          {q.data && pendente && isAdmin && (
+          {q.data && pendente && podeProvisionar && (
             <div className="mt-4 pt-3 border-t border-black/[0.06]">
               <p className="text-sm font-semibold text-stone-800">Conectar número (registrar no Cloud API)</p>
               <p className="text-[11px] text-stone-500 mt-0.5 mb-2">
@@ -133,7 +134,7 @@ function StatusMeta({ num, onClose }) {
             </div>
           )}
         </div>
-        <div className="p-3 border-t border-black/[0.06] flex gap-2 safe-bottom">
+        <div className="modal-footer">
           <button onClick={() => q.refetch()} disabled={q.isFetching}
             className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm disabled:opacity-40">
             {q.isFetching ? 'Consultando…' : 'Atualizar'}
@@ -177,7 +178,7 @@ function EditarNumero({ num, deptos, onClose }) {
           <h2 className="font-display font-bold text-base flex-1">{formatPhone(num.displayPhone) || `Número #${num.id}`}</h2>
           <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
         </div>
-        <div className="p-4 space-y-4">
+        <div className="modal-body space-y-4">
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Nome de exibição (interno)</label>
             <input className="input-field" value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex.: Cobrança 1090" />
@@ -232,7 +233,7 @@ function EditarNumero({ num, deptos, onClose }) {
           </label>
           {erro && <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{erro}</div>}
         </div>
-        <div className="p-3 border-t border-black/[0.06] flex gap-2 safe-bottom">
+        <div className="modal-footer">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Cancelar</button>
           <button onClick={() => salvar.mutate()} disabled={salvar.isPending}
             className="flex-1 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
@@ -274,7 +275,7 @@ function CadastrarNumero({ deptos, onClose }) {
           <h2 className="font-display font-bold text-base flex-1">Cadastrar número</h2>
           <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
         </div>
-        <div className="p-4 space-y-4">
+        <div className="modal-body space-y-4">
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">ID do número (Phone Number ID)</label>
             <input className="input-field font-mono" value={phoneNumberId} onChange={(e) => setPhoneNumberId(e.target.value)}
@@ -306,7 +307,7 @@ function CadastrarNumero({ deptos, onClose }) {
           </div>
           {erro && <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{erro}</div>}
         </div>
-        <div className="p-3 border-t border-black/[0.06] flex gap-2 safe-bottom">
+        <div className="modal-footer">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Cancelar</button>
           <button onClick={() => criar.mutate()} disabled={!phoneNumberId.trim() || criar.isPending}
             className="flex-1 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
@@ -319,7 +320,8 @@ function CadastrarNumero({ deptos, onClose }) {
 }
 
 export default function Numeros() {
-  const { isAdmin } = useAuth();
+  const { user } = useAuth();
+  const podeProvisionar = user?.suporte === true;
   const [editando, setEditando] = useState(null);
   const [statusDe, setStatusDe] = useState(null);
   const [cadastrando, setCadastrando] = useState(false);
@@ -343,10 +345,11 @@ export default function Numeros() {
       <div className="flex items-center gap-3">
         <p className="text-xs text-stone-500 flex-1">
           Números aparecem aqui automaticamente quando recebem a primeira mensagem (via webhook).
-          Para usar um número novo como ORIGEM de campanha antes da primeira mensagem, cadastre-o aqui
-          com o Phone Number ID do painel da Meta.
+          {podeProvisionar
+            ? ' Neste acesso de suporte você pode pré-cadastrar e configurar um canal com o Phone Number ID da Meta.'
+            : ' O cadastro técnico de um canal novo é feito pelo operador em um acesso de suporte auditado.'}
         </p>
-        {isAdmin && (
+        {podeProvisionar && (
           <button onClick={() => setCadastrando(true)}
             className="shrink-0 px-4 py-2 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold">
             + Cadastrar número
@@ -404,7 +407,7 @@ export default function Numeros() {
               title="Consultar nome/qualidade/verificação na Meta">
               Status Meta
             </button>
-            {isAdmin && (
+            {podeProvisionar && (
               <button onClick={() => setEditando(n)}
                 className="text-xs px-3 py-1.5 rounded-lg border border-black/15 text-stone-600 hover:bg-paper-50 font-medium">
                 Editar

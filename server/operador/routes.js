@@ -33,6 +33,7 @@ const auditoria = require('./auditoria');
 const tenants = require('./tenants');
 const { trocarCodigo } = require('../api/meta');
 const { guardar } = require('../meta/connection');
+const { linkDeConvite } = require('../utils/conviteLink');
 
 const router = express.Router();
 
@@ -41,14 +42,6 @@ const MSG_401 = 'Usuário ou senha inválidos.';
 
 /** Minutos de validade da sessão de SUPORTE dentro de um tenant. */
 const SUPORTE_TTL_MIN = Number(process.env.OPERADOR_SUPORTE_TTL_MIN) || 30;
-
-/** Base pública do painel, usada para montar o link do convite. */
-function baseDoApp() {
-  return String(process.env.APP_URL || 'http://localhost:3001').replace(/\/+$/, '');
-}
-function linkDeConvite(slug, token) {
-  return `${baseDoApp()}/definir-senha?empresa=${encodeURIComponent(slug)}&token=${encodeURIComponent(token)}`;
-}
 
 // Atrás de um proxy o X-Forwarded-For pode chegar com PORTA — ver auth/routes.js.
 function chavePorIp(req) {
@@ -300,15 +293,15 @@ router.post('/tenants/:id/reativar', async (req, res, next) => {
 // ---------------------------------------------------------------------------
 // POST /api/operador/tenants/:id/acesso-suporte  { motivo? }
 //
-// Troca a credencial de operador por uma sessão CURTA e SOMENTE-LEITURA dentro
+// Troca a credencial de operador por uma sessão CURTA e escopada dentro
 // de UM tenant. O token devolvido é um token de TENANT (assinado com o segredo
 // do painel do cliente) com `tenantId` + `suporte: true` — é o "tenant
 // explicitamente selecionado" que o ticket exige: a sessão de operador crua,
 // sem tenant, não entra em rota de tenant nenhuma.
 //
-// O perfil dessa sessão é AUDITOR (somente-leitura, sem `atendenteId`) — ver
-// auth/rbac.js. O operador diagnostica; não fala com o cliente final pelo
-// WhatsApp da empresa nem altera cadastro.
+// O perfil dessa sessão é ADMIN de implantação (sem `atendenteId`) — ver
+// auth/rbac.js. O operador configura o tenant inteiro, mas não vira funcionário
+// do cliente, não entra na presença e não recebe conversas da fila.
 //
 // A entrada fica registrada nas DUAS trilhas — inclusive na `auditoria` do
 // próprio cliente, que ele lê no painel dele.
@@ -338,7 +331,69 @@ router.post(
         SECRET_TENANT,
         { expiresIn: `${SUPORTE_TTL_MIN}m` }
       );
-      res.json({ token, tenant: t, expiraEm: expiraEm.toISOString(), papel: 'AUDITOR' });
+      res.json({ token, tenant: t, expiraEm: expiraEm.toISOString(), papel: 'ADMIN' });
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/operador/tenants/:id/ia  { habilitada: bool }
+// Liga/desliga o add-on de IA no plano do cliente — é o único jeito de
+// habilitar (o admin do tenant não tem esse botão, ver api/iaConfig.js).
+// ---------------------------------------------------------------------------
+router.post(
+  '/tenants/:id/ia',
+  body('habilitada').isBoolean(),
+  async (req, res, next) => {
+    const id = idDaRota(req, res);
+    if (!id) return;
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(await tenants.definirIa({
+        operador: req.operador, tenantId: id, habilitada: req.body.habilitada === true,
+        ip: auditoria.ipDaRequisicao(req),
+      }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/operador/tenants/:id/ia-config — status atual (sem a chave).
+// PUT  /api/operador/tenants/:id/ia-config  { provider, modelo, baseUrl?, apiKey? }
+// Só o operador define provider/modelo/chave de um cliente — é o add-on
+// vendido à parte (ver cabeçalho de operador/tenants.js::salvarIaConfig).
+// ---------------------------------------------------------------------------
+router.get('/tenants/:id/ia-config', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await tenants.carregarIaConfig(id));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.put(
+  '/tenants/:id/ia-config',
+  body('provider').isString(),
+  body('modelo').isString(),
+  body('baseUrl').optional({ nullable: true }).isString(),
+  body('apiKey').optional({ nullable: true }).isString(),
+  async (req, res, next) => {
+    const id = idDaRota(req, res);
+    if (!id) return;
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(await tenants.salvarIaConfig({
+        operador: req.operador, tenantId: id,
+        provider: req.body.provider, modelo: req.body.modelo,
+        baseUrl: req.body.baseUrl, apiKey: req.body.apiKey,
+        ip: auditoria.ipDaRequisicao(req),
+      }));
     } catch (err) {
       tratar(err, res, next);
     }

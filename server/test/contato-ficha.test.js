@@ -16,6 +16,7 @@ const db = require('../db/pool');
 const {
   partesTelefone, acharClientePorTelefone, dadosClienteWinthor, registrarProvedor,
 } = require('../utils/clienteLookup');
+const { normalizar, variantes } = require('../utils/telefone');
 const contatosRoutes = require('../api/contatos');
 
 // ---------- clienteLookup (unidade) ----------
@@ -71,11 +72,27 @@ test('dadosClienteWinthor: sem provedor ou sem código → null', async () => {
 
 // ---------- API /api/contatos (integração leve) ----------
 
-function fakeConn({ contato = { ID: 5, TELEFONE: '5562999990000', NOME_PERFIL: null, NOME_INTERNO: null, CODIGO_EXTERNO: null, DOCUMENTO: null, OBSERVACOES: null, TAGS_CONTATO: null, ATUALIZADO_EM: null, ATUALIZADO_POR_NOME: null }, cap = {} } = {}) {
+function fakeConn({
+  contato = { ID: 5, TELEFONE: '5562999990000', NOME_PERFIL: null, NOME_INTERNO: null, CODIGO_EXTERNO: null, DOCUMENTO: null, OBSERVACOES: null, TAGS_CONTATO: null, ATUALIZADO_EM: null, ATUALIZADO_POR_NOME: null },
+  cap = {},
+  vinculosValidos = true,
+} = {}) {
   return {
     async execute(sql, binds) {
       if (sql.includes('FROM contato ct')) return { rows: contato ? [contato] : [] };
+      if (sql.includes('FROM atendente_depto ad')) {
+        return { rows: vinculosValidos ? [{ ATENDENTE_ID: binds.a }] : [] };
+      }
       if (sql.startsWith('UPDATE contato')) { cap.update = binds; return { rowsAffected: 1 }; }
+      if (sql.startsWith('INSERT INTO contato (')) { cap.insert = binds; return { rows: [{ ID: 42 }] }; }
+      if (sql.startsWith('DELETE FROM contato_atendente_depto')) {
+        cap.deleteVinculos = binds;
+        return { rowsAffected: 1 };
+      }
+      if (sql.startsWith('INSERT INTO contato_atendente_depto')) {
+        cap.vinculos = [...(cap.vinculos || []), binds];
+        return { rowsAffected: 1 };
+      }
       if (sql.includes('INSERT INTO auditoria')) { cap.audit = binds; return {}; }
       return { rows: [], outBinds: {} };
     },
@@ -116,6 +133,37 @@ test('PUT /contatos/:id persiste nome interno + grava auditoria', async () => {
   } finally { server.close(); }
 });
 
+test('PUT /contatos/:id salva um responsável diferente por departamento', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'PUT', '/api/contatos/5', {
+      vinculosAtendimento: [
+        { departamentoId: 10, atendenteId: 101 },
+        { departamentoId: 20, atendenteId: 202 },
+      ],
+    });
+    assert.equal(r.status, 200);
+    assert.equal(cap.deleteVinculos.id, 5);
+    assert.deepEqual(
+      cap.vinculos.map((item) => [item.d, item.a]),
+      [[10, 101], [20, 202]]
+    );
+    assert.match(String(cap.audit.det), /vinculos_atendimento/);
+  } finally { server.close(); }
+});
+
+test('PUT /contatos/:id rejeita atendente fora do departamento', async () => {
+  const { server, port } = await app(fakeConn({ vinculosValidos: false }));
+  try {
+    const r = await req(port, 'PUT', '/api/contatos/5', {
+      vinculosAtendimento: [{ departamentoId: 10, atendenteId: 999 }],
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /pertencer ao departamento/);
+  } finally { server.close(); }
+});
+
 test('PUT /contatos/:id: AUDITOR (somente-leitura) → 403', async () => {
   const { server, port } = await app(fakeConn(), { atendenteId: 1, papel: 'AUDITOR', deptoIds: [], numeroIds: [] });
   try {
@@ -146,5 +194,66 @@ test('GET /contatos/:id: TAGS_CONTATO já vem decodificado (array) do driver —
     const r = await req(port, 'GET', '/api/contatos/5');
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.tags, [1, 2, 3]);
+  } finally { server.close(); }
+});
+
+// REGRESSÃO: o manager digitava "62999999999" (11 díg, sem DDI) no CRM e o
+// contato gravava assim; o webhook/envio normalizam pra "5562999999999" via
+// utils/telefone::normalizar — resultado era um contato DUPLICADO por
+// telefone e o histórico partia ao meio na primeira interação por WhatsApp.
+// POST e PUT agora usam a MESMA função de normalização.
+
+test('POST /contatos: telefone com 11 dígitos (DDD + 9º dígito, sem DDI) grava com o DDI 55', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'POST', '/api/contatos', { telefone: '62999999999' });
+    assert.equal(r.status, 201);
+    assert.equal(cap.insert.tel, '5562999999999');
+  } finally { server.close(); }
+});
+
+test('POST /contatos: telefone com 13 dígitos (já com DDI) não muda', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'POST', '/api/contatos', { telefone: '5562999999999' });
+    assert.equal(r.status, 201);
+    assert.equal(cap.insert.tel, '5562999999999');
+  } finally { server.close(); }
+});
+
+test('POST /contatos: telefone digitado com máscara ("(62) 99999-9999") normaliza igual', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'POST', '/api/contatos', { telefone: '(62) 99999-9999' });
+    assert.equal(r.status, 201);
+    assert.equal(cap.insert.tel, '5562999999999');
+  } finally { server.close(); }
+});
+
+test('POST /contatos: telefone gravado casa com a MESMA variante que o webhook usaria pra achar o contato (dedup do 9º dígito)', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    // Manager digita SEM o 9º dígito (forma que o WhatsApp às vezes entrega).
+    const r = await req(port, 'POST', '/api/contatos', { telefone: '6299999999' });
+    assert.equal(r.status, 201);
+    // acharContato busca por variantes(telefone_recebido_do_whatsapp) IN (...).
+    // O telefone gravado pelo CRM precisa estar entre as variantes do mesmo
+    // número, senão o contato criado manualmente nunca casa com a conversa.
+    assert.ok(variantes('5562999999999').includes(cap.insert.tel));
+  } finally { server.close(); }
+});
+
+test('PUT /contatos/:id: telefone normaliza igual ao POST (mesma função)', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'PUT', '/api/contatos/5', { telefone: '62988887777' });
+    assert.equal(r.status, 200);
+    assert.equal(cap.update.tel, normalizar('62988887777'));
+    assert.equal(cap.update.tel, '5562988887777');
   } finally { server.close(); }
 });

@@ -6,13 +6,13 @@ import { formatPhone } from '../../utils/formatters';
 
 // Identidade visual por tipo de passo (cor do nó na timeline + chip).
 const TIPOS = [
-  { id: 'mensagem', rotulo: 'Mensagem', icone: '💬', cor: '#1B5E7B', desc: 'Envia um texto e segue pro próximo passo' },
+  { id: 'mensagem', rotulo: 'Mensagem', icone: '💬', cor: '#087B63', desc: 'Envia um texto e segue pro próximo passo' },
   { id: 'menu', rotulo: 'Menu', icone: '🔢', cor: '#B7791F', desc: 'Cliente escolhe digitando o número' },
   { id: 'pergunta', rotulo: 'Pergunta', icone: '❓', cor: '#5B4B8A', desc: 'Captura uma resposta (ex.: código RCA)' },
   { id: 'consulta', rotulo: 'Consulta BD', icone: '🗄️', cor: '#0E7490', desc: 'Valida a resposta no banco (SELECT) e segue por encontrado/não encontrado' },
   { id: 'irfluxo', rotulo: 'Ir para fluxo', icone: '🔗', cor: '#7C3AED', desc: 'Continua o atendimento em OUTRO fluxo (variáveis preservadas)' },
   { id: 'transferir', rotulo: 'Transferir', icone: '👤', cor: '#2F7D4F', desc: 'Encaminha pra fila de um departamento' },
-  { id: 'encerrar', rotulo: 'Encerrar', icone: '🏁', cor: '#9B1B1B', desc: 'Finaliza o atendimento' },
+  { id: 'encerrar', rotulo: 'Encerrar', icone: '🏁', cor: '#C83C4A', desc: 'Finaliza o atendimento' },
 ];
 const tipoDe = (id) => TIPOS.find((t) => t.id === id) || TIPOS[0];
 

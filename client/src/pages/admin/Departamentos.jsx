@@ -4,7 +4,7 @@ import api from '../../services/api';
 import Spinner from '../../components/ui/Spinner';
 import { useAuth } from '../../context/AuthContext';
 
-const CORES = ['#1B5E7B', '#9B1B1B', '#2F7D4F', '#B7791F', '#5B4B8A', '#0E7490'];
+const CORES = ['#087B63', '#47A987', '#B55343', '#9A6700', '#3E756C', '#65766F'];
 
 export default function Departamentos() {
   const { isAdmin } = useAuth();
@@ -61,7 +61,7 @@ export default function Departamentos() {
         {deptos.isError && <p className="p-4 text-sm text-red-600">Erro ao carregar.</p>}
         {(deptos.data || []).map((d) => (
           <div key={d.id} className={`flex items-center gap-3 px-4 py-3 ${d.ativo === 'N' ? 'opacity-50' : ''}`}>
-            <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ backgroundColor: d.cor || '#1B5E7B' }} />
+            <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ backgroundColor: d.cor || '#087B63' }} />
             <div className="min-w-0 flex-1">
               <p className="font-semibold text-sm text-stone-800">{d.nome}</p>
               {d.descricao && <p className="text-xs text-stone-500">{d.descricao}</p>}
@@ -70,7 +70,7 @@ export default function Departamentos() {
             {isAdmin && (
               <button onClick={() => alternar.mutate(d)}
                 className={`text-xs px-2.5 py-1 rounded-full font-medium
-                  ${d.ativo === 'S' ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-stone-100 text-stone-500 hover:bg-stone-200'}`}>
+                  ${d.ativo === 'S' ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-paper-200 text-ink-900 hover:bg-paper-300'}`}>
                 {d.ativo === 'S' ? 'Ativo' : 'Inativo'}
               </button>
             )}

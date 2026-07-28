@@ -125,7 +125,7 @@ export default function Fluxos() {
                 </p>
               </div>
               <span className={`shrink-0 font-mono text-[9px] uppercase tracking-widest px-2 py-1 rounded-full
-                ${f.ativo === 'S' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-400'}`}>
+                ${f.ativo === 'S' ? 'bg-emerald-100 text-emerald-700' : 'bg-paper-200 text-ink-900'}`}>
                 {f.ativo === 'S' ? '● ativo' : 'inativo'}
               </span>
             </div>

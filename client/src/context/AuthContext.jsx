@@ -24,9 +24,9 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem('token');
     if (isTokenValid(token)) {
       const p = parseJwt(token);
-      // `suporte` = sessão do operador dentro deste tenant (FIL-70): entra
-      // pelo mesmo caminho, mas é somente-leitura (o servidor recusa qualquer
-      // mutação) e a UI precisa saber para se marcar como tal.
+      // `suporte` = sessão administrativa temporária do operador dentro deste
+      // tenant (FIL-70). O perfil do servidor chega como ADMIN, mas a marca
+      // continua visível para indicar o modo de implantação e permitir voltar.
       setUser({ usuarioId: p.usuarioId, matricula: p.matricula, nome: p.nome, email: p.email,
                 tenantId: p.tenantId, papel: 'ATENDENTE', deptoIds: [], podeAtivo: false,
                 suporte: p.suporte === true });
@@ -34,7 +34,7 @@ export function AuthProvider({ children }) {
       // servidor. loading só cai DEPOIS do perfil chegar: senão o app pinta como
       // ATENDENTE por um instante (esconde menu de admin / redireciona no 1º paint).
       api.get('/auth/perfil')
-        .then(({ data }) => setUser((u) => u && ({ ...u, papel: data.papel, deptoIds: data.deptoIds, podeAtivo: !!data.podeAtivo })))
+        .then(({ data }) => setUser((u) => u && ({ ...u, papel: data.papel, deptoIds: data.deptoIds, podeAtivo: !!data.podeAtivo, iaHabilitada: !!data.iaHabilitada })))
         .catch(() => {})
         .finally(() => setLoading(false));
     } else {
@@ -61,6 +61,7 @@ export function AuthProvider({ children }) {
       usuarioId: data.usuarioId, matricula: data.matricula, nome: data.nome,
       email: data.email, tenantId: p?.tenantId,
       papel: data.papel || 'ATENDENTE', deptoIds: data.deptoIds || [], podeAtivo: !!data.podeAtivo,
+      iaHabilitada: !!data.iaHabilitada,
     });
     navigate('/conversas', { replace: true });
   }, [navigate]);
@@ -73,21 +74,30 @@ export function AuthProvider({ children }) {
     navigate('/login', { replace: true });
   }, [navigate]);
 
+  const encerrarSuporte = useCallback(async () => {
+    try { await api.post('/auth/logout'); } catch { /* encerra localmente mesmo se a API falhar */ }
+    localStorage.removeItem('token');
+    queryClient.clear();
+    setUser(null);
+    navigate('/operador', { replace: true });
+  }, [navigate]);
+
   // Re-busca o perfil do servidor sem relogar — usado quando o PRÓPRIO usuário
   // tem o cadastro alterado (ex.: um admin que se auto-rebaixa a ATENDENTE), pra
   // o menu/permissões não ficarem congelados no papel antigo até dar reload.
   const refreshPerfil = useCallback(async () => {
     try {
       const { data } = await api.get('/auth/perfil');
-      setUser((u) => u && ({ ...u, papel: data.papel, deptoIds: data.deptoIds, podeAtivo: !!data.podeAtivo }));
+      setUser((u) => u && ({ ...u, papel: data.papel, deptoIds: data.deptoIds, podeAtivo: !!data.podeAtivo, iaHabilitada: !!data.iaHabilitada }));
     } catch { /* ignora */ }
   }, []);
 
   const isAdmin = user?.papel === 'ADMIN';
   const isGestor = user?.papel === 'ADMIN' || user?.papel === 'SUPERVISOR';
+  const isAuditor = user?.papel === 'AUDITOR';
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, isAuthenticated: !!user, isAdmin, isGestor, refreshPerfil }}>
+    <AuthContext.Provider value={{ user, login, logout, encerrarSuporte, loading, isAuthenticated: !!user, isAdmin, isGestor, isAuditor, refreshPerfil }}>
       {children}
     </AuthContext.Provider>
   );

@@ -66,7 +66,7 @@ function AtendimentoModal({ conversa: c, modo, onClose, onAbrir }) {
                 ${m.direcao === 'out' ? 'bg-brand-700 text-white rounded-br-sm' : 'bg-white border border-black/[0.07] text-stone-800 rounded-bl-sm'}`}>
                 {m.mediaId && <div className="mb-1"><Anexo m={m} out={m.direcao === 'out'} /></div>}
                 {m.conteudo ? m.conteudo : (!m.mediaId && <em className="opacity-60">[{m.tipo}]</em>)}
-                <div className={`text-[9px] mt-0.5 text-right ${m.direcao === 'out' ? 'text-white/60' : 'text-stone-400'}`} title={formatDateTime(m.ts)}>
+                <div className={`text-[9px] mt-0.5 text-right ${m.direcao === 'out' ? 'text-white/85' : 'text-stone-400'}`} title={formatDateTime(m.ts)}>
                   {formatTime(m.ts)}
                 </div>
               </div>

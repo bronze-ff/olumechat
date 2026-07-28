@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import api from '../services/api';
 import Header from '../components/layout/Header';
 import Spinner from '../components/ui/Spinner';
@@ -9,6 +10,9 @@ import { AtalhosDropdown, AtalhosModal } from '../components/Atalhos';
 import useEventStream from '../hooks/useEventStream';
 import { useAuth } from '../context/AuthContext';
 import NovaConversa from './NovaConversa';
+import Icon from '../components/ui/Icon';
+import { BrandMark } from '../components/ui/Brand';
+import ThemeMenu from '../components/ui/ThemeMenu';
 import { formatTime, formatDateTime, formatDiaSeparador, diaMudou, formatHoraOuDia, formatPhone, janelaRestante } from '../utils/formatters';
 
 // Rótulo do status da mensagem enviada (a Meta devolve em inglês).
@@ -57,7 +61,7 @@ function DeptoBadge({ nome, cor }) {
   const geral = !nome;
   return (
     <span className="inline-flex items-center gap-1 text-[10px] font-medium text-stone-500 shrink-0 min-w-0">
-      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: geral ? '#A8A29E' : (cor || '#1B5E7B') }} />
+      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: geral ? '#80978F' : (cor || '#087B63') }} />
       <span className="truncate">{geral ? 'Geral' : nome}</span>
     </span>
   );
@@ -99,7 +103,9 @@ function ConversaItem({ c, ativo, onClick }) {
           {c.filaStatus === 'aguardando' ? (
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 animate-pulse shrink-0">na fila</span>
           ) : c.filaStatus === 'ia' ? (
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 shrink-0">🤖 IA</span>
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 shrink-0">
+              <Icon name="bot" size={11} /> IA
+            </span>
           ) : c.filaStatus === 'resolvida' ? (
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-100 text-stone-400 shrink-0">encerrada</span>
           ) : (
@@ -147,7 +153,7 @@ function Bolha({ m }) {
         ${out ? 'bg-brand-700 text-white rounded-br-sm' : 'bg-white border border-black/[0.07] text-stone-800 rounded-bl-sm'}`}>
         {m.mediaId && <div className="mb-1"><Anexo m={m} out={out} /></div>}
         {m.conteudo && <p className="whitespace-pre-wrap break-words">{m.conteudo}</p>}
-        <div className={`text-[10px] mt-1 text-right ${out ? 'text-white/60' : 'text-stone-400'}`} title={formatDateTime(m.ts)}>
+        <div className={`text-[10px] mt-1 text-right ${out ? 'text-white/85' : 'text-stone-400'}`} title={formatDateTime(m.ts)}>
           {formatTime(m.ts)}{out && m.status ? ` · ${STATUS_MSG[m.status] || m.status}` : ''}
         </div>
       </div>
@@ -199,7 +205,7 @@ function TransferirModal({ conversa, onClose, onDone }) {
           <h2 className="font-display font-bold text-base flex-1">Transferir conversa</h2>
           <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
         </div>
-        <div className="p-4 space-y-3">
+        <div className="modal-body space-y-3">
           {ehGestor && (
             <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
               {[['depto', 'Departamento'], ['atendente', 'Atendente']].map(([id, rotulo]) => (
@@ -245,7 +251,7 @@ function TransferirModal({ conversa, onClose, onDone }) {
           )}
           {erro && <p className="text-xs text-red-600">{erro}</p>}
         </div>
-        <div className="p-3 border-t border-black/[0.06] flex gap-2 safe-bottom">
+        <div className="modal-footer">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Cancelar</button>
           <button onClick={() => { setErro(''); transferir.mutate(); }} disabled={!podeEnviar}
             className="flex-1 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
@@ -290,7 +296,7 @@ function EncerrarModal({ conversa, onClose, onDone }) {
           <h2 className="font-display font-bold text-base flex-1">Encerrar atendimento</h2>
           <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
         </div>
-        <div className="p-4 space-y-3">
+        <div className="modal-body space-y-3">
           {conversa.protocolo && (
             <p className="text-xs text-stone-500">Protocolo <span className="font-mono font-semibold">{conversa.protocolo}</span></p>
           )}
@@ -307,7 +313,7 @@ function EncerrarModal({ conversa, onClose, onDone }) {
           <p className="text-[11px] text-stone-400">Se o cliente mandar mensagem depois, abre um atendimento novo (novo protocolo).</p>
           {erro && <p className="text-xs text-red-600">{erro}</p>}
         </div>
-        <div className="p-3 border-t border-black/[0.06] flex gap-2 safe-bottom">
+        <div className="modal-footer">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Cancelar</button>
           <button onClick={() => encerrar.mutate()} disabled={encerrar.isPending}
             className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-800 text-white font-semibold text-sm disabled:opacity-40">
@@ -354,11 +360,6 @@ function ContatoModal({ conversa, onClose, onDone }) {
   }, [ficha.data, pronto]);
 
   const tagsCat = useQuery({ queryKey: ['tags'], queryFn: () => api.get('/tags').then((r) => r.data), staleTime: 5 * 60_000 });
-  const clientes = useQuery({
-    queryKey: ['clientes', busca],
-    queryFn: () => api.get('/clientes', { params: { q: busca } }).then((r) => r.data),
-    enabled: busca.trim().length >= 2,
-  });
   const cobranca = useQuery({
     queryKey: ['cobranca', cid, codigoExterno],
     queryFn: () => api.get(`/contatos/${cid}/cobranca`).then((r) => r.data),
@@ -374,13 +375,10 @@ function ContatoModal({ conversa, onClose, onDone }) {
     onError: (e) => setErro(e.response?.data?.error || 'Falha ao salvar.'),
   });
 
-  function vincular(c) {
-    // `/clientes` ainda não foi portado (fora do escopo do FIL-60) — aceita o
-    // formato novo (codigoExterno/documento) e o antigo (codcli/cod/cgcent).
-    setCodigoExterno(c.codigoExterno ?? c.codcli ?? c.cod ?? null);
-    if (c.documento || c.cgcent) setDocumento(c.documento || c.cgcent);
-    if (!nomeInterno.trim() && c.cliente) setNomeInterno(c.cliente);
-    setBusca('');
+  function vincularSugestao(c) {
+    setCodigoExterno(c.codigoExterno || null);
+    if (c.documento) setDocumento(c.documento);
+    if (!nomeInterno.trim() && c.nome) setNomeInterno(c.nome);
   }
   function toggleTag(id) { setTags((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id])); }
   const sug = ficha.data?.sugestao;
@@ -395,7 +393,7 @@ function ContatoModal({ conversa, onClose, onDone }) {
           <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
         </div>
 
-        <div className="p-4 overflow-y-auto space-y-4">
+        <div className="modal-body space-y-4">
           <p className="text-[11px] text-stone-400">
             {formatPhone(conversa.telefone)}{ficha.data?.nomePerfil ? ` · WhatsApp: ${ficha.data.nomePerfil}` : ''}
           </p>
@@ -404,7 +402,7 @@ function ContatoModal({ conversa, onClose, onDone }) {
           {!codigoExterno && sug && (
             <div className="p-2.5 rounded-lg bg-brand-50 border border-brand-100 text-xs text-stone-700 flex items-center gap-2">
               <span className="flex-1">Parece ser <b>{sug.nome}</b> <span className="font-mono text-stone-400">#{sug.codigoExterno}</span></span>
-              <button onClick={() => vincular({ codigoExterno: sug.codigoExterno, cliente: sug.nome, documento: sug.documento })}
+              <button onClick={() => vincularSugestao(sug)}
                 className="px-2 py-1 rounded bg-brand-700 text-white text-[11px] font-semibold">Vincular</button>
             </div>
           )}
@@ -416,29 +414,18 @@ function ContatoModal({ conversa, onClose, onDone }) {
             <p className="text-[11px] text-stone-400 mt-1">Aparece no lugar do nome do WhatsApp no inbox e no topo do chat.</p>
           </div>
 
-          {/* Vínculo com o cliente no sistema do tenant (seam clienteLookup) */}
+          {/* Vínculo sugerido pelo provedor externo do tenant, quando houver. */}
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Cliente vinculado</label>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Cadastro externo</label>
             {codigoExterno ? (
               <div className="flex items-center gap-2 text-sm">
                 <span className="px-2 py-1 rounded bg-stone-100 font-mono text-stone-600">#{codigoExterno}</span>
                 <button onClick={() => { setCodigoExterno(null); }} className="text-[11px] text-red-600 hover:underline">desvincular</button>
               </div>
             ) : (
-              <>
-                <input className="input-field" value={busca} onChange={(e) => setBusca(e.target.value)}
-                  placeholder="Buscar por nome ou código…" />
-                {clientes.isFetching && <p className="text-xs text-stone-400 mt-1">Buscando…</p>}
-                <div className="mt-1 max-h-32 overflow-y-auto divide-y divide-black/[0.05]">
-                  {(clientes.data || []).map((c) => (
-                    <button key={c.codigoExterno ?? c.codcli ?? c.cod} onClick={() => vincular(c)}
-                      className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-paper-50">
-                      <div className="font-medium text-stone-800 truncate">{c.cliente}</div>
-                      <div className="text-[11px] text-stone-500 font-mono">#{c.codigoExterno ?? c.codcli ?? c.cod}{(c.documento || c.cgcent) ? ` · ${c.documento || c.cgcent}` : ''}</div>
-                    </button>
-                  ))}
-                </div>
-              </>
+              <p className="rounded-md border border-paper-300 bg-paper-50 px-3 py-2 text-[11px] leading-4 text-stone-500">
+                Sem vínculo externo. Os dados completos e o atendente de referência ficam em Gestão → Clientes.
+              </p>
             )}
           </div>
 
@@ -457,7 +444,7 @@ function ContatoModal({ conversa, onClose, onDone }) {
                   return (
                     <button key={t.id} onClick={() => toggleTag(t.id)}
                       className={`text-[11px] px-2 py-1 rounded-full border ${on ? 'text-white border-transparent' : 'text-stone-500 border-black/15'}`}
-                      style={on ? { backgroundColor: t.cor || '#1B5E7B' } : {}}>
+                      style={on ? { backgroundColor: t.cor || '#087B63' } : {}}>
                       {t.nome}
                     </button>
                   );
@@ -536,7 +523,7 @@ function ContatoModal({ conversa, onClose, onDone }) {
           {erro && <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{erro}</div>}
         </div>
 
-        <div className="p-3 border-t border-black/[0.06] flex gap-2 safe-bottom">
+        <div className="modal-footer">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Cancelar</button>
           <button onClick={() => { setErro(''); salvar.mutate(); }} disabled={salvar.isPending || !pronto}
             className="flex-1 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
@@ -572,6 +559,19 @@ function Composer({ conversa, onReabrir }) {
       qc.invalidateQueries({ queryKey: ['conversas'] });
     },
     onError: (err) => setErro(err.response?.data?.error || 'Falha ao enviar o arquivo.'),
+  });
+
+  // Liga/desliga em Administração → Agente de IA; cache compartilhado com Ajustes/EncerrarModal.
+  const config = useQuery({
+    queryKey: ['config'],
+    queryFn: () => api.get('/config').then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+  const sugestaoLigada = config.data?.ia_sugestao_ativa === 'S';
+  const sugerirResposta = useMutation({
+    mutationFn: () => api.post(`/conversas/${conversa.id}/sugestao-resposta`).then((r) => r.data),
+    onSuccess: (data) => { setErro(''); setTexto(data.sugestao); },
+    onError: (err) => setErro(err.response?.data?.error || 'Falha ao gerar sugestão.'),
   });
 
   const aberta = (janelaRestante(conversa.janelaExpiraEm) ?? 0) > 0;
@@ -689,6 +689,20 @@ function Composer({ conversa, onReabrir }) {
                 </svg>
               )}
             </button>
+            {sugestaoLigada && (
+              <button type="button" onClick={() => sugerirResposta.mutate()}
+                disabled={sugerirResposta.isPending}
+                title="Sugerir resposta com IA — você revisa e edita antes de enviar"
+                className="shrink-0 w-10 h-10 rounded-full text-stone-400 hover:text-brand-700 hover:bg-brand-50
+                           flex items-center justify-center transition-colors disabled:opacity-40"
+                aria-label="Sugerir resposta">
+                {sugerirResposta.isPending ? (
+                  <span className="w-4 h-4 border-2 border-brand-300 border-t-brand-700 rounded-full animate-spin" />
+                ) : (
+                  <Icon name="bot" size={19} />
+                )}
+              </button>
+            )}
           </>
         )}
         <textarea
@@ -739,7 +753,386 @@ function FiltroChip({ ativo, onClick, children }) {
   );
 }
 
+function AtendimentoRail({ isGestor, suporte, user, secao, onSelect }) {
+  const inicial = (user?.nome || user?.email || '?').trim().slice(0, 1).toUpperCase();
+  const itens = [
+    { id: 'conversas', nome: 'Conversas', icon: 'inbox' },
+    ...(!suporte ? [{ id: 'historico', nome: 'Meus atendimentos', icon: 'history' }] : []),
+    { id: 'equipe', nome: 'Equipe online', icon: 'users' },
+  ];
+
+  return (
+    <aside className="hidden md:flex w-16 shrink-0 bg-ink-950 text-white flex-col items-center border-r border-white/10">
+      <Link
+        to="/conversas"
+        className="h-14 w-full flex items-center justify-center border-b border-white/10"
+        aria-label="Falatta — conversas"
+      >
+        <BrandMark inverse className="w-8 h-8" />
+      </Link>
+      <nav className="flex-1 py-3 flex flex-col items-center gap-1.5" aria-label="Navegação principal">
+        {itens.map((item) => {
+          const ativo = secao === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelect(item.id)}
+              aria-current={ativo ? 'page' : undefined}
+              aria-label={item.nome}
+              title={item.nome}
+              className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                ativo
+                  ? 'bg-brand-400 text-ink-950'
+                  : 'text-white/60 hover:bg-white/[0.08] hover:text-white'
+              }`}
+            >
+              <Icon name={item.icon} size={18} />
+            </button>
+          );
+        })}
+        {(isGestor || suporte || user?.papel === 'AUDITOR') && (
+          <Link
+            to="/admin"
+            title="Gestão"
+            className="w-10 h-10 rounded-lg text-white/60 hover:bg-white/[0.08] hover:text-white flex items-center justify-center"
+          >
+            <Icon name="chart" size={18} />
+          </Link>
+        )}
+        <ThemeMenu align="left" inverse icon="sun" />
+      </nav>
+      <div className="w-full py-3 border-t border-white/10 flex justify-center">
+        <span className="w-8 h-8 rounded-full border border-white/15 bg-white/[0.08] flex items-center justify-center text-[11px] font-semibold">
+          {inicial}
+        </span>
+      </div>
+    </aside>
+  );
+}
+
+function AtendimentoMobileNav({ secao, onSelect, suporte }) {
+  const itens = [
+    { id: 'conversas', nome: 'Conversas', icon: 'inbox' },
+    ...(!suporte ? [{ id: 'historico', nome: 'Histórico', icon: 'history' }] : []),
+    { id: 'equipe', nome: 'Online', icon: 'users' },
+  ];
+  return (
+    <nav className="md:hidden shrink-0 px-3 py-2 bg-white border-b border-paper-300 flex gap-1 overflow-x-auto" aria-label="Seções do atendimento">
+      {itens.map((item) => {
+        const ativo = secao === item.id;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onSelect(item.id)}
+            aria-current={ativo ? 'page' : undefined}
+            className={`min-h-9 px-3 rounded-md flex items-center gap-2 text-xs font-semibold ${
+              ativo ? 'bg-brand-50 text-brand-800' : 'text-stone-600 hover:bg-paper-100'
+            }`}
+          >
+            <Icon name={item.icon} size={15} />
+            {item.nome}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+const STATUS_HISTORICO = {
+  resolvida: { rotulo: 'Finalizado', classe: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+  em_atendimento: { rotulo: 'Em atendimento', classe: 'bg-brand-50 text-brand-800 border-brand-200' },
+  aguardando: { rotulo: 'Aguardando', classe: 'bg-amber-50 text-amber-800 border-amber-200' },
+  ia: { rotulo: 'Agente de IA', classe: 'bg-purple-50 text-purple-700 border-purple-200' },
+};
+
+function MeuHistorico() {
+  const [busca, setBusca] = useState('');
+  const [q, setQ] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => setQ(busca.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [busca]);
+
+  const historico = useQuery({
+    queryKey: ['historico', 'me', q],
+    queryFn: () => api.get('/historico/me', { params: q ? { q } : {} }).then((response) => response.data),
+  });
+  const itens = historico.data?.itens || [];
+
+  return (
+    <main className="flex-1 min-w-0 overflow-y-auto bg-paper-50">
+      <div className="max-w-6xl mx-auto px-4 py-5 md:px-7 md:py-7">
+        <div className="page-heading">
+          <div>
+            <h1 className="page-title">Meus atendimentos</h1>
+            <p className="page-description">Consulte apenas as conversas que passaram por você.</p>
+          </div>
+          <span className="text-xs text-stone-500">{historico.isLoading ? 'Carregando…' : `${itens.length} registros`}</span>
+        </div>
+
+        <section className="app-panel overflow-hidden">
+          <header className="px-4 py-3 border-b border-paper-300">
+            <label className="relative block max-w-md">
+              <span className="sr-only">Buscar no meu histórico</span>
+              <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500" />
+              <input
+                value={busca}
+                onChange={(event) => setBusca(event.target.value)}
+                placeholder="Buscar cliente, telefone ou protocolo"
+                className="input-field !pl-9"
+              />
+            </label>
+          </header>
+
+          {historico.isLoading && <div className="p-10 flex justify-center"><Spinner /></div>}
+          {historico.isError && (
+            <div className="p-8 text-center">
+              <p className="text-sm font-semibold text-red-800">Não foi possível carregar seu histórico.</p>
+              <button type="button" onClick={() => historico.refetch()} className="mt-3 text-xs font-semibold text-brand-700">Tentar novamente</button>
+            </div>
+          )}
+          {!historico.isLoading && !historico.isError && itens.length === 0 && (
+            <div className="px-6 py-12 text-center">
+              <span className="mx-auto w-11 h-11 rounded-lg bg-paper-200 text-stone-500 flex items-center justify-center">
+                <Icon name="history" size={20} />
+              </span>
+              <p className="mt-3 text-sm font-semibold text-ink-950">{q ? 'Nenhum atendimento encontrado' : 'Seu histórico ainda está vazio'}</p>
+              <p className="mt-1 text-xs text-stone-600">{q ? 'Tente outro nome, telefone ou protocolo.' : 'Os atendimentos assumidos por você aparecerão aqui.'}</p>
+            </div>
+          )}
+          {itens.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-xs">
+                <thead className="bg-paper-50 text-stone-600">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left font-semibold">Cliente</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Protocolo</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Departamento</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Status</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Última atividade</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-paper-300">
+                  {itens.map((item) => {
+                    const status = STATUS_HISTORICO[item.filaStatus] || { rotulo: item.filaStatus || '—', classe: 'bg-paper-100 text-stone-700 border-paper-300' };
+                    return (
+                      <tr key={item.id} className="hover:bg-paper-50">
+                        <td className="px-4 py-3">
+                          <p className="font-semibold text-ink-950">{item.nomePerfil || formatPhone(item.telefone)}</p>
+                          <p className="mt-0.5 text-[10px] text-stone-500">{formatPhone(item.telefone)}</p>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-stone-700">{item.protocolo || '—'}</td>
+                        <td className="px-4 py-3 text-stone-700">{item.departamento || 'Geral'}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex px-2 py-1 rounded-md border text-[10px] font-semibold ${status.classe}`}>{status.rotulo}</span>
+                        </td>
+                        <td className="px-4 py-3 text-stone-600">{formatDateTime(item.resolvidaEm || item.criadoEm)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function EquipeOnline({ deptos }) {
+  const equipe = useQuery({
+    queryKey: ['presenca', 'equipe'],
+    queryFn: () => api.get('/presenca/equipe').then((response) => response.data),
+    refetchInterval: 15_000,
+  });
+  const departamentos = new Map((deptos.data || []).map((item) => [Number(item.id), item]));
+  const pessoas = equipe.data || [];
+
+  return (
+    <main className="flex-1 min-w-0 overflow-y-auto bg-paper-50">
+      <div className="max-w-5xl mx-auto px-4 py-5 md:px-7 md:py-7">
+        <div className="page-heading">
+          <div>
+            <h1 className="page-title">Equipe online</h1>
+            <p className="page-description">Veja quem está disponível agora em todos os departamentos.</p>
+          </div>
+          <span className="inline-flex items-center gap-2 text-xs font-semibold text-stone-700">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            {equipe.isLoading ? 'Atualizando…' : `${pessoas.length} online`}
+          </span>
+        </div>
+
+        <section className="app-panel overflow-hidden">
+          <header className="panel-header">
+            <p className="text-sm font-semibold text-ink-950">Atendentes disponíveis</p>
+            <p className="ml-auto text-[10px] text-stone-500">Atualiza a cada 15 segundos</p>
+          </header>
+          {equipe.isLoading && <div className="p-10 flex justify-center"><Spinner /></div>}
+          {equipe.isError && (
+            <div className="p-8 text-center">
+              <p className="text-sm font-semibold text-red-800">Não foi possível consultar a equipe.</p>
+              <button type="button" onClick={() => equipe.refetch()} className="mt-3 text-xs font-semibold text-brand-700">Tentar novamente</button>
+            </div>
+          )}
+          {!equipe.isLoading && !equipe.isError && pessoas.length === 0 && (
+            <div className="px-6 py-12 text-center">
+              <span className="mx-auto w-11 h-11 rounded-lg bg-paper-200 text-stone-500 flex items-center justify-center">
+                <Icon name="users" size={20} />
+              </span>
+              <p className="mt-3 text-sm font-semibold text-ink-950">Nenhum outro atendente online</p>
+              <p className="mt-1 text-xs text-stone-600">A lista será atualizada automaticamente quando alguém entrar.</p>
+            </div>
+          )}
+          {pessoas.length > 0 && (
+            <div className="divide-y divide-paper-300">
+              {pessoas.map((pessoa) => (
+                <div key={pessoa.atendenteId} className="px-4 py-3.5 flex items-center gap-3 hover:bg-paper-50">
+                  <span className="relative w-9 h-9 rounded-full bg-ink-900 text-white flex items-center justify-center text-xs font-semibold shrink-0">
+                    {iniciais(pessoa.nome, '')}
+                    <span className="absolute right-0 bottom-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-ink-950 truncate">{pessoa.nome || `Atendente #${pessoa.atendenteId}`}</p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {(pessoa.deptoIds || []).map((id) => {
+                        const departamento = departamentos.get(Number(id));
+                        return (
+                          <span key={id} className="inline-flex items-center gap-1.5 text-[10px] text-stone-600">
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: departamento?.cor || '#087B63' }} />
+                            {departamento?.nome || `Departamento #${id}`}
+                          </span>
+                        );
+                      })}
+                      {(pessoa.deptoIds || []).length === 0 && <span className="text-[10px] text-stone-500">Sem departamento</span>}
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-semibold text-emerald-700">Online</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function PainelContexto({ isGestor, contagens, deptos, conversa, filaAtual }) {
+  const porDepartamento = contagens.data?.porDepartamento || {};
+  const totalAguardando = Object.values(porDepartamento).reduce((soma, item) => soma + (item.aguardando || 0), 0);
+  const totalAtendimento = Object.values(porDepartamento).reduce((soma, item) => soma + (item.em_atendimento || 0), 0);
+  const filas = (deptos.data || [])
+    .map((departamento) => ({
+      ...departamento,
+      aguardando: porDepartamento[departamento.id]?.aguardando || 0,
+      emAtendimento: porDepartamento[departamento.id]?.em_atendimento || 0,
+    }))
+    .sort((a, b) => (b.aguardando + b.emAtendimento) - (a.aguardando + a.emAtendimento))
+    .slice(0, 5);
+  const maiorFila = Math.max(1, ...filas.map((item) => item.aguardando + item.emAtendimento));
+
+  return (
+    <aside className="conversation-context hidden xl:flex w-[276px] 2xl:w-[300px] shrink-0 bg-white border-l border-paper-300 flex-col">
+      <header className="h-14 px-4 border-b border-paper-300 flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold text-ink-950">{isGestor ? 'Operação ao vivo' : 'Contexto do atendimento'}</p>
+          <p className="text-[10px] text-stone-500">{isGestor ? 'Atualização automática' : 'Dados da conversa selecionada'}</p>
+        </div>
+      </header>
+
+      {isGestor ? (
+        <div className="flex-1 overflow-y-auto">
+          <div className="grid grid-cols-2 border-b border-paper-300">
+            <div className="px-4 py-4 border-r border-paper-300">
+              <p className="text-[10px] text-stone-500">Em espera</p>
+              <p className="mt-1 text-2xl font-semibold tabular text-ink-950">{contagens.isLoading ? '—' : totalAguardando}</p>
+            </div>
+            <div className="px-4 py-4">
+              <p className="text-[10px] text-stone-500">Em atendimento</p>
+              <p className="mt-1 text-2xl font-semibold tabular text-ink-950">{contagens.isLoading ? '—' : totalAtendimento}</p>
+            </div>
+          </div>
+          <div className="px-4 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold text-ink-950">Filas por departamento</p>
+              <Link to="/admin" className="text-[10px] font-semibold text-brand-700 hover:text-brand-800">Ver gestão</Link>
+            </div>
+            <div className="mt-4 space-y-4">
+              {filas.map((item) => {
+                const volume = item.aguardando + item.emAtendimento;
+                return (
+                  <div key={item.id}>
+                    <div className="flex items-center justify-between gap-2 text-[10px]">
+                      <span className="truncate text-stone-700">{item.nome}</span>
+                      <span className="font-semibold tabular text-stone-600">{volume}</span>
+                    </div>
+                    <div className="mt-1.5 h-1 rounded-full bg-paper-200 overflow-hidden">
+                      <span
+                        className="block h-full rounded-full bg-brand-700"
+                        style={{ width: `${Math.max(8, (volume / maiorFila) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              {!contagens.isLoading && filas.length === 0 && (
+                <p className="text-xs leading-relaxed text-stone-600">Configure departamentos para acompanhar a distribuição das filas.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          {conversa ? (
+            <div className="space-y-5">
+              <div>
+                <p className="text-[10px] font-semibold text-stone-500">CLIENTE</p>
+                <p className="mt-1 text-sm font-semibold text-ink-950">{conversa.nomeInterno || conversa.nomePerfil || formatPhone(conversa.telefone)}</p>
+                <p className="mt-0.5 text-xs text-stone-600">{formatPhone(conversa.telefone)}</p>
+              </div>
+              <div className="grid grid-cols-2 border-y border-paper-300">
+                <div className="py-3 border-r border-paper-300">
+                  <p className="text-[10px] text-stone-500">Protocolo</p>
+                  <p className="mt-1 text-xs font-mono font-semibold text-ink-950">{conversa.protocolo || '—'}</p>
+                </div>
+                <div className="py-3 pl-3">
+                  <p className="text-[10px] text-stone-500">Origem</p>
+                  <p className="mt-1 text-xs font-semibold text-ink-950">{conversa.origem === 'ativa' ? 'Ativa' : 'Receptiva'}</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-[10px] font-semibold text-stone-500">RESPONSABILIDADE</p>
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: conversa.departamentoCor || '#087B63' }} />
+                  <span className="text-xs text-stone-700">{conversa.departamentoNome || 'Geral'}</span>
+                </div>
+                <p className="mt-2 text-xs text-stone-600">{conversa.atendenteNome || 'Ainda sem atendente responsável'}</p>
+              </div>
+            </div>
+          ) : (
+            <div className="py-8">
+              <span className="w-10 h-10 rounded-lg bg-paper-200 text-stone-500 flex items-center justify-center">
+                <Icon name="inbox" size={18} />
+              </span>
+              <p className="mt-3 text-sm font-semibold text-ink-950">Nenhuma conversa aberta</p>
+              <p className="mt-1 text-xs leading-relaxed text-stone-600">Selecione um atendimento para consultar protocolo, origem e responsabilidade.</p>
+              <p className="mt-5 text-[10px] text-stone-500">Nesta fila</p>
+              <p className="mt-1 text-2xl font-semibold tabular text-ink-950">{filaAtual}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </aside>
+  );
+}
+
 export default function Conversas() {
+  const [secao, setSecao] = useState('conversas');
   const [sel, setSel] = useState(null);
   const [nova, setNova] = useState(false);
   const [reabrir, setReabrir] = useState(false); // reabrir conversa (janela 24h expirou) via template
@@ -767,6 +1160,13 @@ export default function Conversas() {
     queryKey: ['departamentos'],
     queryFn: () => api.get('/departamentos').then((r) => r.data),
     staleTime: 5 * 60_000,
+  });
+
+  const contagens = useQuery({
+    queryKey: ['conversas', 'contagens'],
+    queryFn: () => api.get('/conversas/contagens').then((r) => r.data),
+    enabled: isGestor,
+    refetchInterval: 30_000,
   });
 
   // Canais (números) para o filtro — lista enxuta, acessível a qualquer atendente.
@@ -831,6 +1231,7 @@ export default function Conversas() {
   // Tempo-real: eventos do SSE (mensagem/status/fila/atribuicao/transferencia).
   useEventStream((evt) => {
     qc.invalidateQueries({ queryKey: ['conversas'] });
+    if (isGestor) qc.invalidateQueries({ queryKey: ['conversas', 'contagens'] });
     if (sel && evt.conversaId === sel.id) {
       qc.invalidateQueries({ queryKey: ['mensagens', sel.id] });
     }
@@ -852,29 +1253,50 @@ export default function Conversas() {
   }, [conversas.data]);
 
   return (
-    <div className="flex flex-col" style={{ height: '100dvh' }}>
-      <Header title="Conversas" />
-      <div className="flex-1 min-h-0 flex">
+    <div className="conversation-shell flex bg-paper-100" style={{ height: '100dvh' }}>
+      <AtendimentoRail
+        isGestor={isGestor}
+        suporte={user?.suporte}
+        user={user}
+        secao={secao}
+        onSelect={(novaSecao) => {
+          setSecao(novaSecao);
+          setSel(null);
+        }}
+      />
+      <div className="flex-1 min-w-0 flex flex-col">
+        <Header
+          title={secao === 'historico' ? 'Meus atendimentos' : secao === 'equipe' ? 'Equipe online' : 'Conversas'}
+          embedded
+        />
+        {!(secao === 'conversas' && sel) && (
+          <AtendimentoMobileNav suporte={user?.suporte} secao={secao} onSelect={(novaSecao) => { setSecao(novaSecao); setSel(null); }} />
+        )}
+        <div className="flex-1 min-h-0 flex">
+        {secao === 'conversas' ? (
+          <>
         {/* Lista */}
-        <aside className={`w-full md:w-96 md:border-r border-black/[0.06] bg-white flex flex-col
+        <aside className={`conversation-list w-full md:w-[348px] 2xl:w-[372px] md:border-r border-paper-300 bg-white flex flex-col
           ${sel ? 'hidden md:flex' : 'flex'}`}>
-          <div className="shrink-0 p-2 border-b border-black/[0.05] space-y-2">
+          <div className="shrink-0 px-3.5 py-3 border-b border-paper-300 bg-white space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-ink-950">Conversas</h2>
+                <p className="text-[10px] text-stone-500">Fila de atendimento</p>
+              </div>
             {user?.podeAtivo && (
               <button onClick={() => setNova(true)}
-                className="w-full py-2 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold flex items-center justify-center gap-1.5">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Nova conversa
+                className="min-h-8 px-2.5 rounded-md bg-brand-700 hover:bg-brand-800 text-white text-[11px] font-semibold flex items-center justify-center gap-1">
+                <Icon name="plus" size={14} />
+                Nova
               </button>
             )}
+            </div>
             <div className="relative">
-              <svg className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
-              </svg>
+              <Icon name="search" size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-500" />
               <input value={busca} onChange={(e) => setBusca(e.target.value)}
                 placeholder="Buscar nome, telefone, código ou protocolo…"
-                className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg bg-paper-50 border border-black/10 outline-none focus:border-brand-700" />
+                className="w-full min-h-9 pl-8 pr-3 text-xs rounded-md bg-paper-50 border border-paper-400 text-stone-900 placeholder:text-stone-500 outline-none focus:border-brand-700 focus:ring-2 focus:ring-brand-100" />
             </div>
             <div className="flex gap-1 bg-stone-100 rounded-lg p-0.5">
               {abasFila.map((a) => (
@@ -887,7 +1309,7 @@ export default function Conversas() {
             </div>
             {deptoOpcoes.length > 1 && (
               <select value={depto} onChange={(e) => { setDepto(e.target.value); setSel(null); }}
-                className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-paper-50 border border-black/10 outline-none focus:border-brand-700 text-stone-600"
+                className="w-full min-h-9 px-2.5 text-xs rounded-md bg-paper-50 border border-paper-400 outline-none focus:border-brand-700 text-stone-700"
                 aria-label="Filtrar por departamento">
                 <option value="">Todos os departamentos</option>
                 {deptoOpcoes.map((d) => <option key={d.id} value={d.id}>{d.nome}</option>)}
@@ -895,7 +1317,7 @@ export default function Conversas() {
             )}
             {numerosLista.data?.length > 1 && (
               <select value={canal} onChange={(e) => setCanal(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-paper-50 border border-black/10 outline-none focus:border-brand-700 text-stone-600"
+                className="w-full min-h-9 px-2.5 text-xs rounded-md bg-paper-50 border border-paper-400 outline-none focus:border-brand-700 text-stone-700"
                 aria-label="Filtrar por canal">
                 <option value="">Todos os canais</option>
                 {numerosLista.data.map((n) => (
@@ -914,7 +1336,13 @@ export default function Conversas() {
             {conversas.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
             {conversas.isError && <p className="p-4 text-sm text-red-600">Erro ao carregar conversas.</p>}
             {conversas.data?.length === 0 && (
-              <p className="p-6 text-sm text-stone-500 text-center">Nenhuma conversa ainda. Elas aparecem aqui quando um cliente enviar mensagem.</p>
+              <div className="px-6 py-12 text-center">
+                <span className="mx-auto w-10 h-10 rounded-xl bg-paper-200 text-stone-500 flex items-center justify-center">
+                  <Icon name="inbox" size={19} />
+                </span>
+                <p className="mt-3 text-sm font-semibold text-ink-950">Nenhuma conversa nesta fila</p>
+                <p className="mt-1 text-xs leading-relaxed text-stone-600">Novas mensagens aparecem aqui automaticamente. Você também pode revisar os filtros acima.</p>
+              </div>
             )}
             {conversas.data?.map((c) => (
               <ConversaItem key={c.id} c={c} ativo={sel?.id === c.id} onClick={() => setSel(c)} />
@@ -923,14 +1351,18 @@ export default function Conversas() {
         </aside>
 
         {/* Thread */}
-        <section className={`flex-1 min-w-0 flex-col bg-paper-200 ${sel ? 'flex' : 'hidden md:flex'}`}>
+        <section className={`conversation-thread flex-1 min-w-0 flex-col bg-paper-100 ${sel ? 'flex' : 'hidden md:flex'}`}>
           {!sel ? (
-            <div className="flex-1 flex items-center justify-center text-stone-400 text-sm">
-              Selecione uma conversa
+            <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
+              <span className="w-12 h-12 rounded-xl bg-white border border-paper-300 text-stone-500 flex items-center justify-center">
+                <Icon name="inbox" size={22} />
+              </span>
+              <p className="mt-4 text-sm font-semibold text-ink-950">Selecione uma conversa</p>
+              <p className="mt-1 max-w-sm text-xs leading-relaxed text-stone-600">Escolha um atendimento na lista para ver o histórico, responder e acessar as ações do contato.</p>
             </div>
           ) : (
             <>
-              <div className="h-12 shrink-0 bg-white border-b border-black/[0.06] flex items-center gap-2 px-3">
+              <div className="h-14 shrink-0 bg-white border-b border-paper-300 flex items-center gap-2 px-3.5">
                 <button onClick={() => setSel(null)} className="md:hidden p-1 -ml-1 text-stone-500" aria-label="Voltar">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -979,7 +1411,7 @@ export default function Conversas() {
                       </svg>
                     </button>
                     <button onClick={() => setEncerrando(true)} title="Encerrar atendimento"
-                      className="p-1.5 rounded-lg text-stone-400 hover:text-red-700 hover:bg-red-50" aria-label="Encerrar">
+                      className="p-1.5 rounded-lg text-red-700 hover:bg-red-50" aria-label="Encerrar">
                       <svg className="w-4.5 h-4.5 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                       </svg>
@@ -987,7 +1419,7 @@ export default function Conversas() {
                   </>
                 )}
               </div>
-              <div className="flex-1 overflow-y-auto px-4 py-3">
+              <div className="conversation-messages flex-1 overflow-y-auto px-4 md:px-6 py-4">
                 {mensagens.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
                 {mensagens.data?.length === 0 && <p className="text-center text-sm text-stone-400 mt-8">Sem mensagens.</p>}
                 {mensagens.data?.map((m, i) => (
@@ -998,8 +1430,9 @@ export default function Conversas() {
                 ))}
               </div>
               {sel.filaStatus === 'ia' ? (
-                <div className="shrink-0 bg-brand-50 border-t border-brand-100 px-4 py-3 text-center text-xs text-brand-800 safe-bottom">
-                  🤖 Conversa conduzida pelo <b>bot de IA</b> — somente leitura. As respostas saem automaticamente pela IA.
+                <div className="shrink-0 bg-brand-50 border-t border-brand-100 px-4 py-3 flex items-center justify-center gap-2 text-center text-xs text-brand-800 safe-bottom">
+                  <Icon name="bot" size={15} className="shrink-0" />
+                  Conversa conduzida pelo <b>agente de IA</b> — somente leitura. As respostas saem automaticamente.
                 </div>
               ) : sel.filaStatus === 'aguardando' ? (
                 <div className="shrink-0 bg-amber-50 border-t border-amber-200 px-4 py-3 flex items-center gap-3 safe-bottom">
@@ -1020,7 +1453,20 @@ export default function Conversas() {
             </>
           )}
         </section>
-      </div>
+        <PainelContexto
+          isGestor={isGestor}
+          contagens={contagens}
+          deptos={deptos}
+          conversa={sel}
+          filaAtual={conversas.data?.length || 0}
+        />
+          </>
+        ) : secao === 'historico' ? (
+          <MeuHistorico />
+        ) : (
+          <EquipeOnline deptos={deptos} />
+        )}
+        </div>
 
       {transferindo && sel && (
         <TransferirModal conversa={sel}
@@ -1063,6 +1509,7 @@ export default function Conversas() {
           }}
         />
       )}
+      </div>
     </div>
   );
 }

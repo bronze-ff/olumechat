@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import api from '../../services/api';
 import Spinner from '../../components/ui/Spinner';
+import Icon from '../../components/ui/Icon';
 import useEventStream from '../../hooks/useEventStream';
 
 const ESTADOS = {
@@ -10,7 +11,7 @@ const ESTADOS = {
   offline: { cor: 'bg-stone-300', rotulo: 'offline' },
 };
 
-export default function Monitor() {
+export default function Monitor({ onIrPara }) {
   const qc = useQueryClient();
   const [erro, setErro] = useState('');
 
@@ -54,6 +55,10 @@ export default function Monitor() {
   // Soma só os departamentos exibidos (cards), pra o aviso bater com o que aparece
   // na tela — evita mostrar "N aguardando" sem um card correspondente.
   const totalFila = (deptos.data || []).reduce((s, d) => s + filaDe(d.id), 0);
+  const onlineDoDepto = (depId) => (presenca.data || []).filter((p) => p.estado === 'online' && (p.deptoIds || []).includes(depId)).length;
+  // Departamento com gente esperando e ninguém online pra atender — o tipo de
+  // buraco operacional que passa despercebido até o cliente reclamar.
+  const deptosDesguarnecidos = (deptos.data || []).filter((d) => filaDe(d.id) > 0 && onlineDoDepto(d.id) === 0);
 
   const listaPresenca = [...(presenca.data || [])].sort((a, b) => {
     const ordem = { online: 0, pausa: 1, offline: 2 };
@@ -62,100 +67,180 @@ export default function Monitor() {
   const onlines = listaPresenca.filter((a) => a.estado === 'online').length;
 
   return (
-    <div className="max-w-screen-2xl mx-auto grid grid-cols-12 gap-4">
-      {/* Filas por departamento */}
-      <div className="col-span-12 lg:col-span-8 space-y-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-          {deptos.isLoading && <div className="col-span-full p-10 flex justify-center"><Spinner /></div>}
-          {(deptos.data || []).map((d) => {
-            const fila = filaDe(d.id);
-            const atendendo = atendendoDe(d.id);
-            return (
-              <div key={d.id}
-                className={`relative bg-white rounded-2xl border border-black/[0.06] p-4 overflow-hidden
-                  ${fila > 0 ? 'ring-1 ring-amber-300' : ''}`}>
-                <span aria-hidden className="absolute left-0 top-0 bottom-0 w-1.5" style={{ backgroundColor: d.cor || '#1B5E7B' }} />
-                <div className="flex items-center gap-2 mb-3">
-                  <p className="font-display font-bold text-[15px] text-stone-800 truncate flex-1">{d.nome}</p>
-                  {fila > 0 && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />}
-                </div>
-                <div className="flex items-end gap-6">
-                  <div>
-                    <p className={`font-display font-bold text-4xl tabular leading-none ${fila > 0 ? 'text-amber-600' : 'text-stone-200'}`}>{fila}</p>
-                    <p className="font-mono text-[9px] uppercase tracking-widest text-stone-400 mt-1">na fila</p>
-                  </div>
-                  <div>
-                    <p className="font-display font-bold text-4xl tabular leading-none text-brand-700">{atendendo}</p>
-                    <p className="font-mono text-[9px] uppercase tracking-widest text-stone-400 mt-1">atendendo</p>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {totalFila > 0 && (
-          <p className="font-mono text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-            ⚠ {totalFila} conversa(s) aguardando — a distribuição automática atribui assim que houver atendente disponível na fila.
-          </p>
-        )}
-      </div>
-
-      {/* Atendentes */}
-      <section className="col-span-12 lg:col-span-4 bg-white rounded-2xl border border-black/[0.06] self-start">
-        <header className="flex items-center gap-2 px-4 pt-3.5 pb-2.5 border-b border-black/[0.05]">
-          <span className="section-bar" />
-          <h2 className="font-display font-bold text-sm text-stone-800 flex-1">Equipe agora</h2>
-          <span className="font-mono text-[10px] text-stone-400">{onlines} online</span>
-        </header>
-        {erro && (
-          <p className="m-3 text-[12px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{erro}</p>
-        )}
-        <div className="divide-y divide-black/[0.04]">
-          {presenca.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
-          {presenca.isError && <p className="p-4 text-sm text-red-600">{presenca.error.response?.data?.error || 'Erro ao carregar.'}</p>}
-          {listaPresenca.map((a) => {
-            const est = ESTADOS[a.estado] || ESTADOS.offline;
-            const carga = cargaDe(a.atendenteId);
-            const alterando = forcarPresenca.isPending && forcarPresenca.variables?.atendenteId === a.atendenteId;
-            return (
-              <div key={a.atendenteId} className={`flex items-center gap-2.5 px-4 py-2.5 ${a.estado === 'offline' ? 'opacity-45' : ''}`}>
-                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${est.cor} ${a.estado === 'online' ? 'shadow-[0_0_0_3px_rgba(16,185,129,0.15)]' : ''}`} />
-                <p className="text-[13px] font-medium text-stone-800 truncate flex-1">{a.nome || `Matrícula ${a.matricula}`}</p>
-                {carga > 0 && (
-                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-brand-50 text-brand-700">{carga} conv.</span>
-                )}
-                {a.estado === 'pausa' ? (
-                  <button type="button"
-                    onClick={() => forcarPresenca.mutate({ atendenteId: a.atendenteId, estado: 'online' })}
-                    disabled={alterando}
-                    title="Tirar da pausa agora (vale na hora, sem F5 do atendente)"
-                    className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 disabled:opacity-40 shrink-0">
-                    {alterando ? '…' : 'tornar disponível'}
-                  </button>
-                ) : a.estado === 'online' ? (
-                  <button type="button"
-                    onClick={() => forcarPresenca.mutate({ atendenteId: a.atendenteId, estado: 'pausa' })}
-                    disabled={alterando}
-                    title="Colocar em pausa agora (para de receber novas conversas)"
-                    className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 disabled:opacity-40 shrink-0">
-                    {alterando ? '…' : 'pausar'}
-                  </button>
-                ) : (
-                  <span className="font-mono text-[10px] text-stone-400 w-14 text-right">{est.rotulo}</span>
-                )}
-              </div>
-            );
-          })}
-          {presenca.data?.length === 0 && (
-            <p className="p-6 text-sm text-stone-500 text-center">
-              Ninguém conectou ainda nesta sessão do serviço — quem logar no sistema aparece aqui na hora.
+    <div className="max-w-screen-2xl mx-auto space-y-4">
+      <section className="app-panel overflow-hidden">
+        <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-y md:divide-y-0 divide-paper-300">
+          <div className="px-4 py-3.5">
+            <p className="text-[11px] text-stone-500">Aguardando</p>
+            <p className={`mt-1 text-xl font-semibold tabular ${totalFila > 0 ? 'text-amber-700' : 'text-ink-950'}`}>{totalFila}</p>
+          </div>
+          <div className="px-4 py-3.5">
+            <p className="text-[11px] text-stone-500">Em atendimento</p>
+            <p className="mt-1 text-xl font-semibold tabular text-ink-950">
+              {Object.values(cont.porDepartamento || {}).reduce((s, item) => s + (item.em_atendimento || 0), 0)}
             </p>
+          </div>
+          <div className="px-4 py-3.5">
+            <p className="text-[11px] text-stone-500">Atendentes online</p>
+            <p className="mt-1 text-xl font-semibold tabular text-ink-950">{onlines}</p>
+          </div>
+          <div className="px-4 py-3.5">
+            <p className="text-[11px] text-stone-500">Filas sem cobertura</p>
+            <p className={`mt-1 text-xl font-semibold tabular ${deptosDesguarnecidos.length > 0 ? 'text-red-700' : 'text-ink-950'}`}>
+              {deptosDesguarnecidos.length}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {deptosDesguarnecidos.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-[10px] px-4 py-3 flex flex-wrap items-center gap-3">
+          <Icon name="alert" size={17} className="text-red-700 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-semibold text-red-800">
+              {deptosDesguarnecidos.length === 1
+                ? `${deptosDesguarnecidos[0].nome} está sem atendente online.`
+                : `${deptosDesguarnecidos.length} departamentos estão sem atendente online.`}
+            </p>
+            <p className="mt-0.5 text-xs text-red-700">{deptosDesguarnecidos.map((d) => d.nome).join(' · ')}</p>
+          </div>
+          {onIrPara && (
+            <button type="button" onClick={() => onIrPara('atendentes')}
+              className="shrink-0 min-h-9 px-3 rounded-md bg-white border border-red-300 text-red-700 text-xs font-semibold hover:bg-red-100">
+              Ver atendentes
+            </button>
           )}
         </div>
-        <p className="font-mono text-[10px] text-stone-400 px-4 py-2.5 border-t border-black/[0.04]">
-          pausa = não recebe novas conversas · o atendente controla, ou o gestor força aqui
-        </p>
-      </section>
+      )}
+
+      <div className="grid grid-cols-12 gap-4">
+        <section className="col-span-12 xl:col-span-8 app-panel overflow-hidden self-start">
+          <header className="panel-header">
+            <h2 className="text-sm font-semibold text-ink-950 flex-1">Filas por departamento</h2>
+            <span className="text-[11px] text-stone-500">{(deptos.data || []).length} departamentos</span>
+          </header>
+          {deptos.isLoading && <div className="p-10 flex justify-center"><Spinner /></div>}
+          {!deptos.isLoading && (deptos.data || []).length === 0 && (
+            <div className="px-5 py-10 flex flex-col sm:flex-row sm:items-center gap-4">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-ink-950">A operação ainda não tem filas configuradas</p>
+                <p className="mt-1 text-[13px] leading-5 text-stone-600 max-w-xl">
+                  Crie um departamento para organizar a distribuição das conversas e acompanhar quem está aguardando ou em atendimento.
+                </p>
+              </div>
+              {onIrPara && (
+                <button type="button" onClick={() => onIrPara('departamentos')}
+                  className="shrink-0 min-h-10 px-3.5 rounded-md bg-brand-700 text-white text-xs font-semibold hover:bg-brand-800">
+                  Configurar departamentos
+                </button>
+              )}
+            </div>
+          )}
+          {(deptos.data || []).length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] text-[13px]">
+                <thead>
+                  <tr className="bg-paper-50 border-b border-paper-300 text-left text-[11px] font-medium text-stone-500">
+                    <th className="px-4 py-2.5">Departamento</th>
+                    <th className="px-4 py-2.5 text-right">Online</th>
+                    <th className="px-4 py-2.5 text-right">Aguardando</th>
+                    <th className="px-4 py-2.5 text-right">Em atendimento</th>
+                    <th className="px-4 py-2.5">Cobertura</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-paper-300">
+                  {(deptos.data || []).map((d) => {
+                    const fila = filaDe(d.id);
+                    const atendendo = atendendoDe(d.id);
+                    const online = onlineDoDepto(d.id);
+                    const semAtendente = fila > 0 && online === 0;
+                    return (
+                      <tr key={d.id} className="hover:bg-paper-50">
+                        <td className="px-4 py-3">
+                          <span className="inline-flex items-center gap-2 font-medium text-ink-950">
+                            <span aria-hidden className="w-2 h-2 rounded-full" style={{ backgroundColor: d.cor || '#087B63' }} />
+                            {d.nome}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right tabular text-stone-700">{online}</td>
+                        <td className={`px-4 py-3 text-right tabular font-semibold ${fila > 0 ? 'text-amber-700' : 'text-stone-700'}`}>{fila}</td>
+                        <td className="px-4 py-3 text-right tabular font-semibold text-stone-700">{atendendo}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${semAtendente ? 'text-red-700' : 'text-emerald-700'}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${semAtendente ? 'bg-red-500' : 'bg-emerald-500'}`} />
+                            {semAtendente ? 'Sem cobertura' : 'Coberta'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {totalFila > 0 && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border-t border-amber-200 px-4 py-2.5">
+              A distribuição automática atribui as conversas assim que houver um atendente disponível na fila.
+            </p>
+          )}
+        </section>
+
+        <section className="col-span-12 xl:col-span-4 app-panel overflow-hidden self-start">
+          <header className="panel-header">
+            <h2 className="text-sm font-semibold text-ink-950 flex-1">Equipe agora</h2>
+            <span className="text-[11px] text-stone-500">{onlines} online</span>
+          </header>
+          {erro && (
+            <p className="m-3 text-[12px] text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{erro}</p>
+          )}
+          <div className="divide-y divide-paper-300">
+            {presenca.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
+            {presenca.isError && <p className="p-4 text-sm text-red-600">{presenca.error.response?.data?.error || 'Erro ao carregar.'}</p>}
+            {listaPresenca.map((a) => {
+              const est = ESTADOS[a.estado] || ESTADOS.offline;
+              const carga = cargaDe(a.atendenteId);
+              const alterando = forcarPresenca.isPending && forcarPresenca.variables?.atendenteId === a.atendenteId;
+              return (
+                <div key={a.atendenteId} className={`flex items-center gap-2.5 px-4 py-2.5 ${a.estado === 'offline' ? 'opacity-55' : ''}`}>
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${est.cor}`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-medium text-ink-950 truncate">{a.nome || `Matrícula ${a.matricula}`}</p>
+                    <p className="text-[10px] text-stone-500">{est.rotulo}{carga > 0 ? ` · ${carga} conversa${carga > 1 ? 's' : ''}` : ''}</p>
+                  </div>
+                  {a.estado === 'pausa' ? (
+                    <button type="button"
+                      onClick={() => forcarPresenca.mutate({ atendenteId: a.atendenteId, estado: 'online' })}
+                      disabled={alterando}
+                      title="Tirar da pausa agora"
+                      className="min-h-8 px-2.5 rounded-md bg-white text-emerald-700 border border-emerald-300 hover:bg-emerald-50 disabled:opacity-40 text-[11px] font-medium shrink-0">
+                      {alterando ? 'Alterando…' : 'Disponibilizar'}
+                    </button>
+                  ) : a.estado === 'online' ? (
+                    <button type="button"
+                      onClick={() => forcarPresenca.mutate({ atendenteId: a.atendenteId, estado: 'pausa' })}
+                      disabled={alterando}
+                      title="Colocar em pausa agora"
+                      className="min-h-8 px-2.5 rounded-md bg-white text-amber-700 border border-amber-300 hover:bg-amber-50 disabled:opacity-40 text-[11px] font-medium shrink-0">
+                      {alterando ? 'Alterando…' : 'Pausar'}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+            {presenca.data?.length === 0 && (
+              <div className="px-4 py-8">
+                <p className="text-sm font-medium text-ink-950">Nenhum atendente conectado</p>
+                <p className="mt-1 text-[12px] leading-5 text-stone-600">
+                  A presença é atualizada quando alguém entra no painel de conversas.
+                </p>
+              </div>
+            )}
+          </div>
+          <p className="text-[10px] leading-4 text-stone-500 px-4 py-2.5 bg-paper-50 border-t border-paper-300">
+            Em pausa, o atendente conclui as conversas atuais, mas não recebe novas.
+          </p>
+        </section>
+      </div>
     </div>
   );
 }

@@ -2,16 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
+import Brand from '../ui/Brand';
+import Icon from '../ui/Icon';
+import ThemeMenu from '../ui/ThemeMenu';
 
-const IDLE_MS = 30 * 60 * 1000; // 30 min sem interação -> pausa automática.
-// (10 min pausava quem estava em ligação/lendo conversa/no ERP; 30 min separa
-//  bem o "ausente de verdade" do "trabalhando sem clicar na aba do MC".)
+const IDLE_MS = 30 * 60 * 1000;
 
-// Presença + auto-pausa por inatividade. Ativo só na visão operacional (fora do admin).
-// Sem mouse/teclado por IDLE_MS, o atendente entra em pausa sozinho (deixa de receber
-// novas conversas) e vê um aviso para voltar. Fechar a aba já o tira da distribuição
-// (a conexão SSE cai e a presença vira offline após a graça), então aqui cobrimos o
-// caso da aba aberta sem ninguém na frente — exatamente o que derrubava conversas.
 function usePresenca(ativo) {
   const [pausado, setPausado] = useState(null);
   const [autoPausa, setAutoPausa] = useState(false);
@@ -30,31 +26,27 @@ function usePresenca(ativo) {
   }, [ativo]);
 
   const definir = useCallback((novo, porInatividade = false) => {
-    const anterior = pausadoRef.current; // para desfazer se a chamada falhar
+    const anterior = pausadoRef.current;
     setPausado(novo);
     setAutoPausa(porInatividade && novo);
     api.put('/presenca', { estado: novo ? 'pausa' : 'online' }).catch(() => {
-      setPausado(anterior); // rollback: não deixa a UI divergir do servidor
+      setPausado(anterior);
       if (porInatividade) setAutoPausa(false);
     });
   }, []);
 
-  // Detecta inatividade e auto-pausa quem está disponível.
   useEffect(() => {
     if (!ativo) return undefined;
     const marcar = () => { ultimaAtividade.current = Date.now(); };
-    // 'focus' = voltar para a janela do navegador conta como atividade (cobre o
-    // caso de quem estava trabalhando em outro app/janela e volta pro MC).
     const eventos = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'focus'];
-    eventos.forEach((e) => window.addEventListener(e, marcar, { passive: true }));
+    eventos.forEach((evento) => window.addEventListener(evento, marcar, { passive: true }));
     const aoVoltar = () => { if (!document.hidden) marcar(); };
     document.addEventListener('visibilitychange', aoVoltar);
     const timer = setInterval(() => {
-      if (pausadoRef.current) return; // já em pausa
-      if (Date.now() - ultimaAtividade.current >= IDLE_MS) definir(true, true);
+      if (!pausadoRef.current && Date.now() - ultimaAtividade.current >= IDLE_MS) definir(true, true);
     }, 30_000);
     return () => {
-      eventos.forEach((e) => window.removeEventListener(e, marcar));
+      eventos.forEach((evento) => window.removeEventListener(evento, marcar));
       document.removeEventListener('visibilitychange', aoVoltar);
       clearInterval(timer);
     };
@@ -68,84 +60,95 @@ function usePresenca(ativo) {
   };
 }
 
-export default function Header({ title }) {
-  const { logout, user, isGestor } = useAuth();
+export default function Header({ title, embedded = false }) {
+  const { logout, encerrarSuporte, user, isGestor } = useAuth();
   const { pathname } = useLocation();
   const emAdmin = pathname.startsWith('/admin');
-  // Sessão de suporte do operador (FIL-70) fica FORA da presença: ela é
-  // somente-leitura (o servidor recusa o PUT /presenca) e o operador não entra
-  // na distribuição de conversas do cliente — mostrar "Disponível" para ele
-  // seria mentira, e a auto-pausa ficaria batendo num 403 a cada 30 min.
   const pres = usePresenca(!emAdmin && !user?.suporte);
+  const empresa = localStorage.getItem('empresa') || 'workspace';
+  const inicial = (user?.nome || user?.email || '?').trim().slice(0, 1).toUpperCase();
 
   return (
     <>
-      <header className="navy-gradient text-white sticky top-0 z-30">
-        <div className="flex items-center h-14 px-4 md:px-6 gap-2 min-w-0">
-          <span className="section-bar" />
-          <h1 className="min-w-0 flex-1 font-display font-bold text-base tracking-tight truncate">{title}</h1>
+      <header className="bg-white text-stone-800 border-b border-paper-300 sticky top-0 z-30">
+        <div className={`flex items-center px-3 md:px-4 gap-3 min-w-0 ${embedded ? 'h-14' : 'h-16'}`}>
+          <Brand compact className={`${embedded ? 'md:hidden' : ''} pr-2 md:pr-4 md:border-r md:border-paper-300`} />
+          <div className="min-w-0 flex-1">
+            <h1 className="font-semibold text-[15px] leading-tight truncate">{title}</h1>
+            <p className={`text-stone-500 truncate ${embedded ? 'text-[10px]' : 'text-xs'}`}>{empresa}</p>
+          </div>
+
           {user?.suporte && (
-            <span title="Acesso de suporte do operador do Falatta — somente leitura, registrado na auditoria desta empresa"
-              className="shrink-0 bg-bordeaux-700 font-mono text-[10px] uppercase tracking-widest px-2 py-1 rounded">
-              suporte · leitura
-            </span>
+            <button
+              type="button"
+              onClick={encerrarSuporte}
+              title="Administração temporária e auditada. Voltar ao painel do operador."
+              className="hidden sm:inline-flex shrink-0 items-center gap-1.5 bg-amber-50 text-amber-900 border border-amber-200 text-xs font-semibold px-2.5 py-1.5 rounded-lg hover:bg-amber-100"
+            >
+              <Icon name="support" size={14} />
+              Implantação Falatta · sair do cliente
+            </button>
           )}
-          <div className="flex items-center gap-2">
+
+          <div className="flex items-center gap-1.5">
+            {!embedded && <ThemeMenu />}
+            {embedded && <div className="md:hidden"><ThemeMenu /></div>}
+
             {!emAdmin && pres.pausado !== null && (
-              <button onClick={pres.alternar}
+              <button
+                onClick={pres.alternar}
                 title={pres.pausado ? 'Em pausa — não recebe novas conversas' : 'Disponível — recebendo conversas'}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors
-                  ${pres.pausado ? 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30' : 'text-white/60 hover:bg-black/20 hover:text-white'}`}>
-                <span className={`w-2 h-2 rounded-full ${pres.pausado ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                className={`min-h-10 flex items-center gap-2 px-3 rounded-lg text-xs font-semibold border ${
+                  pres.pausado
+                    ? 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                    : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${pres.pausado ? 'bg-amber-500' : 'bg-emerald-500'}`} />
                 {pres.pausado ? 'Em pausa' : 'Disponível'}
               </button>
             )}
-            {isGestor && (
-              <Link to={emAdmin ? '/conversas' : '/admin'}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                           text-white/60 hover:bg-black/20 hover:text-white transition-colors">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {emAdmin ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  )}
-                </svg>
-                {emAdmin ? 'Conversas' : 'Admin'}
+
+            {(isGestor || user?.suporte) && (
+              <Link
+                to={emAdmin ? '/conversas' : '/admin'}
+                className={`${embedded ? 'md:hidden ' : ''}min-h-10 flex items-center gap-2 px-3 rounded-lg text-xs font-semibold text-stone-600 hover:bg-paper-200 hover:text-ink-950`}
+              >
+                <Icon name={emAdmin ? 'inbox' : 'settings'} size={17} />
+                <span className="hidden sm:inline">{emAdmin ? 'Conversas' : 'Gestão'}</span>
               </Link>
             )}
-            {user && (
-              <span className="hidden sm:block flex-none whitespace-nowrap font-mono text-xs text-white/40">
-                {user.nome}
+
+            <div className="hidden md:flex items-center gap-2 pl-2 ml-1 border-l border-paper-300">
+              <span className="w-8 h-8 rounded-lg bg-paper-200 text-stone-700 flex items-center justify-center text-xs font-semibold">
+                {inicial}
               </span>
-            )}
+              <span className="max-w-32 truncate text-xs font-medium text-stone-700">{user?.nome || user?.email}</span>
+            </div>
+
             <button
-              onClick={logout}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                         text-white/60 hover:bg-black/20 hover:text-white transition-colors"
-              aria-label="Sair"
+              onClick={user?.suporte ? encerrarSuporte : logout}
+              className="w-10 h-10 rounded-lg flex items-center justify-center text-stone-500 hover:bg-paper-200 hover:text-ink-950"
+              aria-label={user?.suporte ? 'Voltar ao painel do operador' : 'Sair'}
+              title={user?.suporte ? 'Voltar ao painel do operador' : 'Sair'}
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
-              </svg>
-              Sair
+              <Icon name="logout" size={18} />
             </button>
           </div>
         </div>
       </header>
 
       {!emAdmin && pres.autoPausa && pres.pausado && (
-        <div className="bg-amber-100 border-b border-amber-300 text-amber-900 text-[13px] px-4 md:px-6 py-2 flex items-center gap-3">
-          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 4h.01M10.29 3.86l-7.4 12.82A1.5 1.5 0 004.18 19h15.64a1.5 1.5 0 001.29-2.32L13.71 3.86a1.5 1.5 0 00-2.42 0z" />
-          </svg>
-          <span>Você foi colocado <strong>em pausa por inatividade</strong> e não está recebendo novas conversas.</span>
-          <button onClick={pres.voltar}
-            className="ml-auto shrink-0 px-3 py-1 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700">
-            Voltar a Disponível
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 text-[13px] px-4 md:px-6 py-2.5 flex items-center gap-3">
+          <Icon name="alert" size={17} className="shrink-0" />
+          <span>
+            Você foi colocado <strong>em pausa por inatividade</strong> e não está recebendo novas conversas.
+          </span>
+          <button
+            onClick={pres.voltar}
+            className="ml-auto shrink-0 min-h-9 px-3 rounded-lg bg-amber-700 text-white text-xs font-semibold hover:bg-amber-800"
+          >
+            Voltar a disponível
           </button>
         </div>
       )}

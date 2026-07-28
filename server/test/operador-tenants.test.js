@@ -20,6 +20,9 @@ process.env.WA_TOKEN = 'token_abc';
 process.env.WA_PHONE_NUMBER_ID = '1112223334';
 process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
 process.env.APP_URL = 'https://painel.falatta.test';
+// O ciclo inteiro abaixo usa o banco transacional em memória. Impede que a
+// blacklist compartilhada tente acessar o banco real do ambiente de dev.
+process.env.DATABASE_URL = '';
 
 const test = require('node:test');
 const assert = require('node:assert');

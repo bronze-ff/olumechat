@@ -16,20 +16,39 @@ function storageKey(tenantId, conversaId, fileName) {
   return `${t}/${c}/${safe}`;
 }
 
-function secret() {
-  return process.env.STORAGE_SIGNING_SECRET || process.env.META_APP_SECRET || 'dev-storage-secret';
+/**
+ * Segredo de assinatura da URL de mídia. A chave do storage é PREVISÍVEL
+ * ({tenantId}/{conversaId}/{arquivo}) — sem um segredo real, qualquer um
+ * forjaria o token e leria mídia de OUTRO tenant. Mesmo padrão do
+ * db/pool.js::initPool: falha o boot em produção em vez de cair num
+ * fallback público. Calculado uma vez no load do módulo (não a cada chamada)
+ * para o erro aparecer assim que o processo sobe, não no primeiro upload.
+ */
+function resolverSecret() {
+  const real = process.env.STORAGE_SIGNING_SECRET || process.env.META_APP_SECRET;
+  if (real) return real;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      '[storage] STORAGE_SIGNING_SECRET/META_APP_SECRET não definidos em produção — '
+      + 'sem um segredo real, a URL assinada de mídia pode ser forjada para qualquer tenant.'
+    );
+  }
+  console.warn('[storage] STORAGE_SIGNING_SECRET/META_APP_SECRET ausentes — usando segredo de DEV (NÃO use em produção).');
+  return 'dev-storage-secret';
 }
+
+const SEGREDO = resolverSecret();
 
 function tokenFor(key, expiresAt) {
   const payload = Buffer.from(JSON.stringify({ key, exp: expiresAt })).toString('base64url');
-  const sig = crypto.createHmac('sha256', secret()).update(payload).digest('base64url');
+  const sig = crypto.createHmac('sha256', SEGREDO).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
 
 function verifyToken(token, key, now = Date.now()) {
   try {
     const [payload, sig] = String(token).split('.');
-    const expected = crypto.createHmac('sha256', secret()).update(payload).digest('base64url');
+    const expected = crypto.createHmac('sha256', SEGREDO).update(payload).digest('base64url');
     if (!payload || !sig || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
     return data.key === key && Number(data.exp) > now ? data : false;

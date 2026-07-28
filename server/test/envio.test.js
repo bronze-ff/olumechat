@@ -7,6 +7,7 @@ process.env.WEBHOOK_VERIFY_TOKEN = 'verify123';
 process.env.WA_TOKEN = 'token_abc';
 process.env.WA_PHONE_NUMBER_ID = '1112223334';
 process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
+process.env.DEV_META_FALLBACK = '1';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -96,10 +97,11 @@ test('envio: janela ABERTA → envia pelo número da conversa e persiste (201)',
   try {
     const r = await post(port, '/api/conversas/7/mensagens', { texto: 'Olá do inbox' });
     assert.equal(r.status, 201);
-    assert.equal(r.body.conteudo, 'Olá do inbox');
+    assert.equal(r.body.conteudo, '*Teste:*\nOlá do inbox');
     assert.equal(r.body.wamid, 'wamid.OUT1');
     // Enviou pelo número DA CONVERSA (multi-número), não pelo default:
     assert.match(captured.url, /\/5550009999\/messages$/);
+    assert.equal(captured.body.text.body, '*Teste:*\nOlá do inbox');
     // Persistiu a saída:
     assert.ok(conn.executed.some((e) => e.sql.startsWith('INSERT INTO mensagem')));
   } finally { server.close(); }
