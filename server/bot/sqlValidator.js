@@ -18,7 +18,12 @@ const RE_TABELAS_PROTEGIDAS = /\b(ia_config|usuario(_token_senha)?)\b/i;
 const RE_FUNCOES_PERIGOSAS =
   /\b(pg_sleep|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|dblink|lo_import|lo_export|pg_terminate_backend|pg_cancel_backend)\b\s*\(/i;
 
-const RE_CATALOGO = /\b(pg_catalog|information_schema)\b/i;
+// Bloqueia o PREFIXO pg_ inteiro (pg_class, pg_stat_activity, pg_roles,
+// pg_shadow, pg_authid...), não só a string "pg_catalog": um SELECT direto em
+// pg_class (sem passar por pg_catalog.) enumerava tabelas/colunas do banco
+// COMPARTILHADO do mesmo jeito. Nenhuma tabela de negócio deste produto usa
+// esse prefixo, então não há falso-positivo a temer.
+const RE_CATALOGO = /\b(pg_catalog|information_schema|pg_[a-z_]+)\b/i;
 
 /**
  * Checagens de abuso do banco compartilhado. Recebe o SQL JÁ SEM COMENTÁRIOS

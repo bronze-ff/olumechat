@@ -50,3 +50,11 @@ test('";" só em comentário não invalida; pg_sleep no código ainda é barrado
   assert.deepEqual(validarSQL('SELECT 1 -- fim de linha; ok'), []);
   assert.ok(validarSQL('-- comentário\nSELECT pg_sleep(1)').length > 0);
 });
+test('rejeita catálogo de sistema pelo PREFIXO pg_, mesmo sem passar por pg_catalog.', () => {
+  assert.ok(validarSQL('SELECT relname FROM pg_class').length > 0);
+  assert.ok(validarSQL('SELECT attname FROM pg_attribute').length > 0);
+  assert.ok(validarSQL('SELECT * FROM pg_stat_activity').length > 0);
+  assert.ok(validarSQL('SELECT * FROM pg_roles').length > 0);
+  assert.ok(validarSQL('SELECT * FROM pg_authid').length > 0);
+  assert.ok(validarSQL('SELECT * FROM pg_settings').length > 0);
+});
