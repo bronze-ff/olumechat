@@ -27,10 +27,15 @@ function conexao({ tenantExiste = true, ativo = null, contratoRow = null, itens 
       if (/^SELECT id FROM tenant WHERE id = :id/i.test(s)) {
         return { rows: tenantExiste ? [{ ID: binds.id }] : [] };
       }
-      if (/^SELECT id, plano_nome, valor_recorrente_centavos, ciclo, fim_vigencia FROM contrato WHERE tenant_id = :tid AND fim_vigencia IS NULL/i.test(s)) {
+      if (/^SELECT id, plano_nome, valor_recorrente_centavos, ciclo, inicio_cobranca, fim_vigencia FROM contrato WHERE tenant_id = :tid AND fim_vigencia IS NULL/i.test(s)) {
         return { rows: ativo ? [ativo] : [] };
       }
-      if (/^UPDATE contrato SET fim_vigencia = GREATEST\(CURRENT_DATE, inicio_cobranca\) WHERE id = :id/i.test(s)) {
+      if (/^SELECT GREATEST\(CURRENT_DATE, :inicioAnterior\)::text AS limite/i.test(s)) {
+        const hoje = new Date().toISOString().slice(0, 10);
+        const inicioAnterior = String(binds.inicioAnterior).slice(0, 10);
+        return { rows: [{ LIMITE: inicioAnterior > hoje ? inicioAnterior : hoje }] };
+      }
+      if (/^UPDATE contrato SET fim_vigencia = :dataLimite WHERE id = :id/i.test(s)) {
         return { rowsAffected: 1, rows: [] };
       }
       if (/^INSERT INTO contrato\s*\(/i.test(s)) {
@@ -152,16 +157,17 @@ test('criarOuTrocarContrato: primeiro contrato do tenant (sem anterior) não enc
 });
 
 test('criarOuTrocarContrato: com um contrato ATIVO, encerra-o (fim_vigencia = hoje) ANTES de inserir o novo', async () => {
-  const ativo = { ID: 10, PLANO_NOME: 'Básico', VALOR_RECORRENTE_CENTAVOS: 9900, CICLO: 'mensal', FIM_VIGENCIA: null };
+  const ativo = { ID: 10, PLANO_NOME: 'Básico', VALOR_RECORRENTE_CENTAVOS: 9900, CICLO: 'mensal', INICIO_COBRANCA: '2020-01-01', FIM_VIGENCIA: null };
   const conn = conexao({ ativo });
   db.getConnection = async () => conn;
   const r = await contrato.criarOuTrocarContrato({
     operador: OPERADOR, tenantId: 5, dados: { ...DADOS_VALIDOS, planoNome: 'Plano Premium', valorRecorrenteCentavos: 250000 },
   });
 
-  const encerra = conn.cap.find((c) => /^UPDATE contrato SET fim_vigencia = GREATEST\(CURRENT_DATE, inicio_cobranca\) WHERE id = :id/i.test(c.sql));
+  const encerra = conn.cap.find((c) => /^UPDATE contrato SET fim_vigencia = :dataLimite WHERE id = :id/i.test(c.sql));
   assert.ok(encerra, 'encerra o contrato anterior');
   assert.equal(encerra.binds.id, 10, 'encerra exatamente o contrato que estava ativo');
+  assert.equal(encerra.binds.dataLimite, new Date().toISOString().slice(0, 10), 'início de cobrança bem no passado — encerra hoje');
 
   const insere = conn.cap.find((c) => /^INSERT INTO contrato/i.test(c.sql));
   const idxEncerra = conn.cap.indexOf(encerra);
@@ -188,14 +194,32 @@ test('criarOuTrocarContrato: contrato ativo com início de cobrança FUTURO (ain
   // comum de "cliente muda de ideia antes de começar a pagar". A correção usa
   // GREATEST(CURRENT_DATE, inicio_cobranca) — nunca fica antes do início de
   // cobrança do próprio contrato que está sendo encerrado.
-  const ativo = { ID: 11, PLANO_NOME: 'Em implantação', VALOR_RECORRENTE_CENTAVOS: 5000, CICLO: 'mensal', FIM_VIGENCIA: null };
+  // início de cobrança igual ao do novo contrato (DADOS_VALIDOS): no futuro
+  // relativo a hoje, mas não depois do novo — GREATEST(hoje, futuro) = futuro,
+  // e o novo contrato (mesma data) ainda passa na validação de não-retroatividade.
+  const ativo = { ID: 11, PLANO_NOME: 'Em implantação', VALOR_RECORRENTE_CENTAVOS: 5000, CICLO: 'mensal', INICIO_COBRANCA: DADOS_VALIDOS.inicioCobranca, FIM_VIGENCIA: null };
   const conn = conexao({ ativo });
   db.getConnection = async () => conn;
   await contrato.criarOuTrocarContrato({ operador: OPERADOR, tenantId: 5, dados: DADOS_VALIDOS });
 
   const encerra = conn.cap.find((c) => /^UPDATE contrato SET fim_vigencia/i.test(c.sql));
   assert.ok(encerra, 'encerra o contrato anterior mesmo com início de cobrança futuro');
-  assert.match(encerra.sql, /GREATEST\(CURRENT_DATE, inicio_cobranca\)/i, 'nunca usa CURRENT_DATE puro — violaria a vigência quando a cobrança ainda não começou');
+  assert.equal(encerra.binds.dataLimite, DADOS_VALIDOS.inicioCobranca, 'nunca fica antes do início de cobrança do próprio contrato que está sendo encerrado');
+});
+
+test('criarOuTrocarContrato: rejeita substituto com início de cobrança ANTERIOR ao ponto de encerramento do anterior (achado [P1] da review)', async () => {
+  const ativo = { ID: 12, PLANO_NOME: 'Vigente', VALOR_RECORRENTE_CENTAVOS: 9900, CICLO: 'mensal', INICIO_COBRANCA: '2020-01-01', FIM_VIGENCIA: null };
+  const conn = conexao({ ativo });
+  db.getConnection = async () => conn;
+  // O contrato anterior seria encerrado HOJE (início no passado) — um
+  // substituto com inicioCobranca no passado tentaria reescrever competência
+  // já coberta pelo contrato antigo.
+  await assert.rejects(
+    contrato.criarOuTrocarContrato({ operador: OPERADOR, tenantId: 5, dados: { ...DADOS_VALIDOS, inicioCobranca: '2021-06-01' } }),
+    (err) => err.deOperador && err.status === 400 && /não pode ser anterior/i.test(err.message)
+  );
+  assert.equal(conn.cap.some((c) => /^INSERT INTO contrato\s*\(/i.test(c.sql)), false, 'não insere o substituto quando a data é rejeitada');
+  assert.equal(conn.cap.some((c) => /^UPDATE contrato SET fim_vigencia/i.test(c.sql)), false, 'não encerra o anterior antes de validar a data do substituto');
 });
 
 // ===========================================================================

@@ -106,7 +106,7 @@ async function carregarTenant(conn, tenantId) {
 
 async function carregarContratoAtivo(conn, tenantId) {
   const r = await conn.execute(
-    `SELECT id, plano_nome, valor_recorrente_centavos, ciclo, fim_vigencia
+    `SELECT id, plano_nome, valor_recorrente_centavos, ciclo, inicio_cobranca, fim_vigencia
        FROM contrato WHERE tenant_id = :tid AND fim_vigencia IS NULL`,
     { tid: tenantId }
   );
@@ -153,9 +153,24 @@ async function criarOuTrocarContrato({ operador, tenantId, dados, ip }) {
       // troca de plano com rollback. Encerrar exatamente no início de
       // cobrança (janela de 0 dias) reflete a realidade: nunca chegou a
       // cobrar nada desse contrato — sem inventar um "cancelado" separado.
+      const limite = await conn.execute(
+        `SELECT GREATEST(CURRENT_DATE, :inicioAnterior)::text AS limite`,
+        { inicioAnterior: anterior.INICIO_COBRANCA }
+      );
+      const dataLimite = limite.rows[0].LIMITE;
+      // Achado [P1] de review do PR #28: o substituto não pode nascer com
+      // inicio_cobranca ANTERIOR ao ponto em que o contrato antigo é
+      // encerrado — os dois passariam a cobrir a mesma competência passada, e
+      // contratoNaCompetencia() (ORDER BY criado_em DESC) escolheria o NOVO
+      // para gerar uma fatura histórica com o valor errado. A UI já não
+      // copia mais a data antiga (ver ContratoModal.jsx), mas o backend é
+      // quem garante isto de verdade — nunca confia só na tela.
+      if (v.inicioCobranca < dataLimite) {
+        throw new ErroOperador(400, `Início de cobrança do contrato substituto não pode ser anterior a ${dataLimite} — data em que o contrato anterior é encerrado.`);
+      }
       await conn.execute(
-        `UPDATE contrato SET fim_vigencia = GREATEST(CURRENT_DATE, inicio_cobranca) WHERE id = :id`,
-        { id: anterior.ID }
+        `UPDATE contrato SET fim_vigencia = :dataLimite WHERE id = :id`,
+        { dataLimite, id: anterior.ID }
       );
     }
     const ins = await conn.execute(

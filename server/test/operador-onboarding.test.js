@@ -107,6 +107,9 @@ function conexaoEtapa({ tenantExiste = true, linhas = [] } = {}) {
       if (/^SELECT \* FROM onboarding_meta_etapa WHERE tenant_id = :tid$/i.test(s)) {
         return { rows: estado };
       }
+      if (/^SELECT etapa, status FROM onboarding_meta_etapa WHERE tenant_id = :tid$/i.test(s)) {
+        return { rows: estado.map((x) => ({ ETAPA: x.ETAPA, STATUS: x.STATUS })) };
+      }
       if (/^SELECT status, responsavel, observacao, data_referencia FROM onboarding_meta_etapa WHERE tenant_id = :tid AND etapa = :etapa/i.test(s)) {
         const l = estado.find((x) => x.ETAPA === binds.etapa);
         return { rows: l ? [l] : [] };
@@ -223,4 +226,49 @@ test('atualizarEtapa: rejeita data de referência impossível (2026-02-31)', asy
     onboarding.atualizarEtapa({ operador: OPERADOR, tenantId: 5, etapa: 'conta_criada', dados: { status: 'concluida', dataReferencia: '2026-02-31' } }),
     (err) => err.deOperador && err.status === 400
   );
+});
+
+// ===========================================================================
+// sugestaoInicioCobranca (achado [P2] de review do PR #28): o endpoint de
+// sessão de suporte (api/onboardingMeta.js) já devolvia isto — o equivalente
+// cross-tenant do operador perdia o sinal em silêncio. Mesmas 3 condições.
+// ===========================================================================
+const TODAS_MENOS = (excluida) => [
+  'conta_criada', 'verificacao_empresa', 'waba_criada', 'numero_verificado',
+  'templates_submetidos', 'templates_aprovados', 'webhook_testado',
+].filter((e) => e !== excluida).map((etapa) => ({ TENANT_ID: 5, ETAPA: etapa, STATUS: 'concluida', RESPONSAVEL: null, OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: null }));
+
+test('atualizarEtapa: concluir a última etapa com as outras 6 já concluídas SUGERE início de cobrança', async () => {
+  const conn = conexaoEtapa({
+    linhas: [...TODAS_MENOS('webhook_testado'), { TENANT_ID: 5, ETAPA: 'webhook_testado', STATUS: 'em_andamento', RESPONSAVEL: null, OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: null }],
+  });
+  db.getConnection = async () => conn;
+  const r = await onboarding.atualizarEtapa({ operador: OPERADOR, tenantId: 5, etapa: 'webhook_testado', dados: { status: 'concluida' } });
+  assert.ok(r.sugestaoInicioCobranca, 'sugere a data de início de cobrança');
+  assert.match(r.sugestaoInicioCobranca.data, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test('atualizarEtapa: concluir a última etapa com etapas anteriores pendentes NÃO sugere', async () => {
+  const conn = conexaoEtapa({ linhas: [{ TENANT_ID: 5, ETAPA: 'webhook_testado', STATUS: 'em_andamento', RESPONSAVEL: null, OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: null }] });
+  db.getConnection = async () => conn;
+  const r = await onboarding.atualizarEtapa({ operador: OPERADOR, tenantId: 5, etapa: 'webhook_testado', dados: { status: 'concluida' } });
+  assert.equal(r.sugestaoInicioCobranca, undefined, 'não sugere com etapas anteriores incompletas');
+});
+
+test('atualizarEtapa: re-salvar a última etapa JÁ concluída (só mudando observação) NÃO gera sugestão nova', async () => {
+  const conn = conexaoEtapa({
+    linhas: [...TODAS_MENOS('webhook_testado'), { TENANT_ID: 5, ETAPA: 'webhook_testado', STATUS: 'concluida', RESPONSAVEL: null, OBSERVACAO: 'primeira nota', DATA_REFERENCIA: null, ATUALIZADO_POR: null }],
+  });
+  db.getConnection = async () => conn;
+  const r = await onboarding.atualizarEtapa({ operador: OPERADOR, tenantId: 5, etapa: 'webhook_testado', dados: { status: 'concluida', observacao: 'nota atualizada' } });
+  assert.equal(r.sugestaoInicioCobranca, undefined, 'não é a transição que completa — já estava concluída');
+});
+
+test('atualizarEtapa: concluir uma etapa que NÃO é a última não sugere início de cobrança', async () => {
+  const conn = conexaoEtapa({
+    linhas: [...TODAS_MENOS('templates_aprovados'), { TENANT_ID: 5, ETAPA: 'templates_aprovados', STATUS: 'em_andamento', RESPONSAVEL: null, OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: null }],
+  });
+  db.getConnection = async () => conn;
+  const r = await onboarding.atualizarEtapa({ operador: OPERADOR, tenantId: 5, etapa: 'templates_aprovados', dados: { status: 'concluida' } });
+  assert.equal(r.sugestaoInicioCobranca, undefined);
 });

@@ -69,13 +69,23 @@ function conexao({
         return { rows: lista.map((id) => ({ ID: id })) };
       }
       if (/FROM contrato\s+WHERE tenant_id = :tenantId[\s\S]*to_char\(inicio_cobranca/i.test(s)) {
-        const c = contratosPorTenant[binds.tenantId];
-        if (!c) return { rows: [] };
-        const inicio = String(c.INICIO_COBRANCA).slice(0, 7);
-        const fim = c.FIM_VIGENCIA ? String(c.FIM_VIGENCIA).slice(0, 7) : null;
-        if (binds.competencia < inicio) return { rows: [] };
-        if (fim && binds.competencia > fim) return { rows: [] };
-        return { rows: [c] };
+        // Aceita um contrato só (compatibilidade com os testes existentes) OU
+        // um HISTÓRICO (array, ordem cronológica) — para testar troca de
+        // plano, onde mais de um contrato pode casar com a mesma competência.
+        // A query real ordena por `criado_em DESC LIMIT 1`; aqui, o ÚLTIMO
+        // item da lista que casa é o "mais recente" (mesma semântica).
+        const historico = contratosPorTenant[binds.tenantId];
+        if (!historico) return { rows: [] };
+        const lista = Array.isArray(historico) ? historico : [historico];
+        const candidatos = lista.filter((c) => {
+          const inicio = String(c.INICIO_COBRANCA).slice(0, 7);
+          const fim = c.FIM_VIGENCIA ? String(c.FIM_VIGENCIA).slice(0, 7) : null;
+          if (binds.competencia < inicio) return false;
+          if (fim && binds.competencia > fim) return false;
+          return true;
+        });
+        if (!candidatos.length) return { rows: [] };
+        return { rows: [candidatos[candidatos.length - 1]] };
       }
       if (/^SELECT id, tipo, descricao, valor_unitario_centavos, quantidade\s+FROM contrato_item/i.test(s)) {
         const todos = itensPorContrato[binds.contratoId] || [];
@@ -225,6 +235,48 @@ test('tenant sem contrato vigente não gera fatura', async () => {
   const conn = conexao({ tenants: [5], contratosPorTenant: {} });
   const geradas = await faturamento.gerarFaturas(conn, COMPETENCIA_FECHADA);
   assert.equal(geradas.length, 0);
+});
+
+// ===========================================================================
+// TROCA DE PLANO NÃO REESCREVE COMPETÊNCIA HISTÓRICA (achado [P1] da review
+// do PR #28): o contrato SUBSTITUTO precisa nascer com inicio_cobranca de
+// HOJE (data da troca) — nunca copiando a data do contrato antigo. Copiar a
+// data antiga faz o novo contrato "cobrir" competências passadas também, e
+// contratoNaCompetencia() (ORDER BY criado_em DESC LIMIT 1) escolhe o mais
+// recente entre os que casam — ou seja, o plano NOVO venceria para gerar uma
+// fatura de um mês em que o cliente ainda pagava o plano ANTIGO.
+// ===========================================================================
+test('troca de plano: competência ANTERIOR à troca gera fatura com o valor do plano ANTIGO, não o novo', async () => {
+  const hoje = new Date().toISOString().slice(0, 10);
+  const antigo = contratoMensal({ inicioCobranca: `${competenciaRelativa(6)}-01`, fimVigencia: hoje });
+  // Contrato substituto: nasce HOJE (fix do achado), não na data do antigo.
+  const novo = { ...contratoMensal({ inicioCobranca: hoje }), ID: 11, VALOR_RECORRENTE_CENTAVOS: 200000, PLANO_NOME: 'Plano Novo' };
+  const conn = conexao({ tenants: [5], contratosPorTenant: { 5: [antigo, novo] } });
+
+  const competenciaPassada = competenciaRelativa(3); // antes da troca, depois do início do plano antigo
+  const r = await faturamento.gerarFaturaDoTenant(conn, 5, competenciaPassada);
+  assert.ok(r, 'competência histórica ainda gera fatura');
+  assert.equal(r.valorTotalCentavos, 100000, 'usa o valor do plano vigente NAQUELA época (antigo), não o novo (200000)');
+
+  const item = conn.faturaItens.find((fi) => fi.FATURA_ID === r.id);
+  assert.equal(item.DESCRICAO, 'Recorrência — Plano Pro (mensal)', 'a descrição também confirma que é o plano ANTIGO');
+});
+
+test('troca de plano (achado ANTES do fix): copiar a data do contrato antigo faz a competência histórica escolher o plano NOVO — regressão', async () => {
+  // Reproduz o BUG relatado na review: o substituto nasce com a MESMA
+  // inicio_cobranca do antigo (o que o ContratoModal fazia antes do fix).
+  const antigo = contratoMensal({ inicioCobranca: `${competenciaRelativa(6)}-01`, fimVigencia: new Date().toISOString().slice(0, 10) });
+  const novoComDataCopiada = { ...contratoMensal({ inicioCobranca: `${competenciaRelativa(6)}-01` }), ID: 11, VALOR_RECORRENTE_CENTAVOS: 200000, PLANO_NOME: 'Plano Novo' };
+  const conn = conexao({ tenants: [5], contratosPorTenant: { 5: [antigo, novoComDataCopiada] } });
+
+  const competenciaPassada = competenciaRelativa(3);
+  const r = await faturamento.gerarFaturaDoTenant(conn, 5, competenciaPassada);
+  // Documenta o comportamento ERRADO que o fix do ContratoModal evita: com a
+  // data copiada, contratoNaCompetencia (criado_em DESC) escolhe o MAIS
+  // RECENTE dos dois — o plano novo — para uma competência em que o cliente
+  // ainda pagava o antigo. Isto prova por que o fix tem que estar no
+  // FRONT (a data que ele ENVIA), não só na leitura.
+  assert.equal(r.valorTotalCentavos, 200000, 'sem o fix, a competência histórica seria cobrada com o plano NOVO (bug)');
 });
 
 test('FATURA FECHADA NÃO MUDA DE VALOR (critério de aceite): alterar o contrato depois não afeta a fatura já gerada', async () => {
