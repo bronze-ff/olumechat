@@ -297,8 +297,8 @@ router.post('/', naoAuditor, async (req, res, next) => {
       const conteudo = b.preview ? String(b.preview) : `[template: ${templateName}]`;
       const ins = await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())
+           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'atendente', 'sent', now())
          RETURNING id INTO :id`,
         { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo,
           id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
@@ -502,7 +502,7 @@ router.get('/:id/mensagens', async (req, res, next) => {
         throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
       }
       const result = await conn.execute(
-        `SELECT id, direcao, tipo, conteudo, status, ts,
+        `SELECT id, direcao, tipo, conteudo, status, ts, origem,
                 media_id, mime_type, nome_arquivo,
                 CASE WHEN midia_caminho IS NOT NULL THEN 1 ELSE 0 END AS tem_arquivo
            FROM mensagem
@@ -661,8 +661,8 @@ router.post('/:id/mensagens', naoAuditor, envioLimiter, async (req, res, next) =
       const { tipos } = db;
       const ins = await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sent', now())
+           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'atendente', 'sent', now())
          RETURNING id INTO :id`,
         {
           cv: cv.ID, ct: cv.CONTATO_ID, num: cv.NUMERO_ID, atd: atendenteId,
@@ -794,9 +794,9 @@ router.post('/:id/arquivos', naoAuditor, envioLimiter, (req, res, next) => {
       const { tipos } = db;
       const ins = await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, status, ts,
+           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, origem, status, ts,
             media_id, mime_type, nome_arquivo, midia_caminho, midia_tamanho)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', :tipo, 'sent', now(),
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', :tipo, 'atendente', 'sent', now(),
             :mid, :mime, :nome, :cam, :tam)
          RETURNING id INTO :id`,
         {
@@ -865,8 +865,8 @@ router.post('/:id/notas', naoAuditor, async (req, res, next) => {
       const atendenteId = await getOrCreateAtendente(conn, req.user);
       const { tipos } = db;
       const ins = await conn.execute(
-        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, ts)
-         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, now())
+        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, origem, ts)
+         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, 'atendente', now())
          RETURNING id INTO :id`,
         {
           cv: id, ct: cv.rows[0].CONTATO_ID, atd: atendenteId, txt: texto,
@@ -970,8 +970,8 @@ router.post('/forcar-transferir', exigirPapel('ADMIN'), async (req, res, next) =
                 { a: paraAtendente, id });
             }
             await conn.execute(
-              `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, ts)
-               VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, now())`,
+              `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, origem, ts)
+               VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, 'atendente', now())`,
               { cv: id, ct: atual.CONTATO_ID, atd: autorId, txt: `Transferência forçada para ${destinoTxt} por ${(req.user && req.user.nome) || 'admin'}.` });
             await conn.execute(
               `INSERT INTO auditoria (atendente_id, matricula, acao, entidade, entidade_id, detalhe)
@@ -1165,8 +1165,8 @@ router.post('/:id/transferir', naoAuditor, async (req, res, next) => {
       // Nota interna automática (contexto pro próximo atendente).
       const autorId = await getOrCreateAtendente(conn, req.user);
       await conn.execute(
-        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, ts)
-         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, now())`,
+        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, origem, ts)
+         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, 'atendente', now())`,
         {
           cv: id, ct: atual.CONTATO_ID, atd: autorId,
           txt: `Transferida para ${destinoTxt} por ${(req.user && req.user.nome) || 'sistema'}.`,
@@ -1244,8 +1244,8 @@ router.post('/:id/encerrar', naoAuditor, async (req, res, next) => {
           const wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
           await conn.execute(
             `INSERT INTO mensagem
-               (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-             VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sent', now())`,
+               (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+             VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'atendente', 'sent', now())`,
             {
               cv: id,
               ct: cv.CONTATO_ID,

@@ -257,8 +257,8 @@ async function rodada(departamentoId, tentativa = 0) {
       await db.comTenant(tenantId, async (conn) => {
         await conn.execute(
           `INSERT INTO mensagem
-             (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-           VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sent', now())`,
+             (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+           VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sistema', 'sent', now())`,
           {
             cv: resultado.conversaId,
             ct: resultado.contatoId,

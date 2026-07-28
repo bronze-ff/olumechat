@@ -163,8 +163,8 @@ async function migrarNumeroContato(conn, { telefoneAntigo, telefoneNovo }) {
     const ids = [];
     for (const cv of cvs.rows) {
       await conn.execute(
-        `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, ts)
-         VALUES (:cv, :ct, 'nota', 'text', :txt, now())`,
+        `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, origem, ts)
+         VALUES (:cv, :ct, 'nota', 'text', :txt, 'sistema', now())`,
         { cv: cv.ID, ct: antigo.ID, txt }
       );
       ids.push(cv.ID);
@@ -265,9 +265,9 @@ async function insertInbound(conn, m) {
   const media = m.media || {};
   const r = await conn.execute(
     `INSERT INTO mensagem
-       (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, ts,
+       (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, origem, ts,
         media_id, mime_type, nome_arquivo, midia_caminho, midia_tamanho, midia_sha256)
-     VALUES (:cv, :ct, :num, :wamid, 'in', :tipo, :cont, :ts,
+     VALUES (:cv, :ct, :num, :wamid, 'in', :tipo, :cont, 'cliente', :ts,
         :mediaId, :mime, :nome, :cam, :tam, :sha)
      ON CONFLICT (tenant_id, wamid) DO NOTHING`,
     {
@@ -329,8 +329,8 @@ async function confirmarEncerramento(evt) {
     await db.comTenant(evt.tenantId, async (conn) => {
       await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', now())`,
+           (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+         VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sistema', 'sent', now())`,
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: texto }
       );
       // Medição de consumo (FIL-76/FIL-77): achado de review — confirmação de
@@ -365,8 +365,8 @@ async function enviarAvisoForaHorario(evt) {
     await db.comTenant(evt.tenantId, async (conn) => {
       await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', now())`,
+           (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+         VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sistema', 'sent', now())`,
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: evt.texto }
       );
       // Medição de consumo (FIL-76/FIL-77): achado de review — aviso de fora
@@ -417,8 +417,8 @@ async function anotarRespostaCampanha(conn, { conversaId, contatoId, telefone })
       + (row.TEMPLATE_NOME ? ` (template ${row.TEMPLATE_NOME})` : '')
       + (quando ? ` enviado em ${quando}.` : '.') + dados;
     await conn.execute(
-      `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, ts)
-       VALUES (:cv, :ct, 'nota', 'text', :txt, :ts)`,
+      `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, origem, ts)
+       VALUES (:cv, :ct, 'nota', 'text', :txt, 'sistema', :ts)`,
       { cv: conversaId, ct: contatoId, txt: texto, ts: row.ENVIADO_EM || new Date() }
     );
   } catch (err) {

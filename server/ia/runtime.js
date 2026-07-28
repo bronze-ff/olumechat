@@ -49,8 +49,8 @@ async function responder(conn, tenantId, cv, textos) {
       try { const resp = await sendText(cv.telefone, pedaco, cv.phoneNumberId); wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id; }
       catch (e) { status = 'falha'; console.error('[ia] falha ao enviar:', e.message); }
       await conn.execute(
-        `INSERT INTO mensagem (tenant_id, CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
-         VALUES (:tenantId, :cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, now())`,
+        `INSERT INTO mensagem (tenant_id, CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, ORIGEM, STATUS, TS)
+         VALUES (:tenantId, :cv, :ct, :num, :wamid, 'out', 'text', :txt, 'ia', :st, now())`,
         { tenantId, cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt: pedaco, st: status });
       // Medição de consumo (FIL-76/FIL-77): achado de review — resposta do
       // bot de IA não tinha produtor de mensagem_enviada nenhum (só ia_tokens
