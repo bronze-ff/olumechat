@@ -63,11 +63,12 @@ function DesktopNav({ abas, atual, onChange }) {
 }
 
 export default function Admin() {
-  const { isGestor, isAdmin, loading, user, logout, encerrarSuporte } = useAuth();
+  const { isGestor, isAdmin, isAuditor, loading, user, logout, encerrarSuporte } = useAuth();
   const [aba, setAba] = useState('monitor');
   // Sessão de implantação do operador (FIL-70): perfil ADMIN temporário, sem
-  // criar um atendente fictício dentro do cliente.
-  const podeVerAdmin = isGestor || user?.suporte;
+  // criar um atendente fictício dentro do cliente. AUDITOR entra somente-leitura
+  // (backend já restringe as mutações — ver naoAuditor/exigirPapel no server).
+  const podeVerAdmin = isGestor || user?.suporte || isAuditor;
 
   if (loading) return null;
   if (!podeVerAdmin) return <Navigate to="/conversas" replace />;

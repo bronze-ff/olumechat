@@ -94,9 +94,10 @@ export function AuthProvider({ children }) {
 
   const isAdmin = user?.papel === 'ADMIN';
   const isGestor = user?.papel === 'ADMIN' || user?.papel === 'SUPERVISOR';
+  const isAuditor = user?.papel === 'AUDITOR';
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, encerrarSuporte, loading, isAuthenticated: !!user, isAdmin, isGestor, refreshPerfil }}>
+    <AuthContext.Provider value={{ user, login, logout, encerrarSuporte, loading, isAuthenticated: !!user, isAdmin, isGestor, isAuditor, refreshPerfil }}>
       {children}
     </AuthContext.Provider>
   );
