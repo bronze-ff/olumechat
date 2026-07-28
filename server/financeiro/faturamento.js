@@ -15,6 +15,24 @@
 // fechada não muda de valor quando o contrato é alterado depois": os itens só
 // nascem uma vez, no INSERT que criou a fatura.
 //
+// ── SÓ GERA COMPETÊNCIA JÁ ENCERRADA (achado de review do PR #26) ──────────
+// A idempotência acima é uma faca de dois gumes: se a rotina gerasse a fatura
+// do mês CORRENTE (competência ainda em andamento), o primeiro tick do boot
+// já criaria e congelaria essa fatura — e todo consumo registrado dali em
+// diante NUNCA entraria nela, porque toda geração seguinte da mesma
+// competência bate no ON CONFLICT DO NOTHING. Na prática, quase nada do mês
+// seria cobrado. Por isso `gerarFaturaDoTenant` recusa qualquer competência
+// >= mês corrente (ver o guard logo no início da função) e o tick() sempre
+// chama com `mesAnteriorDe(hoje)` — nunca `anoMesAtual()`. Isso também casa
+// com consumo/fechamento.js: quando a fatura do mês anterior é gerada, o
+// fechamento de consumo daquele mês já rodou (mesmo tick diário fecha TODAS
+// as competências pendentes antes da meia-noite virar o mês), então
+// `consumo_mensal` já está completo — nada de gerar em cima de agregado
+// parcial. Escolha registrada aqui em vez de "fatura prevista atualizável até
+// fechar": manter uma fatura mutável até a emissão duplicaria a lógica de
+// idempotência (teria que apagar/reinserir item a cada rodada) só para
+// cobrir um mês que ninguém vai cobrar antes de acabar mesmo.
+//
 // ── QUAL CONTRATO VALE PARA UMA COMPETÊNCIA ─────────────────────────────────
 // Não usa "o contrato ativo agora" — usa o que estava vigente NA COMPETÊNCIA
 // (inicio_cobranca <= competência <= fim_vigencia OU fim_vigencia NULL). Isso
@@ -24,14 +42,16 @@
 // "inicio_cobranca no futuro não gera fatura" (nenhum contrato bate o filtro).
 //
 // ── CUSTO DESCONHECIDO NUNCA VIRA ZERO ──────────────────────────────────────
-// consumo_mensal.custo_centavos (FIL-77) já é COALESCE(SUM(...), 0) — se TODO
+// consumo_mensal.custo_centavos (FIL-77) é COALESCE(SUM(...), 0) — se algum
 // evento de um tipo tiver custo NULL (preço ainda não cadastrado em
-// preco_provedor), o agregado mostra "0", indistinguível de "não teve uso".
-// Por isso esta rotina consulta consumo_evento.custo_centavos IS NULL
-// separadamente (temCustoDesconhecido) e marca fatura.custo_incerto — o valor
-// gerado é a soma do que É conhecido (nunca inventado), mas a fatura fica
-// sinalizada para o operador revisar ANTES de emitir (ver operador/fatura.js
-// ::emitirFatura, que não bloqueia, só expõe a flag).
+// preco_provedor), o agregado por si só mostraria "0", indistinguível de "não
+// teve uso". A migração 019 (fix de review do FIL-77) já resolve isso na
+// origem: consumo_mensal.custo_incompleto = bool_or(custo_centavos IS NULL)
+// por tenant+competência+tipo, calculado no próprio fechamento mensal. Esta
+// rotina só LÊ essa flag (temCustoDesconhecido) e marca fatura.custo_incerto
+// — o valor gerado é a soma do que É conhecido (nunca inventado), mas a
+// fatura fica sinalizada para o operador revisar ANTES de emitir (ver
+// operador/fatura.js::emitirFatura, que não bloqueia, só expõe a flag).
 //
 // ── PARCELA DE IMPLEMENTAÇÃO ────────────────────────────────────────────────
 // `implementacao` (FIL-76) não guarda quantas parcelas já foram cobradas — a
@@ -39,7 +59,33 @@
 // = implementacao.id), que é o próprio histórico de faturas já geradas. Cada
 // geração cobra UMA parcela a mais até completar numero_parcelas; a última
 // parcela absorve o resto da divisão (ver valorDaParcela) para a soma bater
-// exatamente o valor total, sem perder centavo de arredondamento.
+// exatamente o valor total, sem perder centavo de arredondamento. A contagem
+// EXCLUI parcela que só existe numa fatura `cancelada` (achado de review do
+// PR #26): cancelar a fatura tem que liberar aquela parcela para ser cobrada
+// de novo na próxima geração — senão o valor cancelado some do a receber pra
+// sempre. operador/implementacao.js::atualizarImplementacao trava
+// valor/forma/parcelas depois que a primeira parcela NÃO cancelada é
+// faturada, pelo mesmo motivo: mudar o total no meio do parcelamento
+// desalinha as parcelas que faltam do que já foi cobrado.
+//
+// ── ITENS ÚNICOS DO CONTRATO (achado de review do PR #26) ──────────────────
+// `contrato_item` com `recorrente = false` (implantação avulsa, desconto
+// pontual etc.) antes só entrava na fatura pelo caminho de item RECORRENTE —
+// ou seja, nunca entrava em fatura nenhuma. itensDoContrato agora seleciona
+// também os itens únicos que ainda não foram cobrados (NOT EXISTS em
+// fatura_item por origem_id) — cada um entra em EXATAMENTE uma fatura,
+// qualquer que seja a competência gerada primeiro.
+//
+// ── CICLO DO CONTRATO (achado de review do PR #26) ──────────────────────────
+// `ciclo` (mensal/trimestral/anual) antes era só um rótulo: a recorrência
+// cheia era somada TODO mês, cobrando um plano anual 12x. deveCobrarRecorrencia
+// só inclui o item de recorrência na competência em que o ciclo completa,
+// contando os meses desde `inicio_cobranca` — mensal sempre, trimestral a
+// cada 3, anual a cada 12. Excedente/item único/parcela de implementação
+// continuam podendo aparecer em QUALQUER competência (são cobrança
+// independente do ciclo do plano); se nenhum item se aplica na competência,
+// gerarFaturaDoTenant não cria fatura nenhuma (nada a cobrar não é fatura de
+// R$0, é ausência de fatura).
 //
 // ── ESCRITA "BEST-EFFORT" POR TENANT ────────────────────────────────────────
 // gerarFaturas roda TODOS os tenants na MESMA transação (comOperador). Um
@@ -58,6 +104,13 @@ const INTERVALO_MS = 24 * 60 * 60 * 1000; // 1x/dia
 let timer = null;
 
 function anoMesAtual() { return new Date().toISOString().slice(0, 7); } // 'YYYY-MM' (UTC)
+
+/** Competência anterior à de `data` — é o que o tick sempre fatura (ver
+ *  cabeçalho: nunca a competência corrente, ainda em andamento). */
+function mesAnteriorDe(data) {
+  const d = new Date(Date.UTC(data.getUTCFullYear(), data.getUTCMonth() - 1, 1));
+  return d.toISOString().slice(0, 7);
+}
 
 /** Roda `fn` isolado num SAVEPOINT: se falhar, ROLLBACK TO SAVEPOINT recupera
  *  só o que fn tentou fazer, sem abortar a transação inteira (mesmo padrão de
@@ -103,10 +156,21 @@ async function contratoNaCompetencia(conn, tenantId, competencia) {
   return r.rows[0] || null;
 }
 
-async function itensRecorrentesDoContrato(conn, contratoId) {
+/** Itens recorrentes (repetem TODA competência) + itens únicos ainda não
+ *  cobrados (recorrente=false, cobrados uma vez só — ver cabeçalho). */
+async function itensDoContrato(conn, contratoId) {
   const r = await conn.execute(
     `SELECT id, tipo, descricao, valor_unitario_centavos, quantidade
-       FROM contrato_item WHERE contrato_id = :contratoId AND recorrente = true`,
+       FROM contrato_item ci
+      WHERE ci.contrato_id = :contratoId
+        AND (
+          ci.recorrente = true
+          OR NOT EXISTS (
+            SELECT 1 FROM fatura_item fi
+              JOIN fatura f ON f.id = fi.fatura_id
+             WHERE fi.origem_tipo = 'contrato_item' AND fi.origem_id = ci.id AND f.status <> 'cancelada'
+          )
+        )`,
     { contratoId }
   );
   return r.rows;
@@ -114,23 +178,22 @@ async function itensRecorrentesDoContrato(conn, contratoId) {
 
 async function excedentesDoPeriodo(conn, tenantId, competencia) {
   const r = await conn.execute(
-    `SELECT tipo, SUM(quantidade) AS quantidade, SUM(custo_centavos) AS custo_centavos
+    `SELECT tipo, quantidade, custo_centavos, custo_incompleto
        FROM consumo_mensal
-      WHERE tenant_id = :tenantId AND ano_mes = :competencia
-      GROUP BY tipo`,
+      WHERE tenant_id = :tenantId AND ano_mes = :competencia`,
     { tenantId, competencia }
   );
   return r.rows;
 }
 
-/** true se algum evento bruto do período tem custo_centavos IS NULL (ver cabeçalho). */
-async function temCustoDesconhecido(conn, tenantId, competencia) {
-  const r = await conn.execute(
-    `SELECT COUNT(*) AS cnt FROM consumo_evento
-      WHERE tenant_id = :tenantId AND to_char(criado_em, 'YYYY-MM') = :competencia AND custo_centavos IS NULL`,
-    { tenantId, competencia }
-  );
-  return Number((r.rows[0] || {}).CNT || 0) > 0;
+/** true se ALGUM tipo do período veio com custo_incompleto=true (migração 019,
+ *  FIL-77: bool_or(custo_centavos IS NULL) calculado no fechamento mensal —
+ *  ver cabeçalho). Ler a flag já agregada em vez de reconsultar consumo_evento
+ *  aqui é o ponto de extensão que aquela migração deixou pronto: sobrevive à
+ *  retenção de 90 dias do bruto e já vem por tipo, não "algum evento do mês
+ *  inteiro". */
+function temCustoDesconhecido(excedentes) {
+  return excedentes.some((row) => row.CUSTO_INCOMPLETO === true);
 }
 
 async function implementacaoDoTenant(conn, tenantId) {
@@ -142,9 +205,14 @@ async function implementacaoDoTenant(conn, tenantId) {
   return r.rows[0] || null;
 }
 
+/** Parcelas já faturadas de UMA implementação — EXCLUI parcela cujo fatura_item
+ *  só existe numa fatura `cancelada` (ver cabeçalho): cancelar libera a parcela. */
 async function parcelasJaFaturadas(conn, implementacaoId) {
   const r = await conn.execute(
-    `SELECT COUNT(*) AS cnt FROM fatura_item WHERE origem_tipo = 'implementacao' AND origem_id = :id`,
+    `SELECT COUNT(*) AS cnt
+       FROM fatura_item fi
+       JOIN fatura f ON f.id = fi.fatura_id
+      WHERE fi.origem_tipo = 'implementacao' AND fi.origem_id = :id AND f.status <> 'cancelada'`,
     { id: implementacaoId }
   );
   return Number((r.rows[0] || {}).CNT || 0);
@@ -161,6 +229,26 @@ function valorDaParcela(valorTotalCentavos, numeroParcelas, indice) {
 
 function vencimentoDe(competencia, diaVencimento) {
   return `${competencia}-${String(diaVencimento).padStart(2, '0')}`;
+}
+
+const PERIODICIDADE_MESES = Object.freeze({ mensal: 1, trimestral: 3, anual: 12 });
+
+/** Quantos meses de calendário separam `inicioCobranca` (date) de `competencia`
+ *  ('YYYY-MM'). Negativo se a competência é anterior ao início. */
+function mesesEntre(inicioCobranca, competencia) {
+  const [anoInicio, mesInicio] = String(inicioCobranca).slice(0, 7).split('-').map(Number);
+  const [anoComp, mesComp] = competencia.split('-').map(Number);
+  return (anoComp - anoInicio) * 12 + (mesComp - mesInicio);
+}
+
+/** true quando a competência é uma virada do ciclo do contrato (mensal:
+ *  sempre; trimestral: a cada 3 meses desde inicio_cobranca; anual: a cada
+ *  12) — ver cabeçalho sobre o achado de review do PR #26. */
+function deveCobrarRecorrencia(inicioCobranca, competencia, ciclo) {
+  const periodo = PERIODICIDADE_MESES[ciclo];
+  if (!periodo) return false; // ciclo desconhecido — CICLOS já valida na criação do contrato
+  const meses = mesesEntre(inicioCobranca, competencia);
+  return meses >= 0 && meses % periodo === 0;
 }
 
 function itemRecorrencia(contrato) {
@@ -229,23 +317,31 @@ async function itemDeImplementacao(conn, implementacao) {
 
 /**
  * Gera (se ainda não existir) a fatura `prevista` de UM tenant para a
- * competência. Devolve null quando não há nada a fazer: sem contrato vigente
- * na competência (inclui "inicio_cobranca no futuro"), ou fatura já existe
- * (idempotência).
+ * competência. Devolve null quando não há nada a fazer: competência ainda não
+ * encerrada (ver cabeçalho), sem contrato vigente nela (inclui "inicio_cobranca
+ * no futuro"), fatura já existe (idempotência), ou nenhum item se aplica
+ * (ciclo não vira neste mês e não há excedente/parcela/item único pendente).
  */
 async function gerarFaturaDoTenant(conn, tenantId, competencia, operador = null) {
+  if (competencia >= anoMesAtual()) return null; // só competência já encerrada — ver cabeçalho
+
   const contrato = await contratoNaCompetencia(conn, tenantId, competencia);
   if (!contrato) return null;
 
-  const itens = [itemRecorrencia(contrato)];
-  itens.push(...itensDeContrato(await itensRecorrentesDoContrato(conn, Number(contrato.ID))));
+  const itens = [];
+  if (deveCobrarRecorrencia(contrato.INICIO_COBRANCA, competencia, contrato.CICLO)) {
+    itens.push(itemRecorrencia(contrato));
+  }
+  itens.push(...itensDeContrato(await itensDoContrato(conn, Number(contrato.ID))));
 
   const excedentes = await excedentesDoPeriodo(conn, tenantId, competencia);
   itens.push(...itensDeExcedente(excedentes, competencia));
-  const custoIncerto = await temCustoDesconhecido(conn, tenantId, competencia);
+  const custoIncerto = temCustoDesconhecido(excedentes);
 
   const itemImplementacao = await itemDeImplementacao(conn, await implementacaoDoTenant(conn, tenantId));
   if (itemImplementacao) itens.push(itemImplementacao);
+
+  if (!itens.length) return null; // nada a cobrar nesta competência — não gera fatura de R$0
 
   const valorTotalCentavos = itens.reduce((acc, it) => acc + it.valorTotalCentavos, 0);
   const vencimento = vencimentoDe(competencia, Number(contrato.DIA_VENCIMENTO));
@@ -333,13 +429,14 @@ async function marcarAtrasadas(conn, diasAtraso = DIAS_ATRASO_PADRAO) {
   return r.rows.length;
 }
 
-/** Um tick: gera a fatura do mês corrente (idempotente — cobre também o
- *  primeiro tick após o boot) e marca atrasadas. */
+/** Um tick: gera a fatura do mês ANTERIOR (o único já encerrado — ver
+ *  cabeçalho; idempotente, cobre também o primeiro tick após o boot) e marca
+ *  atrasadas. */
 async function tick() {
   try {
     await comOperador(async (conn) => {
       if (!(await tentarGlobal(conn, 'fatura'))) return; // outra instância já está rodando o tick
-      await gerarFaturas(conn, anoMesAtual());
+      await gerarFaturas(conn, mesAnteriorDe(new Date()));
       await marcarAtrasadas(conn);
     });
   } catch (err) {
@@ -360,5 +457,6 @@ function parar() {
 
 module.exports = {
   gerarFaturas, gerarFaturaDoTenant, marcarAtrasadas, tick, iniciar, parar,
-  anoMesAtual, valorDaParcela, vencimentoDe, DIAS_ATRASO_PADRAO,
+  anoMesAtual, mesAnteriorDe, valorDaParcela, vencimentoDe, deveCobrarRecorrencia,
+  DIAS_ATRASO_PADRAO,
 };
