@@ -254,8 +254,13 @@ html[data-theme="dark"] .text-purple-700 { color: rgb(var(--status-purple-text))
   .page-heading { @apply mb-4 flex flex-wrap items-end justify-between gap-4; }
   .page-title { @apply text-xl font-semibold tracking-[-0.02em] text-ink-950; }
   .page-description { @apply mt-1 text-[13px] text-stone-600 max-w-[68ch]; }
+  /* flex-1 min-h-0: dentro de um modal `max-h-[Xvh] flex flex-col`, um filho
+     flex sem min-h-0 nunca encolhe abaixo do tamanho do próprio conteúdo (o
+     "min-height: auto" default de flex item) — o corpo empurra o modal
+     inteiro para além do max-h, cortando o cabeçalho no topo em vez de rolar
+     internamente. Achado de review (FIL-82): modal da ficha financeira. */
   .modal-body {
-    @apply px-5 py-5 overflow-y-auto;
+    @apply flex-1 min-h-0 px-5 py-5 overflow-y-auto;
   }
   .modal-footer {
     @apply px-5 pt-4 flex gap-2.5 border-t border-paper-300 bg-white;

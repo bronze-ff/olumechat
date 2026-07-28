@@ -12,3 +12,10 @@ export function formatarData(data) {
   if (!ano || !mes || !dia) return iso;
   return `${dia}/${mes}/${ano}`;
 }
+
+// BRL digitado ("1.234,56") → centavos inteiros. null se não for um número válido.
+export function paraCentavos(texto) {
+  const normalizado = String(texto).trim().replace(/\./g, '').replace(',', '.');
+  const valor = Number.parseFloat(normalizado);
+  return Number.isFinite(valor) ? Math.round(valor * 100) : null;
+}

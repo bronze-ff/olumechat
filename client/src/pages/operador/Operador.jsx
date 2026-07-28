@@ -469,14 +469,82 @@ function ClientList({ lista, tenants, renomeando, setRenomeando, renomear, setCo
 const STATUS_ETAPA = {
   pendente: { label: 'Pendente', className: 'bg-stone-100 text-stone-700 border-stone-200', dot: 'bg-stone-400' },
   em_andamento: { label: 'Em andamento', className: 'bg-blue-50 text-blue-800 border-blue-200', dot: 'bg-blue-500' },
+  concluida: { label: 'Concluída', className: 'bg-emerald-50 text-emerald-800 border-emerald-200', dot: 'bg-emerald-500' },
   bloqueada: { label: 'Bloqueada', className: 'bg-red-50 text-red-800 border-red-200', dot: 'bg-red-500' },
 };
+
+// Atualiza a etapa em que o tenant está parado (FIL-82) — PATCH
+// /tenants/:id/onboarding/:etapa, sem precisar abrir sessão de suporte só
+// para marcar status/responsável/data/observação. Carrega as 7 etapas do
+// tenant pra pré-preencher com o que já existe na etapa atual.
+function OnboardingEtapaForm({ tenantId, etapa, onDone, onCancel }) {
+  const qc = useQueryClient();
+  const etapas = useQuery({
+    queryKey: ['operador', 'onboarding-etapas', tenantId],
+    queryFn: () => apiOperador.get(`/tenants/${tenantId}/onboarding`).then((r) => r.data),
+  });
+  const atual = (etapas.data || []).find((e) => e.etapa === etapa);
+
+  const [status, setStatus] = useState('em_andamento');
+  const [responsavel, setResponsavel] = useState('');
+  const [observacao, setObservacao] = useState('');
+  const [dataReferencia, setDataReferencia] = useState('');
+  const [erro, setErro] = useState('');
+
+  useEffect(() => {
+    if (!atual) return;
+    setStatus(atual.status);
+    setResponsavel(atual.responsavel || '');
+    setObservacao(atual.observacao || '');
+    setDataReferencia(atual.dataReferencia || '');
+  }, [atual]);
+
+  const salvar = useMutation({
+    mutationFn: () => apiOperador.patch(`/tenants/${tenantId}/onboarding/${etapa}`, {
+      status, responsavel: responsavel.trim() || undefined, observacao: observacao.trim() || undefined,
+      dataReferencia: dataReferencia || undefined,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['operador', 'onboarding'] });
+      qc.invalidateQueries({ queryKey: ['operador', 'onboarding-etapas', tenantId] });
+      onDone();
+    },
+    onError: (error) => setErro(error.response?.data?.error || 'Não foi possível atualizar a etapa.'),
+  });
+
+  return (
+    <div className="mt-2 p-3 rounded-lg border border-brand-200 bg-brand-50/40 space-y-2 w-full">
+      {etapas.isLoading ? <div className="py-2 flex justify-center"><Spinner size="sm" /></div> : (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <select className="input-field !min-h-9 !py-1.5 text-xs" value={status} onChange={(e) => setStatus(e.target.value)}>
+              {Object.entries(STATUS_ETAPA).map(([id, s]) => <option key={id} value={id}>{s.label}</option>)}
+            </select>
+            <input type="date" className="input-field !min-h-9 !py-1.5 text-xs" value={dataReferencia} onChange={(e) => setDataReferencia(e.target.value)} />
+          </div>
+          <input className="input-field !min-h-9 !py-1.5 text-xs" placeholder="Responsável" value={responsavel} onChange={(e) => setResponsavel(e.target.value)} />
+          <textarea className="input-field text-xs" rows={2} placeholder="Observação" value={observacao} onChange={(e) => setObservacao(e.target.value)} />
+          {erro && <p className="text-[11px] text-red-600">{erro}</p>}
+          <div className="flex gap-2">
+            <button onClick={onCancel} className="flex-1 min-h-8 rounded-lg border border-paper-400 bg-white text-stone-700 text-xs font-semibold">Cancelar</button>
+            <button onClick={() => salvar.mutate()} disabled={salvar.isPending} className="flex-1 min-h-8 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold disabled:opacity-40">
+              {salvar.isPending ? 'Salvando…' : 'Salvar etapa'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 // "Quem está travado em qual etapa" (FIL-81): cross-tenant de propósito — é a
 // visão de carteira, não o acompanhamento de UM cliente (esse é feito dentro
 // da sessão de suporte, na aba "Onboarding Meta" do painel do cliente).
+// FIL-82: a etapa em que o cliente está parado passa a ser editável aqui
+// mesmo — sem precisar abrir uma sessão de suporte só pra isso.
 function Onboarding({ progresso }) {
   const lista = progresso.data || [];
+  const [editando, setEditando] = useState(null);
   return (
     <section className="app-panel overflow-hidden">
       <header className="px-5 py-4 border-b border-paper-300">
@@ -487,7 +555,7 @@ function Onboarding({ progresso }) {
       {progresso.isError && <p className="p-5 text-sm text-red-700">Não foi possível carregar o onboarding.</p>}
       <div className="divide-y divide-paper-300">
         {lista.map((item) => (
-          <article key={item.tenantId} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <article key={item.tenantId} className="px-5 py-4 flex flex-col sm:flex-row sm:items-start gap-3">
             <div className="min-w-0 sm:w-56 shrink-0">
               <p className="font-semibold text-sm text-ink-950 truncate">{item.tenantNome}</p>
               <p className="mt-0.5 font-mono text-[11px] text-stone-500">{item.tenantSlug}</p>
@@ -513,8 +581,24 @@ function Onboarding({ progresso }) {
                   )}
                 </div>
               )}
+              {editando === item.tenantId && item.etapaAtual && (
+                <OnboardingEtapaForm
+                  tenantId={item.tenantId} etapa={item.etapaAtual.etapa}
+                  onDone={() => setEditando(null)} onCancel={() => setEditando(null)}
+                />
+              )}
             </div>
-            <div className="text-xs text-stone-500 tabular shrink-0">{item.etapasConcluidas}/{item.etapasTotal} etapas</div>
+            <div className="flex items-center gap-3 shrink-0">
+              <span className="text-xs text-stone-500 tabular">{item.etapasConcluidas}/{item.etapasTotal} etapas</span>
+              {!item.concluido && item.etapaAtual && editando !== item.tenantId && (
+                <button
+                  onClick={() => setEditando(item.tenantId)}
+                  className="min-h-8 px-3 rounded-lg border border-paper-400 bg-white hover:border-brand-300 hover:text-brand-800 text-stone-700 text-xs font-semibold"
+                >
+                  Atualizar etapa
+                </button>
+              )}
+            </div>
           </article>
         ))}
       </div>

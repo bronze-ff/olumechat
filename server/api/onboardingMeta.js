@@ -19,6 +19,7 @@
 const express = require('express');
 const db = require('../db/pool');
 const { ETAPAS, CHAVES, STATUS, ULTIMA_ETAPA } = require('../onboardingMeta/etapas');
+const { paraDataTexto } = require('../utils/data');
 
 const router = express.Router();
 
@@ -29,24 +30,6 @@ function exigirSuporteOperador(req, res, next) {
   });
 }
 router.use(exigirSuporteOperador);
-
-/**
- * DATE do Postgres chega como `Date` interpretado em hora LOCAL do processo
- * (pg-types faz `new Date(ano, mês, dia)`, não UTC — ver postgres-date). Ler
- * os componentes locais (getFullYear/getMonth/getDate) evita a armadilha de
- * `toISOString()` (que converte pra UTC e pode empurrar a data em um fuso
- * positivo) — mesma classe de bug do achado do client sobre data sem fuso.
- */
-function paraDataTexto(v) {
-  if (!v) return null;
-  if (v instanceof Date) {
-    const y = v.getFullYear();
-    const m = String(v.getMonth() + 1).padStart(2, '0');
-    const d = String(v.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  return String(v).slice(0, 10);
-}
 
 /** Mescla as 7 etapas fixas com o que já existe no banco (etapa sem linha = 'pendente'). */
 function mesclar(linhas) {

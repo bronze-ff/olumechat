@@ -13,6 +13,7 @@ const Admin = lazy(() => import('./pages/admin/Admin'));
 const LoginOperador = lazy(() => import('./pages/operador/LoginOperador'));
 const Operador = lazy(() => import('./pages/operador/Operador'));
 const Financeiro = lazy(() => import('./pages/operador/Financeiro'));
+const Contratos = lazy(() => import('./pages/operador/Contratos'));
 
 function RouteFallback() {
   return (
@@ -47,6 +48,9 @@ export default function App() {
                 <Route path="/operador/financeiro" element={<Financeiro secao="financeiro" />} />
                 <Route path="/operador/financeiro/cobranca" element={<Financeiro secao="financeiro-cobranca" />} />
                 <Route path="/operador/financeiro/alertas" element={<Financeiro secao="financeiro-alertas" />} />
+                {/* Contratos (FIL-82) — carteira inteira, cross-tenant, mesmo
+                    ContratoModal usado pela ficha financeira do cliente. */}
+                <Route path="/operador/contratos" element={<Contratos />} />
                 <Route path="/operador/auditoria" element={<Operador secao="auditoria" />} />
               </Route>
               <Route element={<ProtectedRoute />}>

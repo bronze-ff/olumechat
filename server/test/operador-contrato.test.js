@@ -337,3 +337,54 @@ test('listarItens: 404 se o contrato não pertence ao tenant informado', async (
     (err) => err.deOperador && err.status === 404
   );
 });
+
+// ===========================================================================
+// listarContratosVigentes (FIL-82) — cross-tenant, "Contratos" no menu.
+// ===========================================================================
+function conexaoVigentes({ linhas = [] } = {}) {
+  return {
+    async execute(sql) {
+      if (/FROM tenant t\s+LEFT JOIN contrato c/i.test(sql)) return { rows: linhas };
+      return { rows: [] };
+    },
+    commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+}
+
+test('listarContratosVigentes: cliente sem contrato ativo aparece com campos de contrato em null', async () => {
+  db.getConnection = async () => conexaoVigentes({
+    linhas: [{
+      TENANT_ID: 1, TENANT_NOME: 'Sem Contrato', TENANT_SLUG: 'sem-contrato', TENANT_STATUS: 'ativo',
+      CONTRATO_ID: null, PLANO_NOME: null, VALOR_RECORRENTE_CENTAVOS: null, CICLO: null,
+      DIA_VENCIMENTO: null, INICIO_COBRANCA: null,
+    }],
+  });
+  const r = await contrato.listarContratosVigentes();
+  assert.equal(r.length, 1);
+  assert.equal(r[0].tenantNome, 'Sem Contrato');
+  assert.equal(r[0].contratoId, null);
+  assert.equal(r[0].planoNome, null);
+  assert.equal(r[0].valorRecorrenteCentavos, null);
+});
+
+test('listarContratosVigentes: traduz os campos do contrato ativo (centavos como inteiro, sem deslocar a data)', async () => {
+  db.getConnection = async () => conexaoVigentes({
+    linhas: [{
+      TENANT_ID: 2, TENANT_NOME: 'Com Contrato', TENANT_SLUG: 'com-contrato', TENANT_STATUS: 'suspenso',
+      CONTRATO_ID: 55, PLANO_NOME: 'Plano Pro', VALOR_RECORRENTE_CENTAVOS: '150000', CICLO: 'mensal',
+      DIA_VENCIMENTO: 10, INICIO_COBRANCA: new Date(2026, 0, 1), // Date local (mesma armadilha do pg-types)
+      REAJUSTE_INDICE: 'IPCA', REAJUSTE_MES: 1, OBSERVACOES: 'contrato piloto',
+    }],
+  });
+  const r = await contrato.listarContratosVigentes();
+  assert.equal(r[0].contratoId, 55);
+  assert.ok(Number.isInteger(r[0].valorRecorrenteCentavos));
+  assert.equal(r[0].valorRecorrenteCentavos, 150000);
+  assert.equal(r[0].ciclo, 'mensal');
+  assert.equal(r[0].diaVencimento, 10);
+  assert.equal(r[0].inicioCobranca, '2026-01-01', 'data local não pode deslocar pra 2025-12-31 (UTC)');
+  assert.equal(r[0].reajusteIndice, 'IPCA');
+  assert.equal(r[0].reajusteMes, 1);
+  assert.equal(r[0].observacoes, 'contrato piloto');
+  assert.equal(r[0].tenantStatus, 'suspenso');
+});

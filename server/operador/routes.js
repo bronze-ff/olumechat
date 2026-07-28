@@ -546,6 +546,17 @@ router.put(
 // transação — é assim que "trocar de plano" funciona (nunca sobrescreve, ver
 // operador/contrato.js). Nenhuma rota de tenant expõe isto (ver docs/SEGURANCA.md).
 // ---------------------------------------------------------------------------
+// GET /api/operador/contratos — contrato vigente (ou ausência) de TODA a
+// carteira, para a seção "Contratos" do menu (grupo Financeiro). Cliente sem
+// contrato ativo ainda aparece na lista, com os campos de contrato em null.
+router.get('/contratos', async (req, res, next) => {
+  try {
+    res.json(await contrato.listarContratosVigentes());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
 router.get('/tenants/:id/contrato', async (req, res, next) => {
   const id = idDaRota(req, res);
   if (!id) return;
@@ -719,6 +730,33 @@ router.get('/inadimplencia', async (req, res, next) => {
 router.get('/onboarding', async (req, res, next) => {
   try {
     res.json(await onboarding.listarProgresso());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+// GET  /api/operador/tenants/:id/onboarding — as 7 etapas de UM cliente.
+// PATCH /api/operador/tenants/:id/onboarding/:etapa { status, responsavel?,
+//   observacao?, dataReferencia? } — atualiza sem precisar abrir sessão de
+// suporte (equivalente cross-tenant do PUT /api/onboarding-meta/:etapa).
+router.get('/tenants/:id/onboarding', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await onboarding.listarEtapasDoTenant(id));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.patch('/tenants/:id/onboarding/:etapa', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await onboarding.atualizarEtapa({
+      operador: req.operador, tenantId: id, etapa: req.params.etapa, dados: req.body || {},
+      ip: auditoria.ipDaRequisicao(req),
+    }));
   } catch (err) {
     tratar(err, res, next);
   }
