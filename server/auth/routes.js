@@ -190,10 +190,20 @@ router.post(
       } catch (e) {
         console.error('[auth] falha ao carregar perfil RBAC:', e.message);
       }
+      // IA é add-on vendido à parte — ver GET /auth/perfil para o mesmo campo.
+      let iaHabilitada = false;
+      try {
+        iaHabilitada = await db.comTenant(tenantId, async (conn) => {
+          const r = await conn.execute(`SELECT ia_habilitada FROM tenant WHERE id = :id`, { id: tenantId });
+          return (r.rows[0] || {}).IA_HABILITADA === 'S';
+        });
+      } catch (e) {
+        console.error('[auth] falha ao checar ia_habilitada:', e.message);
+      }
 
       res.json({
         token, usuarioId, matricula: usuarioId, nome: u.NOME, email: u.EMAIL,
-        empresa: slug, papel, deptoIds, pausado, podeAtivo,
+        empresa: slug, papel, deptoIds, pausado, podeAtivo, iaHabilitada,
       });
     } catch (err) {
       next(err);
@@ -279,15 +289,28 @@ router.get('/perfil', auth, async (req, res, next) => {
     // perfil fixo que auth/rbac.js::anexarPerfil já dá às rotas REST.
     if (req.user.suporte === true) {
       const s = rbac.PERFIL_SUPORTE;
+      const iaHabilitada = await db.comTenant(req.user.tenantId, async (conn) => {
+        const r = await conn.execute(
+          `SELECT ia_habilitada FROM tenant WHERE id = :id`,
+          { id: req.user.tenantId }
+        );
+        return (r.rows[0] || {}).IA_HABILITADA === 'S';
+      });
       return res.json({
         papel: s.papel, deptoIds: s.deptoIds, atendenteId: s.atendenteId,
-        pausado: s.pausado, podeAtivo: s.podeAtivo, suporte: true,
+        pausado: s.pausado, podeAtivo: s.podeAtivo, suporte: true, iaHabilitada,
       });
     }
     const p = await rbac.carregarPerfil(req.user.tenantId, req.user.matricula, req.user.nome);
+    // IA é add-on vendido à parte (só o operador liga/desliga — ver
+    // api/iaConfig.js) — o front usa isto pra saber se mostra o recurso.
+    const iaHabilitada = await db.comTenant(req.user.tenantId, async (conn) => {
+      const r = await conn.execute(`SELECT ia_habilitada FROM tenant WHERE id = :id`, { id: req.user.tenantId });
+      return (r.rows[0] || {}).IA_HABILITADA === 'S';
+    });
     res.json({
       papel: p.papel, deptoIds: p.deptoIds, atendenteId: p.atendenteId,
-      pausado: !!p.pausado, podeAtivo: !!p.podeAtivo,
+      pausado: !!p.pausado, podeAtivo: !!p.podeAtivo, iaHabilitada,
     });
   } catch (err) {
     next(err);

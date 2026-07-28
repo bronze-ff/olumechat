@@ -6,8 +6,8 @@
 //    de rotas é lida do próprio router, então rota nova entra no teste
 //    sozinha);
 //  • JWT de operador NÃO é aceito nas rotas de tenant sem um tenant
-//    explicitamente selecionado — e a seleção explícita é a sessão de suporte,
-//    que é somente-leitura e não volta a valer no painel do operador;
+//    explicitamente selecionado — e a seleção explícita é a sessão de
+//    implantação, administrativa, auditada e limitada a um tenant;
 //  • login de operador com 401 uniforme, sem vazar senha, com rate-limit;
 //  • operador desativado no banco perde o acesso na hora, sem esperar o JWT
 //    expirar.
@@ -18,6 +18,10 @@ process.env.WEBHOOK_VERIFY_TOKEN = 'verify123';
 process.env.WA_TOKEN = 'token_abc';
 process.env.WA_PHONE_NUMBER_ID = '1112223334';
 process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
+// Estes testes exercitam o singleton em memória. Uma DATABASE_URL_DIRECT do
+// ambiente de desenvolvimento faria publish() sair pelo Postgres real e
+// tornaria o resultado dependente da conexão externa e do tempo de LISTEN.
+process.env.DATABASE_URL_DIRECT = '';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -50,11 +54,22 @@ function instalarBanco() {
     tenants: [{ ID: TENANT_ID, NOME: 'Acme', SLUG: 'acme', STATUS: 'ativo' }],
     auditoriaOperador: [],
     auditoriaTenant: [],
+    blacklist: new Set(),
   };
   const conn = {
     async execute(sql, binds = {}) {
       const s = String(sql).replace(/\s+/g, ' ').trim();
       if (/set_config/.test(s)) return { rows: [] };
+      if (/^DELETE FROM token_blacklist WHERE expira_em <= now\(\)/i.test(s)) {
+        return { rowsAffected: 0, rows: [] };
+      }
+      if (/^SELECT 1 FROM token_blacklist WHERE jti = :jti/i.test(s)) {
+        return { rows: estado.blacklist.has(String(binds.jti)) ? [{ 1: 1 }] : [] };
+      }
+      if (/^INSERT INTO token_blacklist/i.test(s)) {
+        estado.blacklist.add(String(binds.jti));
+        return { rowsAffected: 1, rows: [] };
+      }
       if (/^SELECT id, email, nome, senha_hash, ativo FROM operador WHERE email/i.test(s)) {
         const o = estado.operadores.find((x) => x.EMAIL === binds.email);
         return { rows: o ? [{ ...o }] : [] };
@@ -67,6 +82,9 @@ function instalarBanco() {
       if (/^SELECT id, nome, slug, status FROM tenant WHERE id = :id/i.test(s)) {
         const t = estado.tenants.find((x) => x.ID === Number(binds.id));
         return { rows: t ? [{ ...t }] : [] };
+      }
+      if (/^SELECT ia_habilitada FROM tenant WHERE id = :id/i.test(s)) {
+        return { rows: [{ IA_HABILITADA: 'S' }] };
       }
       if (/^INSERT INTO operador_auditoria/i.test(s)) {
         estado.auditoriaOperador.push({ ACAO: binds.acao, TENANT_ID: binds.tenantId });
@@ -106,9 +124,8 @@ function startApp() {
     res.json({ tenantId: req.tenantId, papel: req.perfil.papel, atendenteId: req.perfil.atendenteId }));
   app.post('/api/atendentes/1', authMiddleware, rbac.anexarPerfil, rbac.exigirPapel('ADMIN'), (req, res) =>
     res.json({ ok: true }));
-  // Rotas de mutação SEM guarda de papel — existem de verdade no repo
-  // (api/atalhos.js, api/presenca.js). São elas que provam que o
-  // somente-leitura do suporte não pode depender de cada rota lembrar.
+  // Rotas de mutação SEM guarda de papel — existem de verdade no repo.
+  // A auditoria central precisa registrar até estas operações.
   const executou = (req, res) => { mutacoesExecutadas.push(`${req.method} ${req.originalUrl}`); res.json({ ok: true }); };
   app.post('/api/atalhos', authMiddleware, rbac.anexarPerfil, executou);
   app.delete('/api/atalhos/1', authMiddleware, rbac.anexarPerfil, executou);
@@ -261,11 +278,11 @@ test('nem com um tenantId enfiado no token de operador (o segredo é outro)', as
 // ===========================================================================
 // Acesso de suporte: a ÚNICA forma de o operador entrar num tenant.
 // ===========================================================================
-test('acesso de suporte devolve sessão do tenant escolhido, somente-leitura e auditada', async () => {
+test('acesso de suporte devolve ADMIN temporário do tenant escolhido e auditado', async () => {
   const r = await req(ctx.port, 'POST', `/api/operador/tenants/${TENANT_ID}/acesso-suporte`,
     { tok: tokenOperador(), body: { motivo: 'chamado #9' } });
   assert.equal(r.status, 200, r.texto);
-  assert.equal(r.body.papel, 'AUDITOR');
+  assert.equal(r.body.papel, 'ADMIN');
 
   const p = jwt.decode(r.body.token);
   assert.equal(p.tenantId, TENANT_ID, 'a sessão de suporte é escopada a UM tenant');
@@ -278,16 +295,20 @@ test('acesso de suporte devolve sessão do tenant escolhido, somente-leitura e a
   assert.equal(estado.auditoriaOperador.filter((a) => a.ACAO === 'acesso_suporte').length, 1);
   assert.equal(estado.auditoriaTenant.filter((a) => a.ACAO === 'acesso_suporte').length, 1);
 
-  // Ela ENTRA no painel do cliente, com perfil de leitura...
+  // Ela ENTRA no painel do cliente com administração completa...
   const leitura = await req(ctx.port, 'GET', '/api/conversas', { tok: r.body.token });
   assert.equal(leitura.status, 200);
   assert.equal(leitura.body.tenantId, TENANT_ID);
-  assert.equal(leitura.body.papel, 'AUDITOR');
+  assert.equal(leitura.body.papel, 'ADMIN');
   assert.equal(leitura.body.atendenteId, null, 'o operador não pode virar autor de nada no tenant');
 
-  // ...e é barrada nas rotas de escrita do tenant.
+  // ...e pode executar uma rota que exige ADMIN.
   const escrita = await req(ctx.port, 'POST', '/api/atendentes/1', { tok: r.body.token, body: { papel: 'ADMIN' } });
-  assert.equal(escrita.status, 403);
+  assert.equal(escrita.status, 200);
+  assert.ok(
+    estado.auditoriaTenant.some((item) => item.ACAO === 'suporte_mutacao'),
+    'a alteração administrativa do operador precisa aparecer na auditoria do cliente'
+  );
 
   // ...e NÃO volta a valer no painel do operador.
   const volta = await req(ctx.port, 'GET', '/api/operador/tenants', { tok: r.body.token });
@@ -295,9 +316,9 @@ test('acesso de suporte devolve sessão do tenant escolhido, somente-leitura e a
 });
 
 // ---------------------------------------------------------------------------
-// Somente-leitura do suporte: imposto CENTRALMENTE, não rota a rota.
+// Administração de suporte: escrita liberada e auditada CENTRALMENTE.
 // ---------------------------------------------------------------------------
-test('suporte é bloqueado em mutação de rota SEM guarda de papel (o deny é central)', async () => {
+test('suporte pode mutar rotas sem guarda de papel e cada tentativa é auditada', async () => {
   const tok = await tokenDeSuporte();
   // Estas três não têm exigirPapel nem o guarda de AUDITOR no repo real —
   // se o bloqueio dependesse da rota, passariam.
@@ -308,9 +329,17 @@ test('suporte é bloqueado em mutação de rota SEM guarda de papel (o deny é c
   ];
   for (const [metodo, rota, body] of casos) {
     const r = await req(ctx.port, metodo, rota, { tok, body });
-    assert.equal(r.status, 403, `${metodo} ${rota} devolveu ${r.status} para uma sessão somente-leitura`);
+    assert.equal(r.status, 200, `${metodo} ${rota} devolveu ${r.status} para uma sessão administrativa`);
   }
-  assert.deepEqual(mutacoesExecutadas, [], 'a mutação chegou a EXECUTAR com sessão de suporte');
+  assert.deepEqual(mutacoesExecutadas, [
+    'POST /api/atalhos',
+    'DELETE /api/atalhos/1',
+    'PUT /api/presenca',
+  ]);
+  assert.equal(
+    estado.auditoriaTenant.filter((item) => item.ACAO === 'suporte_mutacao').length,
+    3
+  );
 });
 
 test('o mesmo bloqueio não atinge o usuário legítimo do tenant', async () => {
@@ -319,36 +348,35 @@ test('o mesmo bloqueio não atinge o usuário legítimo do tenant', async () => 
   assert.equal(mutacoesExecutadas.length, 1);
 });
 
-test('suporte lê normalmente e mantém o plumbing da própria sessão (logout e ticket de SSE)', async () => {
+test('suporte lê normalmente e mantém logout e ticket de SSE', async () => {
   const tok = await tokenDeSuporte();
-  assert.equal((await req(ctx.port, 'GET', '/api/atalhos', { tok })).status, 200, 'suporte existe para LER');
+  assert.equal((await req(ctx.port, 'GET', '/api/atalhos', { tok })).status, 200);
   assert.equal((await req(ctx.port, 'POST', '/api/stream/ticket', { tok })).status, 200, 'sem ticket não há SSE para diagnosticar');
   assert.equal((await req(ctx.port, 'POST', '/api/auth/logout', { tok })).status, 200, 'encerrar a própria sessão tem que continuar possível');
 });
 
-test('a allowlist do suporte não abre por prefixo, query string ou barra final', async () => {
-  const tok = await tokenDeSuporte();
-  for (const rota of ['/api/atalhos?url=/api/auth/logout', '/api/atalhos/../atalhos']) {
-    const r = await req(ctx.port, 'POST', rota, { tok, body: {} });
-    assert.ok(r.status === 403 || r.status === 404, `${rota} devolveu ${r.status}`);
-  }
-  assert.deepEqual(mutacoesExecutadas, []);
+test('leitura e ticket SSE não poluem a auditoria de mutações', () => {
+  assert.equal(authMiddleware.mutacaoDeSuporte({ method: 'GET', originalUrl: '/api/conversas' }), false);
+  assert.equal(authMiddleware.mutacaoDeSuporte({ method: 'HEAD', originalUrl: '/api/conversas' }), false);
+  assert.equal(authMiddleware.mutacaoDeSuporte({ method: 'POST', originalUrl: '/api/stream/ticket' }), false);
+  assert.equal(authMiddleware.mutacaoDeSuporte({ method: 'POST', originalUrl: '/api/fluxos' }), true);
 });
 
 // ---------------------------------------------------------------------------
 // Perfil: o reload da página do cliente durante o suporte não pode dar 500.
 // ---------------------------------------------------------------------------
-test('GET /api/auth/perfil com token de suporte responde AUDITOR sem criar atendente', async () => {
+test('GET /api/auth/perfil com token de suporte responde ADMIN sem criar atendente', async () => {
   const tok = await tokenDeSuporte();
   const r = await req(ctx.port, 'GET', '/api/auth/perfil', { tok });
   // 500 aqui = o endpoint mandou a sessão de suporte para carregarPerfil, que
   // tentaria criar um `atendente` com matrícula indefinida (o banco de teste
   // estoura em SQL não previsto justamente para denunciar isso).
   assert.equal(r.status, 200, r.texto);
-  assert.equal(r.body.papel, 'AUDITOR');
+  assert.equal(r.body.papel, 'ADMIN');
   assert.equal(r.body.atendenteId, null);
   assert.equal(r.body.suporte, true, 'o front precisa saber que está em sessão de suporte para se marcar');
-  assert.equal(r.body.podeAtivo, false);
+  assert.equal(r.body.podeAtivo, true);
+  assert.equal(r.body.iaHabilitada, true);
 });
 
 test('no SSE, a sessão de suporte não vira atendente nem entra na presença do cliente', async () => {

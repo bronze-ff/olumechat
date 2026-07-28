@@ -25,8 +25,11 @@ const crypto = require('crypto');
 const { comOperador, entrarNoTenant, sairDoTenant, idValido } = require('./db');
 const auditoria = require('./auditoria');
 const tokenSenha = require('../auth/tokenSenha');
+const { criptografar } = require('../ia/crypto');
+const iaConfigStore = require('../ia/iaConfigStore');
 
 const STATUS = Object.freeze(['ativo', 'suspenso', 'encerrado']);
+const IA_PROVEDORES = Object.freeze(['anthropic', 'openai', 'openrouter', 'ollama', 'vllm', 'groq']);
 
 /** Erro de negócio com status HTTP — o router traduz sem inspecionar mensagem. */
 class ErroOperador extends Error {
@@ -66,7 +69,7 @@ function validarSlug(slug) {
 async function listarComUso() {
   return comOperador(async (conn) => {
     const r = await conn.execute(
-      `SELECT t.id, t.nome, t.slug, t.status, t.criado_em,
+      `SELECT t.id, t.nome, t.slug, t.status, t.criado_em, t.ia_habilitada,
               (SELECT count(*) FROM conversa c
                 WHERE c.tenant_id = t.id
                   AND c.criado_em >= date_trunc('month', now()))        AS conversas_mes,
@@ -256,8 +259,8 @@ async function alterarStatus({ operador, tenantId, status, motivo, ip }) {
  *
  * Funciona mesmo com o tenant suspenso, e isso é deliberado: a sessão de
  * suporte NÃO é um login do cliente (é a credencial do operador trocada por um
- * acesso escopado, somente-leitura e auditado). Bloqueá-la deixaria o operador
- * sem como diagnosticar justamente o cliente que teve problema.
+ * acesso administrativo escopado, temporário e auditado). Bloqueá-la deixaria
+ * o operador sem como implantar ou corrigir justamente o cliente que teve problema.
  */
 async function abrirAcessoSuporte({ operador, tenantId, motivo, expiraEm, ip }) {
   return comOperador(async (conn) => {
@@ -297,7 +300,98 @@ async function listarAuditoria(filtros = {}) {
   return comOperador(async (conn) => auditoria.listar(conn, filtros));
 }
 
+/**
+ * Liga/desliga o add-on de IA no PLANO do tenant. É o único jeito de habilitar
+ * — o admin do cliente não tem esse botão (ver api/iaConfig.js, só leitura).
+ * Desligar NÃO apaga o provedor configurado (ia_config): só o bot/recursos
+ * param de rodar (runtime.js e a rota de sugestão de resposta checam o flag).
+ */
+async function definirIa({ operador, tenantId, habilitada, ip }) {
+  return comOperador(async (conn) => {
+    const antes = await carregarTenant(conn, tenantId);
+    const valor = habilitada ? 'S' : 'N';
+    await conn.execute(`UPDATE tenant SET ia_habilitada = :v WHERE id = :id`, { v: valor, id: tenantId });
+    await auditoria.registrar(conn, {
+      operador, tenantId, acao: habilitada ? 'ia_habilitada' : 'ia_desabilitada',
+      entidade: 'tenant', entidadeId: tenantId, detalhe: { slug: antes.SLUG }, ip,
+    });
+    return { id: tenantId, nome: antes.NOME, slug: antes.SLUG, iaHabilitada: habilitada };
+  });
+}
+
+/** Status do provedor de IA de um tenant (sem a chave) — pro operador ver o
+    que já está configurado antes de trocar. */
+async function carregarIaConfig(tenantId) {
+  return comOperador(async (conn) => {
+    await carregarTenant(conn, tenantId); // 404 se o tenant não existe
+    const r = await conn.execute(
+      `SELECT provider, modelo, base_url, ativo, atualizado_em FROM ia_config WHERE tenant_id = :id AND id = 1`,
+      { id: tenantId });
+    if (!r.rows.length) return { provider: null, modelo: null, baseUrl: null, ativo: false, atualizadoEm: null };
+    const row = r.rows[0];
+    return { provider: row.PROVIDER, modelo: row.MODELO, baseUrl: row.BASE_URL, ativo: row.ATIVO === 'S', atualizadoEm: row.ATUALIZADO_EM };
+  });
+}
+
+/**
+ * Grava/atualiza provider+modelo+chave de um tenant. SÓ o operador chama isto
+ * (rota /api/operador/tenants/:id/ia-config) — mesma validação e mesma
+ * cifragem que o antigo PUT /api/ia-config do painel do cliente usava, só que
+ * `entrarNoTenant` troca o contexto pro DEFAULT tenant_atual() de ia_config
+ * apontar certo; comOperador já roda com BYPASSRLS (ver operador/db.js), então
+ * a escrita em si não depende de policy.
+ */
+async function salvarIaConfig({ operador, tenantId, provider, modelo, baseUrl, apiKey, ip }) {
+  if (!IA_PROVEDORES.includes(provider)) throw new ErroOperador(400, 'Provedor inválido.');
+  const modeloTrim = String(modelo || '').trim();
+  if (!modeloTrim) throw new ErroOperador(400, 'Modelo obrigatório.');
+  if (/^https?:\/\//i.test(modeloTrim)) {
+    throw new ErroOperador(400, 'Modelo não pode ser uma URL — use só o ID (ex.: gpt-4o-mini). A URL vai no campo Base URL.');
+  }
+  let baseNorm = null;
+  if (provider !== 'anthropic') {
+    const raw = String(baseUrl || '').trim();
+    if (!raw) throw new ErroOperador(400, 'Base URL obrigatória para provedores compatíveis.');
+    let u;
+    try { u = new URL(raw); } catch { throw new ErroOperador(400, 'Base URL inválida — use algo como https://openrouter.ai/api/v1'); }
+    if (!/^https?:$/.test(u.protocol)) throw new ErroOperador(400, 'Base URL deve ser http(s)://…');
+    baseNorm = raw.replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
+  }
+  const temChaveNova = apiKey && String(apiKey).trim();
+
+  return comOperador(async (conn) => {
+    const antes = await carregarTenant(conn, tenantId);
+    await entrarNoTenant(conn, tenantId);
+
+    let cifrada;
+    if (temChaveNova) {
+      cifrada = criptografar(String(apiKey), tenantId);
+    } else {
+      const ex = await conn.execute(`SELECT api_key_criptografada FROM ia_config WHERE tenant_id = :id AND id = 1`, { id: tenantId });
+      cifrada = ex.rows.length ? ex.rows[0].API_KEY_CRIPTOGRAFADA : null;
+      if (!cifrada) throw new ErroOperador(400, 'API key obrigatória na primeira configuração deste cliente.');
+    }
+    await conn.execute(
+      `INSERT INTO ia_config (tenant_id, id, provider, modelo, base_url, api_key_criptografada, ativo, atualizado_em)
+       VALUES (:tenantId, 1, :p, :m, :b, :k, 'S', now())
+       ON CONFLICT (tenant_id, id) DO UPDATE SET
+         provider = EXCLUDED.provider, modelo = EXCLUDED.modelo, base_url = EXCLUDED.base_url,
+         api_key_criptografada = EXCLUDED.api_key_criptografada, ativo = 'S',
+         atualizado_por = NULL, atualizado_em = now()`,
+      { tenantId, p: provider, m: modeloTrim, b: baseNorm, k: cifrada });
+    await sairDoTenant(conn);
+
+    await auditoria.registrar(conn, {
+      operador, tenantId, acao: 'ia_config_alterada_pelo_operador', entidade: 'ia_config', entidadeId: 1,
+      detalhe: { slug: antes.SLUG, provider, modelo: modeloTrim, baseUrl: baseNorm, chaveTrocada: !!temChaveNova }, ip,
+    });
+    iaConfigStore.invalidar(tenantId);
+    return { provider, modelo: modeloTrim, baseUrl: baseNorm, ativo: true };
+  });
+}
+
 module.exports = {
   listarComUso, provisionar, renomear, alterarStatus, abrirAcessoSuporte,
-  listarAuditoria, validarSlug, normalizarSlug, ErroOperador, STATUS, idValido,
+  listarAuditoria, definirIa, carregarIaConfig, salvarIaConfig,
+  validarSlug, normalizarSlug, ErroOperador, STATUS, idValido,
 };

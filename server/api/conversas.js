@@ -14,6 +14,8 @@ const { publish } = require('../realtime/hub');
 const { normalizar: normalizePhone, acharContato } = require('../utils/telefone');
 const { acharClientePorTelefone } = require('../utils/clienteLookup');
 const { exigirPapel } = require('../auth/rbac');
+const iaConfigStore = require('../ia/iaConfigStore');
+const sugestaoResposta = require('../ia/sugestaoResposta');
 
 const router = express.Router();
 
@@ -56,6 +58,16 @@ function naoAuditor(req, res, next) {
     return res.status(403).json({ error: 'Perfil somente-leitura (AUDITOR) não pode executar esta ação.' });
   }
   next();
+}
+
+/**
+ * A Cloud API entrega todas as mensagens como o mesmo número comercial; ela
+ * não tem o rótulo nativo de agente visto em alguns produtos. Prefixamos a
+ * mensagem humana para o cliente sempre saber quem está falando.
+ */
+function identificarAtendente(nome, texto) {
+  const seguro = String(nome || 'Equipe').replace(/[*_~`\r\n]/g, '').trim().slice(0, 80) || 'Equipe';
+  return `*${seguro}:*\n${texto}`;
 }
 
 /**
@@ -421,7 +433,7 @@ router.get('/', async (req, res, next) => {
 // em FETCH FIRST 100, então o Monitor, que contava em cima dela, subcontava (mostrava
 // 100 com 118 reais). Aqui o número é exato. Gestor-only, visão global (como o
 // /presenca, que já devolve a equipe inteira sem escopo).
-router.get('/contagens', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
+router.get('/contagens', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req, res, next) => {
   try {
     const { porDep, porAtd } = await db.comTenant(req.tenantId, async (conn) => {
       const dep = await conn.execute(
@@ -480,6 +492,43 @@ router.get('/:id/mensagens', async (req, res, next) => {
   }
 });
 
+// POST /api/conversas/:id/sugestao-resposta — rascunho de resposta pro
+// atendente revisar (NÃO envia nada ao cliente). Barrado pra AUDITOR/suporte
+// (gera custo no provedor de IA e não é uma ação de diagnóstico) e exige que o
+// recurso esteja ligado em Ajustes (config.ia_sugestao_ativa) — desligado por
+// padrão até o admin optar e configurar um provedor.
+router.post('/:id/sugestao-resposta', naoAuditor, async (req, res, next) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
+  try {
+    const sugestao = await db.comTenant(req.tenantId, async (conn) => {
+      if (!(await conversaNoEscopo(conn, id, req.perfil))) {
+        throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
+      }
+      // Gate de plano (add-on vendido à parte, só o operador liga — ver
+      // operador/tenants.js::definirIa) + gate de recurso (o admin do
+      // tenant liga/desliga em Administração → Agente de IA).
+      const tenantRow = await conn.execute(`SELECT ia_habilitada FROM tenant WHERE id = :tenantId`, { tenantId: req.tenantId });
+      if ((tenantRow.rows[0] || {}).IA_HABILITADA !== 'S') {
+        throw new RespostaHttp(400, { error: 'Recurso de IA não incluído no plano desta empresa.' });
+      }
+      const cfgRow = await conn.execute(`SELECT valor FROM config WHERE chave = 'ia_sugestao_ativa'`);
+      if ((cfgRow.rows[0] || {}).VALOR !== 'S') {
+        throw new RespostaHttp(400, { error: 'Sugestão de resposta por IA está desativada. Ative em Administração → Agente de IA.' });
+      }
+      const config = await iaConfigStore.carregar(conn, req.tenantId);
+      if (!config) {
+        throw new RespostaHttp(400, { error: 'Nenhum provedor de IA configurado. Configure em Administração → Agente de IA.' });
+      }
+      return sugestaoResposta.gerar(conn, config, id);
+    });
+    res.json({ sugestao });
+  } catch (err) {
+    if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
+    res.status(502).json({ error: err.message || 'Falha ao gerar sugestão.' });
+  }
+});
+
 // POST /api/conversas/:id/mensagens — envia TEXTO LIVRE dentro da janela 24h.
 // Regras: janela aberta obrigatória (fora dela = só template, fase de campanhas).
 // Envia pelo número da conversa (multi-número); fallback = número padrão do .env.
@@ -518,12 +567,26 @@ router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
         });
       }
 
+      const atendenteId = await getOrCreateAtendente(conn, req.user);
+      const atendente = await conn.execute(`SELECT nome FROM atendente WHERE id = :id`, { id: atendenteId });
+      const textoEnviado = identificarAtendente(
+        (atendente.rows[0] && atendente.rows[0].NOME) || (req.user && req.user.nome),
+        texto
+      );
+      if (textoEnviado.length > 4096) {
+        throw new RespostaHttp(400, { error: 'Texto excede o limite após incluir o nome do atendente.' });
+      }
+
       // Envia pela Cloud API (número da conversa; undefined = padrão do .env).
-      const resp = await sendText(cv.TELEFONE, texto, cv.PHONE_NUMBER_ID || undefined);
+      const resp = await sendText(
+        cv.TELEFONE,
+        textoEnviado,
+        cv.PHONE_NUMBER_ID || undefined,
+        req.tenantId
+      );
       const wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
 
       // Persiste a saída no histórico (status evolui via webhook: sent/delivered/read).
-      const atendenteId = await getOrCreateAtendente(conn, req.user);
       const { tipos } = db;
       const ins = await conn.execute(
         `INSERT INTO mensagem
@@ -532,7 +595,7 @@ router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
          RETURNING id INTO :id`,
         {
           cv: cv.ID, ct: cv.CONTATO_ID, num: cv.NUMERO_ID, atd: atendenteId,
-          wamid: wamid || null, txt: texto,
+          wamid: wamid || null, txt: textoEnviado,
           id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
         }
       );
@@ -545,7 +608,7 @@ router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
       );
       return {
         msgId: ins.outBinds.id[0], wamid, conversaId: cv.ID, contatoId: cv.CONTATO_ID,
-        departamentoId: cv.DEPARTAMENTO_ID || null,
+        departamentoId: cv.DEPARTAMENTO_ID || null, textoEnviado,
       };
     });
 
@@ -555,7 +618,7 @@ router.post('/:id/mensagens', naoAuditor, async (req, res, next) => {
     });
     res.status(201).json(mapRow({
       ID: resultado.msgId, DIRECAO: 'out', TIPO: 'text',
-      CONTEUDO: texto, STATUS: 'sent', WAMID: resultado.wamid, TS: new Date(),
+      CONTEUDO: resultado.textoEnviado, STATUS: 'sent', WAMID: resultado.wamid, TS: new Date(),
     }));
   } catch (err) {
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
@@ -1079,16 +1142,32 @@ router.post('/:id/encerrar', naoAuditor, async (req, res, next) => {
 
       // Despedida (opcional, só com janela aberta) — falha não impede o encerramento.
       const atendenteId = await getOrCreateAtendente(conn, req.user);
+      const atd = await conn.execute(`SELECT nome FROM atendente WHERE id = :id`, { id: atendenteId });
+      const despedidaIdentificada = despedida
+        ? identificarAtendente((atd.rows[0] && atd.rows[0].NOME) || (req.user && req.user.nome), despedida)
+        : '';
       const expira = cv.JANELA_EXPIRA_EM ? new Date(cv.JANELA_EXPIRA_EM).getTime() : 0;
-      if (despedida && expira > Date.now()) {
+      if (despedidaIdentificada && expira > Date.now()) {
         try {
-          const resp = await sendText(cv.TELEFONE, despedida, cv.PHONE_NUMBER_ID || undefined);
+          const resp = await sendText(
+            cv.TELEFONE,
+            despedidaIdentificada,
+            cv.PHONE_NUMBER_ID || undefined,
+            req.tenantId
+          );
           const wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
           await conn.execute(
             `INSERT INTO mensagem
                (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
              VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sent', now())`,
-            { cv: id, ct: cv.CONTATO_ID, num: cv.NUMERO_ID, atd: atendenteId, wamid: wamid || null, txt: despedida }
+            {
+              cv: id,
+              ct: cv.CONTATO_ID,
+              num: cv.NUMERO_ID,
+              atd: atendenteId,
+              wamid: wamid || null,
+              txt: despedidaIdentificada,
+            }
           );
         } catch (e) {
           console.error('[conversas] despedida falhou (encerrando mesmo assim):', e.message);

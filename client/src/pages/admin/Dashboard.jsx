@@ -71,27 +71,24 @@ export default function Dashboard() {
   return (
     <div className="max-w-screen-2xl mx-auto space-y-4">
       {/* Faixa de KPIs — sala de controle */}
-      <section className="navy-gradient rounded-2xl text-white overflow-hidden relative">
-        <div aria-hidden className="absolute inset-0 opacity-[0.07]"
-          style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '22px 22px' }} />
-        <div className="relative flex items-center gap-2 px-5 pt-4">
-          <span className="section-bar" />
+      <section className="app-panel overflow-hidden">
+        <div className="flex items-center gap-2 px-5 py-4 border-b border-paper-300">
           <h2 className="font-display font-bold text-sm flex-1">Visão geral</h2>
-          <div className="flex gap-0.5 bg-black/25 rounded-lg p-0.5">
+          <div className="flex gap-0.5 bg-paper-200 rounded-lg p-1">
             {PERIODOS.map((p) => (
               <button key={p.id} onClick={() => setPeriodo(p.id)}
-                className={`px-3 py-1 text-[11px] rounded-md font-medium transition-colors
-                  ${periodo === p.id ? 'bg-white text-brand-800' : 'text-white/60 hover:text-white'}`}>
+                className={`min-h-8 px-3 text-[11px] rounded-md font-semibold
+                  ${periodo === p.id ? 'bg-white text-brand-800' : 'text-stone-500 hover:text-stone-800'}`}>
                 {p.rotulo}
               </button>
             ))}
           </div>
         </div>
-        <div className="relative grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 divide-x divide-white/[0.08] px-2 py-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 divide-x divide-y xl:divide-y-0 divide-paper-300">
           {KPIS.map((k) => (
-            <div key={k.rotulo} className="px-4 py-1">
-              <p className={`font-display font-bold text-3xl xl:text-4xl tabular leading-none ${k.cor || ''}`}>{k.valor}</p>
-              <p className="font-mono text-[10px] uppercase tracking-widest text-white/50 mt-1.5">{k.rotulo}</p>
+            <div key={k.rotulo} className="px-4 py-4">
+              <p className="text-[11px] font-medium text-stone-500">{k.rotulo}</p>
+              <p className="mt-1.5 font-semibold text-xl tabular leading-none text-ink-950">{k.valor}</p>
             </div>
           ))}
         </div>
@@ -129,7 +126,7 @@ export default function Dashboard() {
                           </li>
                         ))}
                         {(breakdownDia[d.dia] || []).length > 6 && (
-                          <li className="text-white/40 text-[10px] pt-0.5">+{breakdownDia[d.dia].length - 6} outros</li>
+                          <li className="text-white/70 text-[10px] pt-0.5">+{breakdownDia[d.dia].length - 6} outros</li>
                         )}
                       </ul>
                     </div>
@@ -156,7 +153,7 @@ export default function Dashboard() {
                   <span className="font-display font-bold text-base tabular text-stone-800">{d.qtd}</span>
                 </div>
                 <div className="h-2 rounded-full bg-paper-200 overflow-hidden">
-                  <div className="h-full rounded-full" style={{ width: `${(d.qtd / maxDepto) * 100}%`, backgroundColor: d.cor || '#1B5E7B' }} />
+                  <div className="h-full rounded-full" style={{ width: `${(d.qtd / maxDepto) * 100}%`, backgroundColor: d.cor || '#087B63' }} />
                 </div>
                 <p className="font-mono text-[10px] text-stone-400 mt-0.5">
                   {d.resolvidas} resolvidos · espera {fmtSeg(d.esperaMediaSeg)}

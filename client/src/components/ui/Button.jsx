@@ -2,7 +2,7 @@ import Spinner from './Spinner';
 
 const variants = {
   primary: 'bg-brand-700 hover:bg-brand-800 active:bg-brand-900 text-white',
-  accent:  'bg-[#9B1B1B] hover:bg-[#8B1A1A] active:bg-[#741616] text-white',
+  accent:  'bg-bordeaux-700 hover:bg-bordeaux-800 active:bg-bordeaux-900 text-white',
   outline: 'border border-black/20 hover:bg-paper-100 active:bg-paper-200 text-stone-700',
   ghost:   'hover:bg-paper-200 active:bg-paper-300 text-stone-700',
 };

@@ -23,11 +23,11 @@ export default function Confirmar({
           <h2 className="font-display font-bold text-base flex-1">{titulo}</h2>
           <button onClick={onCancelar} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
         </div>
-        <div className="p-4 space-y-2">
+        <div className="modal-body space-y-2">
           <p className="text-sm text-stone-700 whitespace-pre-wrap">{mensagem}</p>
           {dica && <p className="text-[11px] text-stone-400">{dica}</p>}
         </div>
-        <div className="p-3 border-t border-black/[0.06] flex gap-2 safe-bottom">
+        <div className="modal-footer">
           <button onClick={onCancelar}
             className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">
             {cancelarTexto}

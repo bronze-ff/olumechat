@@ -69,7 +69,7 @@ router.get('/', async (req, res) => {
 
   // Sessão de SUPORTE do operador (FIL-70): não tem matrícula (não é gente do
   // cliente), então não passa por carregarPerfil — que criaria um `atendente`
-  // lazy com matrícula nula. Perfil fixo de leitura, o mesmo que
+  // lazy com matrícula nula. Perfil fixo de administração, o mesmo que
   // auth/rbac.js::anexarPerfil dá às rotas REST.
   const ehSuporte = user.suporte === true;
   let perfil;

@@ -9,6 +9,9 @@ process.env.WEBHOOK_VERIFY_TOKEN = 'verify123';
 process.env.WA_TOKEN = 'token_abc';
 process.env.WA_PHONE_NUMBER_ID = '1112223334';
 process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
+// Isola o teste do barramento externo configurado na máquina. A integração
+// LISTEN/NOTIFY é coberta em realtime.test.js com clientes simulados.
+process.env.DATABASE_URL_DIRECT = '';
 
 const test = require('node:test');
 const assert = require('node:assert');

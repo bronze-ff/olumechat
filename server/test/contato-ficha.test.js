@@ -71,11 +71,26 @@ test('dadosClienteWinthor: sem provedor ou sem código → null', async () => {
 
 // ---------- API /api/contatos (integração leve) ----------
 
-function fakeConn({ contato = { ID: 5, TELEFONE: '5562999990000', NOME_PERFIL: null, NOME_INTERNO: null, CODIGO_EXTERNO: null, DOCUMENTO: null, OBSERVACOES: null, TAGS_CONTATO: null, ATUALIZADO_EM: null, ATUALIZADO_POR_NOME: null }, cap = {} } = {}) {
+function fakeConn({
+  contato = { ID: 5, TELEFONE: '5562999990000', NOME_PERFIL: null, NOME_INTERNO: null, CODIGO_EXTERNO: null, DOCUMENTO: null, OBSERVACOES: null, TAGS_CONTATO: null, ATUALIZADO_EM: null, ATUALIZADO_POR_NOME: null },
+  cap = {},
+  vinculosValidos = true,
+} = {}) {
   return {
     async execute(sql, binds) {
       if (sql.includes('FROM contato ct')) return { rows: contato ? [contato] : [] };
+      if (sql.includes('FROM atendente_depto ad')) {
+        return { rows: vinculosValidos ? [{ ATENDENTE_ID: binds.a }] : [] };
+      }
       if (sql.startsWith('UPDATE contato')) { cap.update = binds; return { rowsAffected: 1 }; }
+      if (sql.startsWith('DELETE FROM contato_atendente_depto')) {
+        cap.deleteVinculos = binds;
+        return { rowsAffected: 1 };
+      }
+      if (sql.startsWith('INSERT INTO contato_atendente_depto')) {
+        cap.vinculos = [...(cap.vinculos || []), binds];
+        return { rowsAffected: 1 };
+      }
       if (sql.includes('INSERT INTO auditoria')) { cap.audit = binds; return {}; }
       return { rows: [], outBinds: {} };
     },
@@ -113,6 +128,37 @@ test('PUT /contatos/:id persiste nome interno + grava auditoria', async () => {
     assert.equal(cap.update.tags, '[1,2]');         // tags viram JSON
     assert.equal(cap.audit.ENTIDADE ?? 'contato', 'contato');
     assert.match(String(cap.audit.det), /Padaria do João/);
+  } finally { server.close(); }
+});
+
+test('PUT /contatos/:id salva um responsável diferente por departamento', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'PUT', '/api/contatos/5', {
+      vinculosAtendimento: [
+        { departamentoId: 10, atendenteId: 101 },
+        { departamentoId: 20, atendenteId: 202 },
+      ],
+    });
+    assert.equal(r.status, 200);
+    assert.equal(cap.deleteVinculos.id, 5);
+    assert.deepEqual(
+      cap.vinculos.map((item) => [item.d, item.a]),
+      [[10, 101], [20, 202]]
+    );
+    assert.match(String(cap.audit.det), /vinculos_atendimento/);
+  } finally { server.close(); }
+});
+
+test('PUT /contatos/:id rejeita atendente fora do departamento', async () => {
+  const { server, port } = await app(fakeConn({ vinculosValidos: false }));
+  try {
+    const r = await req(port, 'PUT', '/api/contatos/5', {
+      vinculosAtendimento: [{ departamentoId: 10, atendenteId: 999 }],
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /pertencer ao departamento/);
   } finally { server.close(); }
 });
 

@@ -29,7 +29,13 @@ const TOKEN = jwt.sign({ jti: 'tp1', tenantId: 1, matricula: 123, nome: 'Teste' 
 
 function startApp(perfil) {
   // definirPausa persiste no banco via comTenant — basta um conn que aceita o UPDATE.
-  db.comTenant = async (tenantId, fn) => fn({ execute: async () => ({ rowsAffected: 1 }) });
+  db.comTenant = async (tenantId, fn) => fn({
+    execute: async (sql) => (
+      /token_blacklist/i.test(sql)
+        ? { rows: [] }
+        : { rows: [], rowsAffected: 1 }
+    ),
+  });
   const app = express();
   app.use('/api', express.json());
   app.use('/api/presenca', authMiddleware, (req, res, next) => { req.perfil = perfil; next(); }, presencaRoutes);
@@ -111,5 +117,21 @@ test('GET /api/presenca: snapshot só mostra o tenant de quem pediu (isolamento)
     const ids = r.body.map((x) => x.atendenteId);
     assert.ok(ids.includes(9));
     assert.equal(ids.includes(50), false); // outro tenant nunca aparece
+  } finally { server.close(); }
+});
+
+test('GET /api/presenca/equipe: atendente vê somente outros colegas online do próprio tenant', async () => {
+  presence._reset();
+  presence.conectar({ atendenteId: 7, tenantId: 1, deptoIds: [2], matricula: 123, nome: 'Eu' });
+  presence.conectar({ atendenteId: 9, tenantId: 1, deptoIds: [4], matricula: 576, nome: 'Ana' });
+  presence.conectar({ atendenteId: 10, tenantId: 1, deptoIds: [5], matricula: 577, nome: 'Pausado', pausado: true });
+  presence.conectar({ atendenteId: 50, tenantId: 2, deptoIds: [4], matricula: 999, nome: 'Outro tenant' });
+  const { server, port } = await startApp({ atendenteId: 7, papel: 'ATENDENTE', deptoIds: [2], matricula: 123 });
+  try {
+    const r = await req(port, 'GET', '/api/presenca/equipe');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.map((item) => item.atendenteId), [9]);
+    assert.equal(r.body[0].nome, 'Ana');
+    assert.deepEqual(r.body[0].deptoIds, [4]);
   } finally { server.close(); }
 });

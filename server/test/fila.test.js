@@ -112,7 +112,17 @@ function fakeConnFila({ fila = [], cargas = {}, capturas = [], falhaUpdate = fal
         while (idx < itens.length) {
           const it = itens[idx++];
           if (!temFiltro || it.numeroId == null || nums.includes(it.numeroId)) {
-            return { rows: [{ ID: it.id, NUMERO_ID: it.numeroId }] };
+            return {
+              rows: [{
+                ID: it.id,
+                NUMERO_ID: it.numeroId,
+                CONTATO_ID: it.contatoId || null,
+                ATENDENTE_PREFERENCIAL_ID: it.preferredId || null,
+                ATENDENTE_PREFERENCIAL_NOME: it.preferredName || null,
+                TELEFONE: it.telefone || null,
+                PHONE_NUMBER_ID: it.phoneNumberId || null,
+              }],
+            };
           }
         }
         return { rows: [] };
@@ -148,6 +158,30 @@ test('distribuidor: escolhe o atendente com MENOS conversas', async () => {
   assert.equal(evento.conversaId, 501);
   assert.equal(evento.atendenteId, 12); // menor carga
   assert.equal(evento.tenantId, TENANT);
+});
+
+test('distribuidor: atendente de referência online tem prioridade sobre a menor carga', async () => {
+  presence._reset();
+  presence.conectar({ atendenteId: 111, tenantId: TENANT, deptoIds: [7], nome: 'Referência' });
+  presence.conectar({ atendenteId: 112, tenantId: TENANT, deptoIds: [7], nome: 'Livre' });
+  const capturas = [];
+  const conn = fakeConnFila({
+    fila: [{ id: 550, numeroId: null, contatoId: 44, preferredId: 111, preferredName: 'Referência' }],
+    cargas: { 111: 5, 112: 0 },
+    capturas,
+  });
+  db.getConnection = async () => conn;
+
+  let evento;
+  const off = subscribe((e) => { if (e.tipo === 'atribuicao') evento = e; });
+  await distribuidor.atribuir(7);
+  off();
+
+  assert.equal(evento.conversaId, 550);
+  assert.equal(evento.atendenteId, 111);
+  const selecao = capturas.find((item) => item.sql.includes('AS atendente_preferencial_id'));
+  assert.match(selecao.sql, /contato_atendente_depto/);
+  assert.match(selecao.sql, /cad\.departamento_id = :d/);
 });
 
 test('distribuidor: empate de carga → quem está há mais tempo sem receber', async () => {

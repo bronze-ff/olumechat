@@ -15,6 +15,9 @@ const TENANT_B = 2;
 
 function connConversa(fields = {}) {
   return { _ins: [], async execute(sql, binds) {
+    // IA é add-on de plano (ia_habilitada em `tenant`) — habilitado por padrão
+    // nos testes de runtime, que cobrem o comportamento do BOT em si.
+    if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'S' }] };
     if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
     if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
     if (sql.includes('FROM ia_turno')) return { rows: [] };
@@ -69,6 +72,24 @@ test('provedor lança erro (400/timeout): usuário recebe FALLBACK — nunca sil
   await runtime.processarEntrada(TENANT_A, 88, 'vendas de ontem?');
   assert.ok(enviados.length >= 1, 'tem que enviar ALGO mesmo com o provedor falhando');
   assert.ok(enviados.some((e) => /indispon|não consegui|nao consegui/i.test(e.text.body)), 'envia o fallback');
+});
+
+test('plano sem IA (ia_habilitada=N): não responde mesmo com provedor configurado', async () => {
+  const conn = {
+    _ins: [], async execute(sql, binds) {
+      if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'N' }] };
+      if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
+      this._ins.push({ sql, binds }); return { rows: [] };
+    }, commit: async () => {}, rollback: async () => {}, close: async () => {},
+  };
+  db.getConnection = async () => conn;
+  auth.autorizado = async () => true;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  let chamouModelo = false; client.chamar = async () => { chamouModelo = true; return {}; };
+  const enviados = []; global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
+  assert.equal(chamouModelo, false, 'não chama o provedor de IA');
+  assert.equal(enviados.length, 0, 'não manda nenhuma mensagem — plano sem IA é silencioso, não um recado');
 });
 
 test('tenantId inválido não toca o banco nem envia mensagem', async () => {

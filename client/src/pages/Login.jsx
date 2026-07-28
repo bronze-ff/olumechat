@@ -1,177 +1,152 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-
-const NAVY_GRAD = 'linear-gradient(160deg, #1B5E7B 0%, #1A5276 100%)';
-const BORDEAUX = '#9B1B1B';
-
-const features = [
-  { label: 'Inbox unificado', desc: 'Todas as conversas num lugar' },
-  { label: 'Multi-número', desc: 'Vários números, um painel' },
-  { label: 'Histórico completo', desc: 'Conversas e mídias salvas' },
-  { label: 'API oficial Meta', desc: 'Sem bloqueio de chip' },
-];
+import Brand from '../components/ui/Brand';
+import Icon from '../components/ui/Icon';
+import ThemeMenu from '../components/ui/ThemeMenu';
 
 function IconEye({ off }) {
   return off ? (
-    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-        d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 3l18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 5.1A10.4 10.4 0 0 1 12 5c4.5 0 8.3 2.9 9.5 7a10 10 0 0 1-2 3.5M6.5 6.5A10.1 10.1 0 0 0 2.5 12c1.3 4.1 5 7 9.5 7 1.1 0 2.2-.2 3.2-.5" />
     </svg>
   ) : (
-    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M2.5 12c1.3-4.1 5-7 9.5-7s8.3 2.9 9.5 7c-1.3 4.1-5 7-9.5 7s-8.3-2.9-9.5-7Z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
-function IconArrow() {
+
+function ProductPreview() {
   return (
-    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-    </svg>
-  );
-}
-function MiniSpinner() {
-  return (
-    <span className="inline-block w-4 h-4 rounded-full border-2 animate-spin"
-      style={{ borderColor: 'rgba(255,255,255,0.4)', borderTopColor: '#fff' }} />
+    <div className="mt-auto pt-12">
+      <div className="rounded-xl overflow-hidden border border-white/10 bg-white/[0.04]">
+        <div className="h-10 px-3 flex items-center gap-2 border-b border-white/10">
+          <span className="w-2 h-2 rounded-full bg-emerald-400" />
+          <span className="text-[11px] text-white/55">Operação ao vivo</span>
+          <span className="ml-auto text-[10px] text-white/65">agora</span>
+        </div>
+        <div className="grid grid-cols-[118px_1fr] min-h-44">
+          <div className="border-r border-white/10 p-2 space-y-1.5">
+            {['Aguardando  3', 'Minhas  7', 'Automações  2'].map((item, index) => (
+              <div key={item} className={`px-2 py-2 rounded-md text-[10px] ${index === 0 ? 'bg-white/10 text-white' : 'text-white/65'}`}>{item}</div>
+            ))}
+          </div>
+          <div className="p-4">
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-brand-700 text-white flex items-center justify-center text-[10px]">AM</span>
+              <div>
+                <p className="text-[11px] font-medium text-white/85">Ana Martins</p>
+                <p className="text-[9px] text-white/65">Atendimento · WhatsApp</p>
+              </div>
+            </div>
+            <div className="mt-5 ml-auto max-w-[170px] rounded-lg rounded-br-sm bg-brand-700 px-3 py-2 text-[10px] leading-relaxed text-white">
+              Olá, Ana! Já encontrei seu atendimento. Como posso ajudar?
+            </div>
+            <div className="mt-2 max-w-[150px] rounded-lg rounded-bl-sm bg-white/10 px-3 py-2 text-[10px] leading-relaxed text-white/65">
+              Preciso atualizar meus dados.
+            </div>
+          </div>
+        </div>
+      </div>
+      <p className="mt-4 text-xs text-white/65">Conversas, equipes e automações em um único fluxo de trabalho.</p>
+    </div>
   );
 }
 
 export default function Login() {
   const { login } = useAuth();
-  // A empresa (slug do tenant) fica lembrada entre acessos: o usuário digita
-  // o mesmo valor todo dia, e ela não é segredo — sozinha não abre nada.
   const [form, setForm] = useState({ empresa: localStorage.getItem('empresa') || '', email: '', senha: '' });
   const [showSenha, setShowSenha] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [btnHover, setBtnHover] = useState(false);
+  const set = (key) => (event) => setForm((prev) => ({ ...prev, [key]: event.target.value }));
 
-  const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setError('');
-    if (!form.empresa || !form.email || !form.senha) { setError('Preencha todos os campos'); return; }
+    if (!form.empresa || !form.email || !form.senha) {
+      setError('Preencha empresa, e-mail e senha para continuar.');
+      return;
+    }
     setLoading(true);
     try {
       await login(form.empresa.trim().toLowerCase(), form.email.trim().toLowerCase(), form.senha);
     } catch (err) {
-      setError(
-        err.response?.data?.error ||
-        err.response?.data?.errors?.[0]?.msg ||
-        'Credenciais inválidas. Tente novamente.'
-      );
+      setError(err.response?.data?.error || err.response?.data?.errors?.[0]?.msg || 'Não foi possível entrar. Confira os dados e tente novamente.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex">
-      {/* Painel esquerdo navy */}
-      <div className="left-panel relative hidden lg:flex flex-col p-12 overflow-hidden shrink-0"
-        style={{ width: '420px', background: NAVY_GRAD }}>
-        <style>{`@media (min-width: 1280px) { .left-panel { width: 480px !important; } }`}</style>
-        <div className="absolute -bottom-20 -right-20 rounded-full pointer-events-none"
-          style={{ width: 320, height: 320, background: BORDEAUX, opacity: 0.15 }} />
-        <div className="absolute top-16 -right-10 rounded-full pointer-events-none"
-          style={{ width: 160, height: 160, background: 'rgba(255,255,255,0.08)' }} />
-
-        <div className="mb-12">
-          <div className="mb-5 flex items-center gap-3">
-            <div className="shrink-0" style={{ width: 4, height: 16, background: BORDEAUX }} />
-            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-white/50">Falatta</p>
-          </div>
-          <h1 className="font-display text-4xl font-bold leading-tight text-white">Atendimento WhatsApp</h1>
+    <main className="relative min-h-screen bg-white lg:grid lg:grid-cols-[minmax(360px,0.78fr)_1.22fr]">
+      <div className="absolute top-4 right-4 z-20"><ThemeMenu /></div>
+      <section className="hidden lg:flex min-h-screen bg-ink-950 text-white p-9 xl:p-12 flex-col">
+        <Brand inverse />
+        <div className="mt-16 max-w-md">
+          <h1 className="text-[34px] xl:text-[40px] leading-[1.12] tracking-[-0.035em] font-semibold text-balance">
+            Atendimento organizado para equipes que não podem perder conversas.
+          </h1>
+          <p className="mt-5 text-[15px] leading-relaxed text-white/55 max-w-[52ch]">
+            Entre no workspace da sua empresa para atender, acompanhar filas e manter cada cliente no contexto certo.
+          </p>
         </div>
+        <ProductPreview />
+      </section>
 
-        <p className="max-w-xs text-sm leading-relaxed pl-4 text-white/65" style={{ borderLeft: `2px solid ${BORDEAUX}` }}>
-          Plataforma oficial de atendimento e cobrança via WhatsApp (API Meta).
-          Conversas, histórico e múltiplos números num único painel.
-        </p>
-
-        <div className="mt-auto pt-10 grid grid-cols-2 gap-3">
-          {features.map((f) => (
-            <div key={f.label} className="p-3"
-              style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 4 }}>
-              <p className="text-xs font-semibold text-white">{f.label}</p>
-              <p className="mt-2 leading-relaxed" style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>{f.desc}</p>
-            </div>
-          ))}
-        </div>
-        <p className="font-mono uppercase text-white/40 mt-6" style={{ fontSize: 11, letterSpacing: '0.16em' }}>
-          © {new Date().getFullYear()} Falatta
-        </p>
-      </div>
-
-      {/* Painel direito form */}
-      <div className="flex-1 bg-white flex items-center justify-center px-6 py-12 relative overflow-hidden">
-        <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ opacity: 0.12 }} xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <pattern id="system-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1B5E7B" strokeWidth="0.7" />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#system-grid)" />
-        </svg>
-
-        <div className="w-full max-w-sm animate-slide-up relative">
-          <div className="mb-8">
-            <div className="flex items-center gap-2 mb-4">
-              <span className="rounded-full shrink-0" style={{ width: 4, height: 16, background: BORDEAUX }} />
-              <span className="font-mono text-[10px] uppercase tracking-widest text-stone-400">Acesso</span>
-            </div>
-            <h2 className="font-display text-2xl font-bold" style={{ color: '#1A5276' }}>Entrar no Atendimento</h2>
-            <p className="text-sm text-stone-500 mt-1">Entre com o e-mail e a senha da sua conta.</p>
+      <section className="min-h-screen flex items-center justify-center px-5 py-10 sm:px-8">
+        <div className="w-full max-w-[420px] animate-slide-up">
+          <div className="lg:hidden mb-10"><Brand /></div>
+          <div>
+            <p className="text-sm font-medium text-brand-700">Acesso ao workspace</p>
+            <h2 className="mt-2 text-[28px] font-semibold tracking-[-0.03em] text-ink-950">Bem-vindo de volta</h2>
+            <p className="mt-2 text-sm text-stone-600">Use os dados fornecidos pelo administrador da sua empresa.</p>
           </div>
 
-          <form onSubmit={handleSubmit} noValidate className="space-y-5">
+          <form onSubmit={handleSubmit} noValidate className="mt-8 space-y-5">
             <div>
-              <label htmlFor="empresa" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Empresa</label>
-              <input id="empresa" type="text" value={form.empresa} onChange={set('empresa')}
-                autoComplete="organization" autoCapitalize="none" spellCheck="false"
-                placeholder="sua-empresa" className="input-field font-mono" />
+              <label htmlFor="empresa" className="field-label">Identificador da empresa</label>
+              <input id="empresa" type="text" value={form.empresa} onChange={set('empresa')} autoComplete="organization" autoCapitalize="none" spellCheck="false" placeholder="sua-empresa" className="input-field font-mono" />
+              <p className="mt-1.5 text-xs text-stone-500">É o endereço curto informado no seu convite de acesso.</p>
             </div>
             <div>
-              <label htmlFor="email" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">E-mail</label>
-              <input id="email" type="email" value={form.email} onChange={set('email')}
-                autoComplete="username" autoCapitalize="none" spellCheck="false"
-                placeholder="voce@suaempresa.com.br" className="input-field" />
+              <label htmlFor="email" className="field-label">E-mail</label>
+              <input id="email" type="email" value={form.email} onChange={set('email')} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="voce@suaempresa.com.br" className="input-field" />
             </div>
             <div>
-              <label htmlFor="senha" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Senha</label>
+              <label htmlFor="senha" className="field-label">Senha</label>
               <div className="relative">
-                <input id="senha" type={showSenha ? 'text' : 'password'} value={form.senha} onChange={set('senha')}
-                  autoComplete="current-password" placeholder="••••••••" className="input-field font-mono pr-11" />
-                <button type="button" onClick={() => setShowSenha((s) => !s)}
-                  className="absolute right-0 top-0 h-full px-3 flex items-center text-stone-400 hover:text-stone-600"
-                  aria-label={showSenha ? 'Ocultar senha' : 'Mostrar senha'}>
+                <input id="senha" type={showSenha ? 'text' : 'password'} value={form.senha} onChange={set('senha')} autoComplete="current-password" placeholder="Digite sua senha" className="input-field pr-12" />
+                <button type="button" onClick={() => setShowSenha((value) => !value)} className="absolute right-1 top-1 w-9 h-9 rounded-md flex items-center justify-center text-stone-500 hover:bg-paper-200 hover:text-ink-950" aria-label={showSenha ? 'Ocultar senha' : 'Mostrar senha'}>
                   <IconEye off={showSenha} />
                 </button>
               </div>
             </div>
 
-            {error && <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{error}</div>}
+            {error && (
+              <div className="p-3.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 flex gap-2" role="alert">
+                <Icon name="alert" size={17} className="shrink-0 mt-0.5" />
+                {error}
+              </div>
+            )}
 
-            <button type="submit" disabled={loading}
-              onMouseEnter={() => setBtnHover(true)} onMouseLeave={() => setBtnHover(false)}
-              className="w-full flex items-center justify-center gap-2 py-3 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              style={{ background: btnHover ? '#8B1A1A' : BORDEAUX, borderRadius: 4 }}>
-              {loading ? <MiniSpinner /> : null}
-              Entrar
-              {!loading && <IconArrow />}
+            <button type="submit" disabled={loading} className="w-full min-h-11 px-5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2">
+              {loading ? (
+                <span className="w-4 h-4 rounded-full border-2 border-white/35 border-t-white animate-spin" />
+              ) : null}
+              {loading ? 'Entrando…' : 'Entrar no workspace'}
+              {!loading && <Icon name="arrow" size={16} />}
             </button>
           </form>
 
-          <p className="mt-6 text-xs leading-relaxed text-stone-500">
-            Primeiro acesso? Use o link de definição de senha que o administrador
-            da sua empresa enviou — ele vale uma vez só e expira.
-          </p>
+          <div className="mt-7 pt-5 border-t border-paper-300">
+            <p className="text-xs leading-relaxed text-stone-600">
+              Primeiro acesso? Abra o convite enviado pelo administrador para criar sua senha. O link funciona uma única vez.
+            </p>
+          </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   );
 }

@@ -1,111 +1,82 @@
 'use strict';
 process.env.META_APP_SECRET='x'; process.env.WEBHOOK_VERIFY_TOKEN='x'; process.env.WA_TOKEN='x';
 process.env.WA_PHONE_NUMBER_ID='x'; process.env.WA_BUSINESS_ACCOUNT_ID='x'; process.env.JWT_SECRET='seg-teste-32-chars-abcdefghijk';
+// api/iaConfig.js hoje é SOMENTE LEITURA: quem define provider/modelo/chave é o
+// operador (ver operador-ia-config.test.js) — o admin do tenant só vê status
+// (`habilitada` + provider/modelo em uso, nunca a chave).
 const test = require('node:test');
 const assert = require('node:assert');
 const http = require('node:http');
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const db = require('../db/pool');
 
 function servidor(papel = 'ADMIN', tenantId = 1) {
   const app = express();
   app.use(express.json());
-  // stub de auth/perfil com papel configurável (o middleware real que popula
-  // req.tenantId a partir do login é o FIL-59; aqui simulamos o contrato dele)
   app.use((req, _res, next) => { req.user = { matricula: 10 }; req.perfil = { atendenteId: 1, papel }; req.tenantId = tenantId; next(); });
   app.use('/api/ia-config', require('../api/iaConfig'));
   return app;
 }
-function req(app, metodo, corpo) {
+function req(app, metodo = 'GET') {
   return new Promise((resolve) => {
     const srv = app.listen(0, () => {
       const port = srv.address().port;
       const r = http.request({ port, path: '/api/ia-config', method: metodo, headers: { 'content-type': 'application/json' } }, (res) => {
-        let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => { srv.close(); resolve({ status: res.statusCode, body: d ? JSON.parse(d) : null }); });
+        let d = ''; res.on('data', (c) => (d += c)); res.on('end', () => {
+          srv.close();
+          let body = null; try { body = d ? JSON.parse(d) : null; } catch { /* 404 default do Express não é JSON */ }
+          resolve({ status: res.statusCode, body });
+        });
       });
-      if (corpo) r.write(JSON.stringify(corpo)); r.end();
+      r.end();
     });
   });
 }
 
-test('PUT válido cifra a chave, faz upsert e audita', async () => {
-  const cap = [];
-  db.getConnection = async () => ({ async execute(sql, binds) { cap.push({ sql, binds }); return { rows: [] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  const res = await req(servidor(), 'PUT', { provider: 'openai', modelo: 'gpt-4o', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-abc' });
-  assert.equal(res.status, 200);
-  const upsert = cap.find((c) => c.sql.includes('INSERT INTO ia_config') && c.sql.includes('ON CONFLICT'));
-  assert.ok(upsert, 'faz upsert');
-  assert.equal(upsert.binds.tenantId, 1);
-  assert.ok(!JSON.stringify(cap).includes('sk-abc'), 'a chave nunca vai em claro pro banco');
-  assert.ok(cap.some((c) => c.sql.includes('auditoria')), 'audita');
-});
-
-test('PUT rejeita provider inválido', async () => {
-  db.getConnection = async () => ({ async execute() { return { rows: [] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  const res = await req(servidor(), 'PUT', { provider: 'zzz', modelo: 'x', apiKey: 'k' });
-  assert.equal(res.status, 400);
-});
-
-test('GET nunca devolve a API key', async () => {
-  db.getConnection = async () => ({ async execute() { return { rows: [{ PROVIDER: 'openai', MODELO: 'gpt-4o', BASE_URL: 'u', ATIVO: 'S' }] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  const res = await req(servidor(), 'GET');
+test('GET devolve habilitada + provider/modelo, nunca a chave', async () => {
+  db.getConnection = async () => ({ async execute(sql) {
+    if (sql.includes('FROM tenant')) return { rows: [{ IA_HABILITADA: 'S' }] };
+    return { rows: [{ PROVIDER: 'openai', MODELO: 'gpt-4o', BASE_URL: 'u', ATIVO: 'S' }] };
+  }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
+  const res = await req(servidor());
+  assert.equal(res.body.habilitada, true);
   assert.equal(res.body.provider, 'openai');
   assert.ok(!('apiKey' in res.body) && !('API_KEY_CRIPTOGRAFADA' in res.body));
 });
 
-test('PUT com papel não-ADMIN retorna 403', async () => {
-  db.getConnection = async () => ({ async execute() { return { rows: [] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  const res = await req(servidor('ATENDENTE'), 'PUT', { provider: 'openai', modelo: 'gpt-4o', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-abc' });
-  assert.equal(res.status, 403);
-});
-
-test('PUT sem apiKey MANTÉM a chave atual (editar só modelo/URL sem recolar a chave)', async () => {
-  const cap = [];
-  db.getConnection = async () => ({ async execute(sql, binds) {
-    cap.push({ sql, binds });
-    if (sql.includes('SELECT API_KEY_CRIPTOGRAFADA')) return { rows: [{ API_KEY_CRIPTOGRAFADA: 'iv:tag:ct' }] };
-    return { rows: [] };
-  }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  const res = await req(servidor(), 'PUT', { provider: 'openrouter', modelo: 'openai/gpt-4o-mini', baseUrl: 'https://openrouter.ai/api/v1' }); // sem apiKey
-  assert.equal(res.status, 200);
-  const upsert = cap.find((c) => c.sql.includes('INSERT INTO ia_config') && c.sql.includes('ON CONFLICT'));
-  assert.equal(upsert.binds.k, 'iv:tag:ct'); // reusou a chave já cifrada
-});
-
-test('PUT sem apiKey e sem config prévia dá 400 (não pode nascer sem chave)', async () => {
+test('GET sem plano de IA: habilitada=false mesmo com ia_config ainda salvo', async () => {
   db.getConnection = async () => ({ async execute(sql) {
-    if (sql.includes('SELECT API_KEY_CRIPTOGRAFADA')) return { rows: [] };
+    if (sql.includes('FROM tenant')) return { rows: [{ IA_HABILITADA: 'N' }] };
+    return { rows: [{ PROVIDER: 'openai', MODELO: 'gpt-4o', BASE_URL: 'u', ATIVO: 'S' }] };
+  }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
+  const res = await req(servidor());
+  assert.equal(res.body.habilitada, false);
+});
+
+test('GET sem ia_config nenhum: responde vazio, não quebra', async () => {
+  db.getConnection = async () => ({ async execute(sql) {
+    if (sql.includes('FROM tenant')) return { rows: [{ IA_HABILITADA: 'N' }] };
     return { rows: [] };
   }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  const res = await req(servidor(), 'PUT', { provider: 'openrouter', modelo: 'm', baseUrl: 'https://openrouter.ai/api/v1' });
-  assert.equal(res.status, 400);
+  const res = await req(servidor());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.provider, null);
+  assert.equal(res.body.ativo, false);
 });
 
 test('SEGURANÇA: GET só devolve a config do tenant do próprio request (bind de tenant_id)', async () => {
   let bindsVistos;
   db.getConnection = async () => ({ async execute(sql, binds) {
-    if (sql.includes('SELECT PROVIDER')) { bindsVistos = binds; return { rows: [{ PROVIDER: 'openai', MODELO: 'm', BASE_URL: null, ATIVO: 'S' }] }; }
-    return { rows: [] };
+    if (sql.includes('FROM tenant')) return { rows: [{ IA_HABILITADA: 'S' }] };
+    bindsVistos = binds;
+    return { rows: [{ PROVIDER: 'openai', MODELO: 'm', BASE_URL: null, ATIVO: 'S' }] };
   }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  await req(servidor('ADMIN', 7), 'GET');
+  await req(servidor('ADMIN', 7));
   assert.equal(bindsVistos.tenantId, 7);
 });
 
-test('PUT rejeita modelo que é URL (causa do "not a valid model ID")', async () => {
+test('não existe mais PUT nesta rota — configurar é só via painel do operador', async () => {
   db.getConnection = async () => ({ async execute() { return { rows: [] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  const res = await req(servidor(), 'PUT', { provider: 'openrouter', modelo: 'https://openrouter.ai/nvidia/x:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'k' });
-  assert.equal(res.status, 400);
-  assert.match(res.body.error, /URL/i);
-});
-
-test('PUT rejeita baseUrl inválida e normaliza um /chat/completions colado por engano', async () => {
-  const cap = [];
-  db.getConnection = async () => ({ async execute(sql, binds) { cap.push({ sql, binds }); return { rows: [] }; }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  const bad = await req(servidor(), 'PUT', { provider: 'openrouter', modelo: 'm', baseUrl: 'não é url', apiKey: 'k' });
-  assert.equal(bad.status, 400);
-  const ok = await req(servidor(), 'PUT', { provider: 'openrouter', modelo: 'm', baseUrl: 'https://openrouter.ai/api/v1/chat/completions/', apiKey: 'k' });
-  assert.equal(ok.status, 200);
-  const upsert = cap.find((c) => c.sql.includes('INSERT INTO ia_config') && c.sql.includes('ON CONFLICT'));
-  assert.equal(upsert.binds.b, 'https://openrouter.ai/api/v1'); // normalizada
+  const res = await req(servidor(), 'PUT');
+  assert.equal(res.status, 404);
 });

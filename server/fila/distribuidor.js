@@ -33,6 +33,7 @@ const db = require('../db/pool');
 const presence = require('../realtime/presence');
 const { publish } = require('../realtime/hub');
 const { tentar: tentarLock } = require('../workers/leaderLock');
+const { sendText } = require('../graph/sendText');
 
 const cadeias = new Map(); // departamentoId -> Promise (fila de execução)
 const RETRY_LOCK_MS = 50;
@@ -116,7 +117,20 @@ async function rodada(departamentoId, tentativa = 0) {
       filtroNum = ` AND (c.numero_id IN (${ms.join(',')}) OR c.numero_id IS NULL)`;
     }
     const sel = await conn.execute(
-      `SELECT id, numero_id FROM conversa c
+      `SELECT id, numero_id, contato_id,
+              (SELECT cad.atendente_id
+                 FROM contato_atendente_depto cad
+                WHERE cad.contato_id = c.contato_id
+                  AND cad.departamento_id = :d)
+                AS atendente_preferencial_id,
+              (SELECT pref.nome
+                 FROM contato_atendente_depto cad
+                 JOIN atendente pref ON pref.id = cad.atendente_id
+                WHERE cad.contato_id = c.contato_id
+                  AND cad.departamento_id = :d) AS atendente_preferencial_nome,
+              (SELECT ct.telefone FROM contato ct WHERE ct.id = c.contato_id) AS telefone,
+              (SELECT n.phone_number_id FROM numero n WHERE n.id = c.numero_id) AS phone_number_id
+         FROM conversa c
         WHERE fila_status = 'aguardando' AND departamento_id = :d${filtroNum}
         ORDER BY fila_entrou_em NULLS LAST, id
         FETCH FIRST 1 ROWS ONLY`,
@@ -125,6 +139,7 @@ async function rodada(departamentoId, tentativa = 0) {
     if (!sel.rows.length) return null;
     const conversaId = sel.rows[0].ID;
     const numeroDaConversa = sel.rows[0].NUMERO_ID;
+    const preferencialId = sel.rows[0].ATENDENTE_PREFERENCIAL_ID || null;
 
     // Só os candidatos que atendem o número DESSA conversa concorrem.
     const elegiveis = candidatos.filter((id) => presence.atendeNumero(id, numeroDaConversa));
@@ -145,12 +160,15 @@ async function rodada(departamentoId, tentativa = 0) {
     const cargas = new Map(cargasSel.rows.map((r) => [r.ATENDENTE_ID, r.QTD]));
 
     // Menor carga; empate -> menor lastAssignedAt (quem está há mais tempo sem receber).
-    let escolhido = null, melhorCarga = Infinity, melhorTs = Infinity;
-    for (const id of elegiveis) {
-      const carga = cargas.get(id) || 0;
-      const ts = presence.lastAssignedAt(id);
-      if (carga < melhorCarga || (carga === melhorCarga && ts < melhorTs)) {
-        escolhido = id; melhorCarga = carga; melhorTs = ts;
+    let escolhido = preferencialId && elegiveis.includes(preferencialId) ? preferencialId : null;
+    if (!escolhido) {
+      let melhorCarga = Infinity, melhorTs = Infinity;
+      for (const id of elegiveis) {
+        const carga = cargas.get(id) || 0;
+        const ts = presence.lastAssignedAt(id);
+        if (carga < melhorCarga || (carga === melhorCarga && ts < melhorTs)) {
+          escolhido = id; melhorCarga = carga; melhorTs = ts;
+        }
       }
     }
 
@@ -165,7 +183,16 @@ async function rodada(departamentoId, tentativa = 0) {
     await conn.execute(
       `INSERT INTO auditoria (atendente_id, acao, entidade, entidade_id, detalhe)
        VALUES (:a, 'atribuicao_auto', 'conversa', :id, :det)`,
-      { a: escolhido, id: conversaId, det: JSON.stringify({ departamentoId }) }
+      {
+        a: escolhido,
+        id: conversaId,
+        det: JSON.stringify({
+          departamentoId,
+          estrategia: escolhido === preferencialId ? 'responsavel_departamento' : 'menor_carga',
+          atendentePreferencialId: preferencialId,
+          preferencialDisponivel: Boolean(preferencialId && escolhido === preferencialId),
+        }),
+      }
     );
 
     // Há mais gente esperando? (decide o re-agendamento)
@@ -175,7 +202,21 @@ async function rodada(departamentoId, tentativa = 0) {
       { d: departamentoId }
     );
 
-    return { status: 'ok', conversaId, escolhido, resto: resto.rows[0].QTD };
+    const infoEscolhido = presence.snapshot(tenantId).find((item) => item.atendenteId === escolhido);
+    return {
+      status: 'ok',
+      conversaId,
+      contatoId: sel.rows[0].CONTATO_ID,
+      numeroId: numeroDaConversa,
+      escolhido,
+      escolhidoNome: (infoEscolhido && infoEscolhido.nome) || null,
+      preferencialId,
+      preferencialNome: sel.rows[0].ATENDENTE_PREFERENCIAL_NOME || null,
+      avisarIndisponibilidade: Boolean(preferencialId && escolhido !== preferencialId),
+      telefone: sel.rows[0].TELEFONE || null,
+      phoneNumberId: sel.rows[0].PHONE_NUMBER_ID || null,
+      resto: resto.rows[0].QTD,
+    };
   });
 
   if (!resultado) return;
@@ -196,6 +237,53 @@ async function rodada(departamentoId, tentativa = 0) {
     departamentoId,
     tenantId,
   });
+
+  // O WhatsApp Cloud API não exibe uma identidade nativa por atendente. Quando
+  // o contato tinha uma pessoa de referência indisponível, deixamos explícito
+  // quem seguirá com ele e persistimos o aviso no histórico da conversa.
+  if (resultado.avisarIndisponibilidade && resultado.telefone) {
+    const nomePreferencial = resultado.preferencialNome || 'Seu atendente de referência';
+    const nomeSubstituto = resultado.escolhidoNome || 'outro atendente da equipe';
+    const aviso = `${nomePreferencial} não está disponível no momento. Para não deixar você esperando, ${nomeSubstituto} seguirá com o atendimento.`;
+    try {
+      const resp = await sendText(
+        resultado.telefone,
+        aviso,
+        resultado.phoneNumberId || undefined,
+        tenantId
+      );
+      const wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
+      await db.comTenant(tenantId, async (conn) => {
+        await conn.execute(
+          `INSERT INTO mensagem
+             (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
+           VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sent', now())`,
+          {
+            cv: resultado.conversaId,
+            ct: resultado.contatoId,
+            num: resultado.numeroId,
+            atd: resultado.escolhido,
+            wamid: wamid || null,
+            txt: aviso,
+          }
+        );
+      });
+      publish({
+        tipo: 'mensagem',
+        direcao: 'out',
+        conversaId: resultado.conversaId,
+        contatoId: resultado.contatoId,
+        atendenteId: resultado.escolhido,
+        departamentoId,
+        tenantId,
+      });
+    } catch (err) {
+      console.error(
+        `[fila] não foi possível avisar indisponibilidade na conversa ${resultado.conversaId}:`,
+        err.message
+      );
+    }
+  }
 
   if (resultado.resto > 0) atribuir(departamentoId); // drena a fila
 }

@@ -68,6 +68,13 @@ async function processarEntrada(tenantId, conversaId, texto) {
       const cv = await carregarConversa(conn, tenantId, conversaId);
       if (!cv) return;
 
+      // IA é add-on vendido à parte (FIL-70-ia): plano desligado ⇒ o bot nem
+      // tenta responder, mesmo que ia_config ainda tenha um provedor salvo de
+      // uma configuração anterior do operador. Checagem server-side, não só
+      // de UI — quem liga/desliga é operador/tenants.js::definirIa.
+      const tenantRow = await conn.execute(`SELECT ia_habilitada FROM tenant WHERE id = :tenantId`, { tenantId });
+      if ((tenantRow.rows[0] || {}).IA_HABILITADA !== 'S') return;
+
       if (!(await auth.autorizado(conn, tenantId, cv.telefone, cv.numeroId))) {
         await responder(conn, tenantId, cv, ['Olá! Este canal é restrito. Fale com a TI da Multicanal para liberar seu acesso.']);
         return;

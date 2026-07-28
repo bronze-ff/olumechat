@@ -19,20 +19,19 @@
 // módulos um a um seria mexer em arquivo de outro ticket, e uma divergência
 // entre as duas seria justamente um buraco de isolamento.
 //
-//  3. SESSÃO DE SUPORTE É SOMENTE-LEITURA, E ISSO É DECIDIDO AQUI (FIL-70).
-//     O operador entra num tenant com um token marcado `suporte: true`. Dar a
-//     ele o papel AUDITOR não basta: AUDITOR só é barrado nas rotas que se
-//     lembram de checar (`exigirPapel`, o guarda `naoAuditor` de conversas e
-//     contatos) — e várias mutações não checam nada (POST/DELETE
-//     /api/atalhos, PUT /api/presenca). Uma promessa de "somente-leitura" que
-//     depende de cada rota lembrar é uma promessa quebrada na próxima rota
-//     nova. Então o bloqueio é AQUI, no único ponto por onde toda rota de
-//     tenant passa, e é FAIL-CLOSED: qualquer método que não seja de leitura
-//     morre na porta, salvo uma allowlist mínima de plumbing de sessão.
+//  3. SESSÃO DE IMPLANTAÇÃO DO OPERADOR É ADMINISTRATIVA E AUDITADA.
+//     O operador entra em UM tenant escolhido com um token curto marcado
+//     `suporte: true`. A fronteira continua sendo o tenantId assinado no token,
+//     mas as mutações são permitidas porque o time Falatta precisa implantar e
+//     configurar clientes que não têm equipe técnica. Toda tentativa de escrita
+//     é registrada AQUI, antes da rota, inclusive nas rotas que não possuem
+//     auditoria própria. O operador não vira atendente nem entra na distribuição
+//     de filas: essa separação continua no perfil fixo de auth/rbac.js.
 'use strict';
 
 const jwt = require('jsonwebtoken');
 const blacklist = require('../utils/tokenBlacklist');
+const db = require('../db/pool');
 const { SECRET } = require('./secret');
 
 /** Aceita só inteiro positivo (o id vem de `bigint GENERATED ... IDENTITY`). */
@@ -43,28 +42,37 @@ function tenantValido(v) {
 
 const METODOS_DE_LEITURA = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-// Únicos não-GET liberados para a sessão de suporte. Não tocam dado do tenant:
-//  • /api/auth/logout   — encerrar a própria sessão precisa continuar possível;
-//  • /api/stream/ticket — emite um ticket EM MEMÓRIA (auth/sseTicket.js) para
-//    abrir o SSE; sem ele o operador diagnostica um inbox congelado.
-// Qualquer coisa fora desta lista é 403. Acrescentar algo aqui é decisão de
-// segurança, não conveniência.
-const SUPORTE_LIBERADOS = new Set(['/api/auth/logout', '/api/stream/ticket']);
-
 /** Caminho da requisição sem query string e sem barra final. */
 function caminhoDaRequisicao(req) {
   const bruto = String(req.originalUrl || req.url || '').split('?')[0];
   return bruto.length > 1 ? bruto.replace(/\/+$/, '') : bruto;
 }
 
-/**
- * A requisição é permitida para uma sessão de suporte do operador?
- * Exportada para teste — a regra é curta, mas é a que sustenta a promessa de
- * "o operador diagnostica, não mexe".
- */
-function leituraDeSuporte(req) {
-  if (METODOS_DE_LEITURA.has(req.method)) return true;
-  return SUPORTE_LIBERADOS.has(caminhoDaRequisicao(req));
+function mutacaoDeSuporte(req) {
+  if (METODOS_DE_LEITURA.has(req.method)) return false;
+  // Ticket SSE só cria um valor efêmero em memória; não altera o cliente e
+  // ocorre a cada reconexão, portanto não deve poluir a auditoria.
+  return caminhoDaRequisicao(req) !== '/api/stream/ticket';
+}
+
+async function auditarMutacaoDeSuporte(req, decoded, tenantId) {
+  if (!mutacaoDeSuporte(req)) return;
+  const caminho = caminhoDaRequisicao(req);
+  await db.comTenant(tenantId, (conn) => conn.execute(
+    `INSERT INTO auditoria (acao, entidade, entidade_id, detalhe, ip)
+     VALUES (:acao, 'operador', :op, :det, :ip)`,
+    {
+      acao: 'suporte_mutacao',
+      op: decoded.operadorId || null,
+      det: JSON.stringify({
+        operadorId: decoded.operadorId || null,
+        operador: decoded.email || null,
+        metodo: req.method,
+        caminho,
+      }),
+      ip: req.ip || null,
+    }
+  ));
 }
 
 module.exports = async function auth(req, res, next) {
@@ -105,18 +113,17 @@ module.exports = async function auth(req, res, next) {
     return next(err);
   }
 
-  // Sessão de suporte do operador: só leitura, decidido antes de qualquer
-  // rota rodar (ver ponto 3 no cabeçalho).
-  if (decoded.suporte === true && !leituraDeSuporte(req)) {
-    return res.status(403).json({
-      error: 'Sessão de suporte é somente-leitura. Peça ao cliente para executar a ação, ou use o painel do operador.',
-    });
-  }
-
   req.user = { ...decoded, tenantId };
   req.tenantId = tenantId;
+  if (decoded.suporte === true) {
+    try {
+      await auditarMutacaoDeSuporte(req, decoded, tenantId);
+    } catch (err) {
+      return next(err);
+    }
+  }
   next();
 };
 
-module.exports.leituraDeSuporte = leituraDeSuporte; // uso em teste
-module.exports.SUPORTE_LIBERADOS = SUPORTE_LIBERADOS;
+module.exports.mutacaoDeSuporte = mutacaoDeSuporte;
+module.exports.auditarMutacaoDeSuporte = auditarMutacaoDeSuporte;

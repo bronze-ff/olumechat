@@ -12,10 +12,22 @@ const { graphGet, graphPost } = require('../graph/client');
 
 const router = express.Router();
 
+/**
+ * O cliente administra a operação, mas não credenciais/IDs da Meta. Cadastrar,
+ * registrar e alterar um canal é uma tarefa técnica feita pelo operador dentro
+ * da sessão de suporte auditada e escopada ao tenant.
+ */
+function exigirSuporteOperador(req, res, next) {
+  if (req.user && req.user.suporte === true) return next();
+  return res.status(403).json({
+    error: 'O provisionamento de canais é realizado pelo operador em um acesso de suporte.',
+  });
+}
+
 // GET /api/numeros/:id/meta-status — consulta nome/qualidade/verificação direto
 // na Meta (read-only). A chamada SAI DO SERVIDOR (que tem acesso liberado à
 // Graph API) — útil quando o navegador/máquina do admin não alcança a Meta.
-router.get('/:id/meta-status', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res) => {
+router.get('/:id/meta-status', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
@@ -40,7 +52,7 @@ router.get('/:id/meta-status', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, r
 // body { pin } = PIN de 6 dígitos da verificação em duas etapas. O PIN vem da UI
 // e NÃO é gravado — só repassado à Meta. ADMIN apenas. É o caminho que conecta o
 // número sem depender do botão "Ativar" da interface da Meta (que pode estar gateado).
-router.post('/:id/registrar', exigirPapel('ADMIN'), async (req, res) => {
+router.post('/:id/registrar', exigirSuporteOperador, async (req, res) => {
   const id = Number(req.params.id);
   const pin = String((req.body && req.body.pin) || '').trim();
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
@@ -60,8 +72,8 @@ router.post('/:id/registrar', exigirPapel('ADMIN'), async (req, res) => {
   }
 });
 
-// GET /api/numeros — lista (ADMIN/SUPERVISOR).
-router.get('/', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
+// GET /api/numeros — lista (ADMIN/SUPERVISOR/AUDITOR).
+router.get('/', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req, res, next) => {
   try {
     const rows = await db.comTenant(req.tenantId, async (conn) => {
       const r = await conn.execute(
@@ -124,8 +136,8 @@ router.get('/lista', async (req, res, next) => {
   }
 });
 
-// POST /api/numeros — pré-cadastro manual { phoneNumberId, displayPhone?, ... } (ADMIN).
-router.post('/', exigirPapel('ADMIN'), async (req, res, next) => {
+// POST /api/numeros — pré-cadastro manual feito pelo operador em suporte.
+router.post('/', exigirSuporteOperador, async (req, res, next) => {
   const b = req.body || {};
   const phoneNumberId = String(b.phoneNumberId || '').trim();
   if (!phoneNumberId) return res.status(400).json({ error: 'phoneNumberId obrigatório (ID do número no painel Meta)' });
@@ -161,7 +173,7 @@ router.post('/', exigirPapel('ADMIN'), async (req, res, next) => {
 // PUT /api/numeros/:id — { nomeExibicao?, departamentoPadraoId?, codfilial?, ativo?, modo? } (ADMIN).
 // modo='ia' liga o bot de IA nesse número (só telefones autorizados respondidos;
 // não-autorizados = fail-closed). 'padrao' = fluxo determinístico / inbox humano.
-router.put('/:id', exigirPapel('ADMIN'), async (req, res, next) => {
+router.put('/:id', exigirSuporteOperador, async (req, res, next) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
   const b = req.body || {};

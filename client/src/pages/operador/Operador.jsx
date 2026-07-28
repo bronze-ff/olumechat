@@ -1,82 +1,516 @@
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useMemo, useState, useEffect } from 'react';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiOperador, { CHAVE_TOKEN } from '../../services/apiOperador';
 import Spinner from '../../components/ui/Spinner';
 import Confirmar from '../../components/ui/Confirmar';
+import Brand from '../../components/ui/Brand';
+import Icon from '../../components/ui/Icon';
+import ThemeMenu from '../../components/ui/ThemeMenu';
 
-// Painel do OPERADOR (FIL-70): provisionar e administrar os clientes do
-// Falatta. Fora do RBAC de tenant — nada aqui usa o AuthContext do painel do
-// cliente; a sessão vive em services/apiOperador.js.
-
-const STATUS_COR = {
-  ativo:     'bg-emerald-50 text-emerald-700',
-  suspenso:  'bg-amber-50 text-amber-700',
-  encerrado: 'bg-stone-100 text-stone-500',
+const STATUS = {
+  ativo: { label: 'Ativo', className: 'bg-emerald-50 text-emerald-800 border-emerald-200', dot: 'bg-emerald-500' },
+  suspenso: { label: 'Suspenso', className: 'bg-amber-50 text-amber-800 border-amber-200', dot: 'bg-amber-500' },
+  encerrado: { label: 'Encerrado', className: 'bg-stone-100 text-stone-700 border-stone-200', dot: 'bg-stone-400' },
 };
 
-function Metrica({ valor, label }) {
+function Status({ value }) {
+  const status = STATUS[value] || STATUS.encerrado;
   return (
-    <div className="text-center px-2">
-      <p className="font-mono text-sm text-stone-800 tabular">{valor ?? 0}</p>
-      <p className="text-[10px] uppercase tracking-wide text-stone-400">{label}</p>
-    </div>
+    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px] font-semibold ${status.className}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+      {status.label}
+    </span>
   );
 }
 
-/** Caixa do convite: aparece UMA vez, logo depois de provisionar. */
 function Convite({ dados, onFechar }) {
   const [copiado, setCopiado] = useState(false);
+  const copiar = async () => {
+    await navigator.clipboard?.writeText(dados.convite.link);
+    setCopiado(true);
+  };
+
   return (
-    <div className="col-span-12 bg-amber-50 border border-amber-300 rounded-2xl p-4">
-      <div className="flex items-start gap-2">
-        <span className="section-bar mt-1" />
+    <section className="app-panel border-emerald-200 overflow-hidden" aria-live="polite">
+      <div className="px-5 py-4 flex flex-col lg:flex-row lg:items-start gap-4">
+        <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+          <Icon name="check" size={20} strokeWidth={2.2} />
+        </div>
         <div className="min-w-0 flex-1">
-          <p className="font-display font-bold text-sm text-stone-800">
-            Convite de {dados.usuario.email} — copie agora
+          <h2 className="font-semibold text-ink-950">Cliente criado. Envie o convite agora.</h2>
+          <p className="mt-1 text-sm text-stone-600 max-w-[72ch]">
+            O acesso de <strong>{dados.usuario.email}</strong> está pronto. Este link funciona uma única vez e expira em{' '}
+            {new Date(dados.convite.expiraEm).toLocaleString('pt-BR')}.
           </p>
-          <p className="text-xs text-stone-600 mt-1">
-            Ainda não há envio de e-mail: repasse este link ao cliente. Ele vale
-            uma vez só e expira em {new Date(dados.convite.expiraEm).toLocaleString('pt-BR')}.
-            Fechando esta caixa, o link não é exibido de novo.
-          </p>
-          <p className="mt-2 font-mono text-[11px] break-all bg-white border border-amber-200 rounded p-2">
-            {dados.convite.link}
+          <div className="mt-3 flex flex-col sm:flex-row gap-2">
+            <code className="min-w-0 flex-1 px-3 py-2.5 rounded-lg bg-paper-100 border border-paper-300 text-xs text-stone-700 break-all">
+              {dados.convite.link}
+            </code>
+            <button onClick={copiar} className="min-h-10 px-4 rounded-lg bg-ink-900 hover:bg-ink-950 text-white text-sm font-semibold inline-flex items-center justify-center gap-2">
+              <Icon name={copiado ? 'check' : 'copy'} size={16} />
+              {copiado ? 'Link copiado' : 'Copiar convite'}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-stone-500">
+            Próximo passo: peça ao administrador para definir a senha e conectar a conta da Meta no painel da empresa.
           </p>
         </div>
+        <button onClick={onFechar} className="text-xs font-semibold text-stone-500 hover:text-ink-950">Fechar</button>
       </div>
-      <div className="flex gap-2 mt-3">
-        <button
-          onClick={() => { navigator.clipboard?.writeText(dados.convite.link); setCopiado(true); }}
-          className="px-3 py-2 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold">
-          {copiado ? 'Copiado ✓' : 'Copiar link'}
-        </button>
-        <button onClick={onFechar}
-          className="px-3 py-2 rounded-xl border border-black/20 text-stone-700 text-xs font-semibold">
-          Já copiei, fechar
-        </button>
+    </section>
+  );
+}
+
+function Summary({ totais, mensagens }) {
+  const items = [
+    { label: 'Clientes cadastrados', value: totais.clientes, detail: 'total da carteira' },
+    { label: 'Clientes ativos', value: totais.ativos, detail: `${totais.suspensos} suspensos` },
+    { label: 'Conversas no mês', value: totais.conversas, detail: 'em todos os clientes' },
+    { label: 'Mensagens enviadas', value: mensagens, detail: 'no mês atual' },
+  ];
+  return (
+    <section className="app-panel overflow-hidden">
+      <div className="grid grid-cols-2 xl:grid-cols-4 divide-x divide-y xl:divide-y-0 divide-paper-300">
+        {items.map((item) => (
+          <div key={item.label} className="px-4 py-4 md:px-5">
+            <p className="text-xs font-medium text-stone-600">{item.label}</p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <strong className="text-2xl font-semibold tracking-[-0.03em] text-ink-950 tabular">{item.value}</strong>
+              <span className="text-[11px] text-stone-500">{item.detail}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function Provisionamento({ form, setForm, podeProvisionar, provisionar }) {
+  return (
+    <section className="app-panel overflow-hidden">
+      <header className="px-5 py-4 border-b border-paper-300">
+        <div className="flex items-start gap-3">
+          <span className="w-8 h-8 rounded-lg bg-brand-100 text-brand-800 flex items-center justify-center text-sm font-semibold">1</span>
+          <div>
+            <h2 className="font-semibold text-ink-950">Cadastrar um novo cliente</h2>
+            <p className="mt-0.5 text-xs text-stone-600">Cria a empresa, o primeiro administrador e o convite de acesso em uma única operação.</p>
+          </div>
+        </div>
+      </header>
+
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (podeProvisionar) provisionar.mutate();
+        }}
+        className="p-5 space-y-5"
+      >
+        <div>
+          <label htmlFor="empresa-nome" className="field-label">Nome da empresa</label>
+          <input
+            id="empresa-nome"
+            className="input-field"
+            value={form.nome}
+            placeholder="Ex.: Clínica Horizonte"
+            onChange={(event) => setForm((prev) => ({ ...prev, nome: event.target.value }))}
+          />
+          <p className="mt-1.5 text-xs text-stone-500">Este é o nome que aparecerá no painel e nos relatórios.</p>
+        </div>
+
+        <div>
+          <label htmlFor="empresa-slug" className="field-label">Identificador de acesso</label>
+          <div className="flex rounded-lg focus-within:ring-2 focus-within:ring-brand-200">
+            <span className="min-h-11 px-3 flex items-center rounded-l-lg border border-r-0 border-paper-400 bg-paper-100 text-xs text-stone-500">
+              falatta.com/
+            </span>
+            <input
+              id="empresa-slug"
+              className="input-field !rounded-l-none font-mono"
+              value={form.slug}
+              placeholder="clinica-horizonte"
+              autoCapitalize="none"
+              spellCheck="false"
+              onChange={(event) => setForm((prev) => ({ ...prev, slug: event.target.value }))}
+            />
+          </div>
+          <p className="mt-1.5 text-xs text-stone-500">Use letras minúsculas, números e hífen. Esse identificador não muda depois.</p>
+        </div>
+
+        <div className="pt-1 border-t border-paper-300">
+          <p className="mt-4 text-sm font-semibold text-ink-950">Administrador inicial</p>
+          <p className="mt-0.5 mb-3 text-xs text-stone-500">Essa pessoa receberá o convite e configurará a empresa.</p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="admin-nome" className="field-label">Nome <span className="font-normal text-stone-500">(opcional)</span></label>
+              <input
+                id="admin-nome"
+                className="input-field"
+                value={form.adminNome}
+                placeholder="Ana Martins"
+                onChange={(event) => setForm((prev) => ({ ...prev, adminNome: event.target.value }))}
+              />
+            </div>
+            <div>
+              <label htmlFor="admin-email" className="field-label">E-mail de acesso</label>
+              <input
+                id="admin-email"
+                type="email"
+                className="input-field"
+                value={form.adminEmail}
+                placeholder="ana@empresa.com.br"
+                autoCapitalize="none"
+                spellCheck="false"
+                onChange={(event) => setForm((prev) => ({ ...prev, adminEmail: event.target.value }))}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="pt-1 flex flex-col sm:flex-row sm:items-center gap-3">
+          <button
+            type="submit"
+            disabled={!podeProvisionar || provisionar.isPending}
+            className="min-h-11 px-5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+          >
+            {provisionar.isPending ? <Spinner size="sm" /> : <Icon name="plus" size={17} />}
+            {provisionar.isPending ? 'Criando cliente…' : 'Criar cliente e convite'}
+          </button>
+          <p className="text-xs text-stone-500">Se alguma etapa falhar, nada é criado.</p>
+        </div>
+      </form>
+    </section>
+  );
+}
+
+const IA_PROVEDORES = [
+  { id: 'anthropic', rotulo: 'Anthropic (Claude)', modelo: 'Ex.: claude-opus-4-8', base: null },
+  { id: 'openai', rotulo: 'OpenAI', modelo: 'Ex.: gpt-4o', base: 'https://api.openai.com/v1' },
+  { id: 'openrouter', rotulo: 'OpenRouter', modelo: 'Ex.: anthropic/claude-3.5-sonnet', base: 'https://openrouter.ai/api/v1' },
+  { id: 'groq', rotulo: 'Groq', modelo: 'Ex.: llama-3.1-70b-versatile', base: 'https://api.groq.com/openai/v1' },
+  { id: 'ollama', rotulo: 'Ollama (local)', modelo: 'Ex.: llama3.1', base: 'http://localhost:11434/v1' },
+  { id: 'vllm', rotulo: 'vLLM (self-hosted)', modelo: 'Ex.: meta-llama/Llama-3.1-70B', base: 'http://localhost:8000/v1' },
+];
+
+// IA é add-on vendido à parte (ver server/operador/tenants.js::salvarIaConfig):
+// só o operador liga o plano e configura provider/modelo/chave por cliente —
+// o admin do tenant (IaConfig.jsx) só enxerga o status, nunca edita isto.
+function IaModal({ tenant, onClose }) {
+  const qc = useQueryClient();
+  const [provider, setProvider] = useState('anthropic');
+  const [modelo, setModelo] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [erro, setErro] = useState('');
+  const [salvo, setSalvo] = useState(false);
+
+  const cfg = useQuery({
+    queryKey: ['operador', 'ia-config', tenant.id],
+    queryFn: () => apiOperador.get(`/tenants/${tenant.id}/ia-config`).then((r) => r.data),
+  });
+  useEffect(() => {
+    if (cfg.data?.provider) {
+      setProvider(cfg.data.provider);
+      setModelo(cfg.data.modelo || '');
+      setBaseUrl(cfg.data.baseUrl || '');
+    }
+  }, [cfg.data]);
+
+  const habilitada = tenant.iaHabilitada === 'S';
+  const alternarHabilitada = useMutation({
+    mutationFn: (valor) => apiOperador.post(`/tenants/${tenant.id}/ia`, { habilitada: valor }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['operador', 'tenants'] }),
+  });
+
+  const prov = IA_PROVEDORES.find((p) => p.id === provider) || IA_PROVEDORES[0];
+  const exigeBase = provider !== 'anthropic';
+  const modeloEhUrl = /^https?:\/\//i.test(modelo.trim());
+  const podeSalvar = provider && modelo.trim() && !modeloEhUrl && (!exigeBase || baseUrl.trim()) && (cfg.data?.ativo || apiKey.trim());
+
+  const salvar = useMutation({
+    mutationFn: () => apiOperador.put(`/tenants/${tenant.id}/ia-config`, {
+      provider, modelo: modelo.trim(), baseUrl: exigeBase ? baseUrl.trim() : undefined, apiKey: apiKey.trim() || undefined,
+    }),
+    onSuccess: () => {
+      setErro(''); setSalvo(true); setApiKey('');
+      qc.invalidateQueries({ queryKey: ['operador', 'ia-config', tenant.id] });
+      setTimeout(() => setSalvo(false), 2500);
+    },
+    onError: (e) => setErro(e.response?.data?.error || 'Falha ao salvar.'),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-ink-950/60 backdrop-blur-[1px]" onClick={onClose} />
+      <div className="relative w-full sm:max-w-md bg-white border border-paper-400 rounded-t-[10px] sm:rounded-[10px] shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+        <div className="px-5 py-4 border-b border-paper-300 flex items-center gap-3">
+          <span className="w-9 h-9 rounded-lg bg-brand-100 text-brand-800 flex items-center justify-center shrink-0">
+            <Icon name="bot" size={18} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="font-semibold text-ink-950 truncate">Configuração de IA</h2>
+            <p className="text-xs text-stone-500 truncate">{tenant.nome}</p>
+          </div>
+          <button onClick={onClose} className="w-9 h-9 rounded-lg border border-paper-400 text-stone-500 hover:bg-paper-100 hover:text-ink-950" aria-label="Fechar">✕</button>
+        </div>
+        <div className="modal-body space-y-4">
+          <label className="flex items-center justify-between gap-3 p-3 rounded-lg border border-paper-400 bg-paper-50 cursor-pointer">
+            <span>
+              <span className="block text-sm font-medium text-ink-950">IA incluída no plano</span>
+              <span className="block text-xs text-stone-500 mt-0.5">Liga/desliga o add-on de IA para este cliente.</span>
+            </span>
+            <input type="checkbox" checked={habilitada} disabled={alternarHabilitada.isPending}
+              onChange={(e) => alternarHabilitada.mutate(e.target.checked)}
+              className="w-5 h-5 accent-brand-700 shrink-0" />
+          </label>
+
+          {cfg.isLoading ? <div className="p-6 flex justify-center"><Spinner /></div> : (
+            <>
+              <div>
+                <label className="field-label">Provedor</label>
+                <select className="input-field" value={provider} onChange={(e) => { setProvider(e.target.value); setErro(''); }}>
+                  {IA_PROVEDORES.map((p) => <option key={p.id} value={p.id}>{p.rotulo}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="field-label">Modelo</label>
+                <input className="input-field font-mono" value={modelo} onChange={(e) => setModelo(e.target.value)} placeholder={prov.modelo} />
+                {modeloEhUrl && <p className="text-[11px] text-red-600 mt-1">Cole só o ID do modelo — a URL vai em Base URL.</p>}
+              </div>
+              {exigeBase && (
+                <div>
+                  <label className="field-label">Base URL</label>
+                  <input className="input-field font-mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={prov.base || 'https://…/v1'} />
+                </div>
+              )}
+              <div>
+                <label className="field-label">API key</label>
+                <input type="password" autoComplete="new-password" className="input-field font-mono" value={apiKey}
+                  onChange={(e) => { setApiKey(e.target.value); setErro(''); }}
+                  placeholder={cfg.data?.ativo ? '•••••••• (guardada — deixe em branco para manter)' : 'Cole a chave do provedor'} />
+              </div>
+              <p className="text-[11px] text-stone-500">
+                {cfg.data?.ativo ? `Ativo: ${cfg.data.provider} · ${cfg.data.modelo}` : 'Nenhum provedor configurado ainda — a IA não roda até salvar aqui.'}
+              </p>
+              {erro && <p className="text-xs text-red-600">{erro}</p>}
+            </>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onClose} className="flex-1 min-h-10 rounded-lg border border-paper-400 bg-white hover:bg-paper-100 text-stone-700 font-semibold text-sm">Fechar</button>
+          <button onClick={() => salvar.mutate()} disabled={!podeSalvar || salvar.isPending || cfg.isLoading}
+            className="flex-1 min-h-10 rounded-lg bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
+            {salvar.isPending ? 'Salvando…' : salvo ? '✓ Salvo' : 'Salvar provedor'}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-export default function Operador() {
+function ClientList({ lista, tenants, renomeando, setRenomeando, renomear, setConfirmacao, suporte, alterarStatus, setIaModal }) {
+  return (
+    <section className="app-panel overflow-hidden">
+      <header className="px-5 py-4 flex flex-wrap items-center gap-3 border-b border-paper-300">
+        <div className="flex-1">
+          <h2 className="font-semibold text-ink-950">Clientes</h2>
+          <p className="mt-0.5 text-xs text-stone-500">Acompanhe adoção, acesse o suporte e controle o status de cada empresa.</p>
+        </div>
+        <span className="text-xs font-medium text-stone-500">{lista.length} {lista.length === 1 ? 'empresa' : 'empresas'}</span>
+      </header>
+
+      {tenants.isLoading && <div className="p-12 flex justify-center"><Spinner /></div>}
+      {tenants.isError && <p className="p-5 text-sm text-red-700">Não foi possível carregar os clientes.</p>}
+
+      <div className="divide-y divide-paper-300">
+        {lista.map((tenant) => (
+          <article key={tenant.id} className="px-5 py-4 hover:bg-paper-50">
+            <div className="flex flex-col xl:flex-row xl:items-center gap-4">
+              <div className="min-w-0 xl:w-56 shrink-0">
+                {renomeando?.id === tenant.id ? (
+                  <form
+                    className="flex gap-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const nome = renomeando.nome.trim();
+                      if (nome && nome !== tenant.nome) renomear.mutate({ id: tenant.id, nome });
+                      else setRenomeando(null);
+                    }}
+                  >
+                    <input
+                      autoFocus
+                      className="input-field !min-h-9 !py-1.5"
+                      value={renomeando.nome}
+                      onChange={(event) => setRenomeando({ id: tenant.id, nome: event.target.value })}
+                    />
+                    <button type="submit" disabled={renomear.isPending} className="px-3 rounded-lg bg-brand-700 text-white text-xs font-semibold">Salvar</button>
+                    <button type="button" onClick={() => setRenomeando(null)} className="px-3 rounded-lg border border-paper-400 text-stone-700 text-xs font-semibold">Cancelar</button>
+                  </form>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-sm text-ink-950 truncate">{tenant.nome}</p>
+                      <Status value={tenant.status} />
+                      {tenant.iaHabilitada === 'S' && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-brand-200 bg-brand-50 text-brand-700 text-[10px] font-semibold shrink-0" title="IA incluída no plano">
+                          <Icon name="bot" size={11} /> IA
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 font-mono text-[11px] text-stone-500">{tenant.slug}</p>
+                  </>
+                )}
+              </div>
+
+              <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-5 gap-y-2 flex-1">
+                {[
+                  ['Conversas/mês', tenant.conversasMes],
+                  ['Mensagens/mês', tenant.mensagensMes],
+                  ['Atendentes', tenant.atendentesAtivos],
+                  ['Canais', tenant.numerosConectados],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <dt className="text-[11px] text-stone-500">{label}</dt>
+                    <dd className="mt-0.5 text-sm font-semibold text-ink-950 tabular">{value ?? 0}</dd>
+                  </div>
+                ))}
+              </dl>
+
+              <div className="flex flex-wrap gap-2 xl:justify-end">
+                <button
+                  onClick={() => setConfirmacao({
+                    titulo: 'Iniciar implantação',
+                    mensagem: `Você entrará em "${tenant.nome}" com administração completa para configurar equipe, departamentos, canais, fluxos e regras da operação.`,
+                    dica: 'A sessão é temporária, limitada a esta empresa e cada alteração fica registrada na auditoria.',
+                    confirmarTexto: 'Administrar cliente',
+                    acao: () => suporte.mutate({ id: tenant.id }),
+                  })}
+                  className="min-h-9 px-3 rounded-lg border border-paper-400 bg-white text-stone-700 hover:border-brand-300 hover:text-brand-800 text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Icon name="support" size={15} />
+                  Implantar
+                </button>
+                <button
+                  onClick={() => setRenomeando({ id: tenant.id, nome: tenant.nome })}
+                  className="min-h-9 px-3 rounded-lg border border-paper-400 bg-white text-stone-700 hover:border-brand-300 hover:text-brand-800 text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Icon name="edit" size={15} />
+                  Renomear
+                </button>
+                <button
+                  onClick={() => setIaModal(tenant)}
+                  className="min-h-9 px-3 rounded-lg border border-paper-400 bg-white text-stone-700 hover:border-brand-300 hover:text-brand-800 text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Icon name="bot" size={15} />
+                  IA
+                </button>
+                {tenant.status === 'ativo' ? (
+                  <button
+                    onClick={() => setConfirmacao({
+                      titulo: 'Suspender cliente',
+                      mensagem: `Suspender "${tenant.nome}"?`,
+                      dica: 'Isso bloqueia o login dos usuários e pausa os disparos de campanha.',
+                      confirmarTexto: 'Suspender cliente',
+                      perigo: true,
+                      acao: () => alterarStatus.mutate({ id: tenant.id, acao: 'suspender' }),
+                    })}
+                    className="min-h-9 px-3 rounded-lg text-amber-800 bg-amber-50 hover:bg-amber-100 text-xs font-semibold"
+                  >
+                    Suspender
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => alterarStatus.mutate({ id: tenant.id, acao: 'reativar' })}
+                    className="min-h-9 px-3 rounded-lg text-emerald-800 bg-emerald-50 hover:bg-emerald-100 text-xs font-semibold"
+                  >
+                    Reativar
+                  </button>
+                )}
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {tenants.data?.length === 0 && (
+        <div className="px-5 py-12 text-center">
+          <span className="mx-auto w-11 h-11 rounded-xl bg-paper-200 text-stone-500 flex items-center justify-center">
+            <Icon name="building" size={21} />
+          </span>
+          <h3 className="mt-3 text-sm font-semibold text-ink-950">Sua carteira ainda está vazia</h3>
+          <p className="mt-1 mx-auto max-w-md text-sm text-stone-600">
+            Cadastre a primeira empresa no formulário abaixo. Ao concluir, você receberá o convite do administrador para envio.
+          </p>
+          <Link to="/operador/novo-cliente" className="mt-4 inline-flex min-h-10 items-center gap-2 px-4 rounded-lg bg-brand-700 text-white text-sm font-semibold">
+            <Icon name="plus" size={16} />
+            Cadastrar primeiro cliente
+          </Link>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Audit({ auditoria, filtro, setFiltro, lista }) {
+  return (
+    <section className="app-panel overflow-hidden">
+      <header className="px-5 py-4 flex flex-wrap items-center gap-3 border-b border-paper-300">
+        <div className="flex-1">
+          <h2 className="font-semibold text-ink-950">Atividade administrativa</h2>
+          <p className="mt-0.5 text-xs text-stone-500">Trilha das ações realizadas pelos operadores da Falatta.</p>
+        </div>
+        <select className="min-h-10 text-xs border border-paper-400 rounded-lg px-3 bg-white text-stone-700" value={filtro} onChange={(event) => setFiltro(event.target.value)}>
+          <option value="">Todos os clientes</option>
+          {lista.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.nome}</option>)}
+        </select>
+      </header>
+      {auditoria.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
+      <div className="overflow-x-auto max-h-96">
+        <table className="w-full min-w-[720px] text-xs">
+          <thead className="sticky top-0 bg-paper-100 text-stone-600">
+            <tr>
+              <th className="px-5 py-2.5 text-left font-semibold">Data e hora</th>
+              <th className="px-5 py-2.5 text-left font-semibold">Ação</th>
+              <th className="px-5 py-2.5 text-left font-semibold">Operador</th>
+              <th className="px-5 py-2.5 text-left font-semibold">Cliente</th>
+              <th className="px-5 py-2.5 text-left font-semibold">IP</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-paper-300">
+            {(auditoria.data || []).map((item) => (
+              <tr key={item.id} className="hover:bg-paper-50">
+                <td className="px-5 py-3 font-mono text-stone-500 tabular">{new Date(item.criadoEm).toLocaleString('pt-BR')}</td>
+                <td className="px-5 py-3 font-semibold text-ink-950">{item.acao}</td>
+                <td className="px-5 py-3 text-stone-600">{item.operadorEmail}</td>
+                <td className="px-5 py-3 font-mono text-brand-800">{item.tenantSlug || '—'}</td>
+                <td className="px-5 py-3 font-mono text-stone-500">{item.ip || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {auditoria.data?.length === 0 && <p className="p-8 text-sm text-stone-600 text-center">Nenhuma ação corresponde a este filtro.</p>}
+      </div>
+    </section>
+  );
+}
+
+export default function Operador({ secao = 'clientes' }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [form, setForm] = useState({ nome: '', slug: '', adminNome: '', adminEmail: '' });
   const [erro, setErro] = useState('');
   const [convite, setConvite] = useState(null);
-  const [confirmacao, setConfirmacao] = useState(null); // { titulo, mensagem, perigo, acao }
-  const [renomeando, setRenomeando] = useState(null);   // { id, nome }
+  const [confirmacao, setConfirmacao] = useState(null);
+  const [renomeando, setRenomeando] = useState(null);
   const [filtroAuditoria, setFiltroAuditoria] = useState('');
+  const [iaModal, setIaModal] = useState(null);
 
-  const eu = useQuery({ queryKey: ['operador', 'eu'], queryFn: () => apiOperador.get('/eu').then((r) => r.data) });
-  const tenants = useQuery({ queryKey: ['operador', 'tenants'], queryFn: () => apiOperador.get('/tenants').then((r) => r.data) });
+  const eu = useQuery({ queryKey: ['operador', 'eu'], queryFn: () => apiOperador.get('/eu').then((response) => response.data) });
+  const tenants = useQuery({ queryKey: ['operador', 'tenants'], queryFn: () => apiOperador.get('/tenants').then((response) => response.data) });
   const auditoria = useQuery({
     queryKey: ['operador', 'auditoria', filtroAuditoria],
-    queryFn: () => apiOperador
-      .get('/auditoria', { params: filtroAuditoria ? { tenantId: filtroAuditoria } : {} })
-      .then((r) => r.data),
+    queryFn: () => apiOperador.get('/auditoria', { params: filtroAuditoria ? { tenantId: filtroAuditoria } : {} }).then((response) => response.data),
+    enabled: secao === 'auditoria',
   });
 
   const recarregar = () => {
@@ -89,52 +523,41 @@ export default function Operador() {
       nome: form.nome.trim(),
       slug: form.slug.trim().toLowerCase(),
       admin: { nome: form.adminNome.trim() || undefined, email: form.adminEmail.trim().toLowerCase() },
-    }).then((r) => r.data),
+    }).then((response) => response.data),
     onSuccess: (data) => {
       setErro('');
       setConvite(data);
       setForm({ nome: '', slug: '', adminNome: '', adminEmail: '' });
       recarregar();
     },
-    onError: (e) => setErro(e.response?.data?.error || 'Não foi possível provisionar.'),
+    onError: (error) => setErro(error.response?.data?.error || 'Não foi possível criar o cliente. Revise os dados e tente novamente.'),
   });
 
   const alterarStatus = useMutation({
     mutationFn: ({ id, acao }) => apiOperador.post(`/tenants/${id}/${acao}`),
     onSuccess: () => { setConfirmacao(null); recarregar(); },
-    onError: (e) => { setConfirmacao(null); setErro(e.response?.data?.error || 'Não foi possível alterar o status.'); },
+    onError: (error) => { setConfirmacao(null); setErro(error.response?.data?.error || 'Não foi possível alterar o status do cliente.'); },
   });
 
   const renomear = useMutation({
     mutationFn: ({ id, nome }) => apiOperador.patch(`/tenants/${id}`, { nome }),
     onSuccess: () => { setRenomeando(null); recarregar(); },
-    onError: (e) => { setRenomeando(null); setErro(e.response?.data?.error || 'Não foi possível renomear.'); },
+    onError: (error) => { setRenomeando(null); setErro(error.response?.data?.error || 'Não foi possível renomear o cliente.'); },
   });
 
-  // Acesso de suporte: troca a sessão de operador por uma sessão CURTA e
-  // somente-leitura dentro do tenant, e vai para o painel do cliente. Fica
-  // registrado na auditoria que o próprio cliente lê.
-  //
-  // ⚠️ A troca é feita com uma NAVEGAÇÃO DE VERDADE (window.location), não com
-  // navigate() do router. O AuthProvider do painel do cliente lê o token do
-  // localStorage UMA VEZ, na montagem: quando esta página carregou, não havia
-  // sessão de tenant, então `user` é null. Um navigate() cairia no
-  // ProtectedRoute com user null e jogaria o operador no /login do cliente —
-  // o fluxo de suporte simplesmente não funcionaria. Recarregar remonta o app
-  // com a sessão nova e ainda descarta o cache de queries da sessão anterior.
   const suporte = useMutation({
-    mutationFn: ({ id }) => apiOperador.post(`/tenants/${id}/acesso-suporte`).then((r) => r.data),
+    mutationFn: ({ id }) => apiOperador.post(`/tenants/${id}/acesso-suporte`).then((response) => response.data),
     onSuccess: (data) => {
       localStorage.setItem('token', data.token);
       localStorage.setItem('empresa', data.tenant.slug);
       setConfirmacao(null);
       window.location.assign('/conversas');
     },
-    onError: (e) => { setConfirmacao(null); setErro(e.response?.data?.error || 'Não foi possível abrir o suporte.'); },
+    onError: (error) => { setConfirmacao(null); setErro(error.response?.data?.error || 'Não foi possível abrir o acesso de suporte.'); },
   });
 
   async function sair() {
-    try { await apiOperador.post('/logout'); } catch { /* ignora */ }
+    try { await apiOperador.post('/logout'); } catch { /* encerra a sessão local mesmo sem resposta */ }
     localStorage.removeItem(CHAVE_TOKEN);
     navigate('/operador/login', { replace: true });
   }
@@ -143,193 +566,225 @@ export default function Operador() {
   const lista = tenants.data || [];
   const totais = useMemo(() => ({
     clientes: lista.length,
-    ativos: lista.filter((t) => t.status === 'ativo').length,
-    conversas: lista.reduce((s, t) => s + (t.conversasMes || 0), 0),
+    ativos: lista.filter((tenant) => tenant.status === 'ativo').length,
+    suspensos: lista.filter((tenant) => tenant.status === 'suspenso').length,
+    conversas: lista.reduce((sum, tenant) => sum + (tenant.conversasMes || 0), 0),
   }), [lista]);
+  const mensagens = useMemo(() => lista.reduce((sum, tenant) => sum + (tenant.mensagensMes || 0), 0), [lista]);
+  const inicial = (eu.data?.nome || eu.data?.email || '?').slice(0, 1).toUpperCase();
+  const secoes = [
+    { id: 'clientes', label: 'Clientes', descricao: 'Carteira e suporte', icon: 'building', to: '/operador/clientes', grupo: 'Carteira' },
+    { id: 'novo-cliente', label: 'Novo cliente', descricao: 'Provisionar empresa', icon: 'plus', to: '/operador/novo-cliente', grupo: 'Carteira' },
+    { id: 'auditoria', label: 'Auditoria', descricao: 'Atividade administrativa', icon: 'history', to: '/operador/auditoria', grupo: 'Governança' },
+  ];
+  const atual = secoes.find((item) => item.id === secao) || secoes[0];
 
   return (
-    <div className="min-h-screen bg-paper-200">
-      <header className="navy-gradient text-white sticky top-0 z-20">
-        <div className="max-w-screen-xl mx-auto px-4 py-3 flex items-center gap-3">
-          <span className="section-bar" />
-          <div className="flex-1 min-w-0">
-            <h1 className="font-display font-bold text-base leading-tight">Painel do operador</h1>
-            <p className="text-[11px] text-white/60 font-mono truncate">
-              {eu.data?.email || '…'} · {totais.ativos}/{totais.clientes} clientes ativos · {totais.conversas} conversas no mês
-            </p>
-          </div>
-          <button onClick={sair} className="text-xs font-semibold text-white/80 hover:text-white">Sair</button>
+    <div className="admin-surface min-h-screen bg-paper-50 lg:flex">
+      <aside className="product-sidebar hidden lg:flex w-[264px] h-screen sticky top-0 self-start bg-ink-950 border-r border-white/10 flex-col shrink-0">
+        <div className="h-[72px] px-5 flex items-center border-b border-white/10">
+          <Brand inverse />
         </div>
-      </header>
 
-      <main className="max-w-screen-xl mx-auto p-4 grid grid-cols-12 gap-4 items-start">
-        {erro && (
-          <div className="col-span-12 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex gap-2">
-            <span className="flex-1">{erro}</span>
-            <button onClick={() => setErro('')} aria-label="Fechar">✕</button>
+        <div className="px-3 pt-4">
+          <div className="px-3 py-2.5 rounded-lg border border-white/10 bg-white/[0.05] flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-lg bg-brand-400 text-ink-950 flex items-center justify-center shrink-0">
+              <Icon name="pulse" size={15} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] text-white/45">Área interna Falatta</p>
+              <p className="text-[13px] font-semibold text-white truncate">Central de operações</p>
+            </div>
+            <span className="w-2 h-2 rounded-full bg-emerald-500" title="Ambiente operacional" />
           </div>
-        )}
+        </div>
 
-        {convite && <Convite dados={convite} onFechar={() => setConvite(null)} />}
-
-        {/* Provisionar */}
-        <form
-          onSubmit={(e) => { e.preventDefault(); if (podeProvisionar) provisionar.mutate(); }}
-          className="col-span-12 lg:col-span-4 lg:sticky lg:top-20 bg-white rounded-2xl border border-black/[0.06] p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="section-bar" />
-            <h2 className="font-display font-bold text-sm text-stone-800">Provisionar cliente</h2>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Empresa</label>
-            <input className="input-field" value={form.nome} placeholder="Farmácia Sol"
-              onChange={(e) => setForm((p) => ({ ...p, nome: e.target.value }))} />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">
-              Slug <span className="normal-case font-normal text-stone-400">(é o que o cliente digita no login)</span>
-            </label>
-            <input className="input-field font-mono" value={form.slug} placeholder="farmacia-sol"
-              autoCapitalize="none" spellCheck="false"
-              onChange={(e) => setForm((p) => ({ ...p, slug: e.target.value }))} />
-            <p className="text-[11px] text-stone-400 mt-1">Minúsculas, números e hífen. Não muda depois.</p>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Administrador</label>
-            <input className="input-field mb-2" value={form.adminNome} placeholder="Nome (opcional)"
-              onChange={(e) => setForm((p) => ({ ...p, adminNome: e.target.value }))} />
-            <input className="input-field" value={form.adminEmail} placeholder="ana@farmaciasol.com.br"
-              autoCapitalize="none" spellCheck="false"
-              onChange={(e) => setForm((p) => ({ ...p, adminEmail: e.target.value }))} />
-          </div>
-          <button type="submit" disabled={!podeProvisionar || provisionar.isPending}
-            className="w-full py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-40">
-            {provisionar.isPending ? 'Provisionando…' : 'Provisionar'}
-          </button>
-          <p className="text-[11px] text-stone-400">
-            Cria a empresa, o primeiro administrador e o convite de senha — tudo ou nada.
-          </p>
-        </form>
-
-        {/* Clientes */}
-        <section className="col-span-12 lg:col-span-8 bg-white rounded-2xl border border-black/[0.06] divide-y divide-black/[0.05]">
-          {tenants.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
-          {tenants.isError && <p className="p-4 text-sm text-red-600">Erro ao carregar os clientes.</p>}
-          {lista.map((t) => (
-            <div key={t.id} className="p-4">
-              <div className="flex items-center gap-3 flex-wrap">
-                <div className="min-w-0 flex-1">
-                  {renomeando?.id === t.id ? (
-                    <form className="flex gap-2"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const nome = renomeando.nome.trim();
-                        if (nome && nome !== t.nome) renomear.mutate({ id: t.id, nome });
-                        else setRenomeando(null);
-                      }}>
-                      <input autoFocus className="input-field py-1.5" value={renomeando.nome}
-                        onChange={(e) => setRenomeando({ id: t.id, nome: e.target.value })} />
-                      <button type="submit" disabled={renomear.isPending}
-                        className="px-3 rounded-xl bg-brand-700 text-white text-xs font-semibold disabled:opacity-40">
-                        Salvar
-                      </button>
-                      <button type="button" onClick={() => setRenomeando(null)}
-                        className="px-3 rounded-xl border border-black/15 text-stone-700 text-xs font-semibold">
-                        Cancelar
-                      </button>
-                    </form>
-                  ) : (
-                    <p className="font-semibold text-sm text-stone-800 truncate">{t.nome}</p>
-                  )}
-                  <p className="font-mono text-[11px] text-stone-400">{t.slug}</p>
-                </div>
-                <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${STATUS_COR[t.status] || STATUS_COR.encerrado}`}>
-                  {t.status}
-                </span>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex gap-1">
-                  <Metrica valor={t.conversasMes} label="conversas/mês" />
-                  <Metrica valor={t.mensagensMes} label="enviadas/mês" />
-                  <Metrica valor={t.atendentesAtivos} label="atendentes" />
-                  <Metrica valor={t.numerosConectados} label="números" />
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={() => setRenomeando({ id: t.id, nome: t.nome })}
-                    className="text-xs px-3 py-1.5 rounded-full border border-black/15 text-stone-700 hover:bg-stone-50">
-                    Renomear
-                  </button>
-                  <button
-                    onClick={() => setConfirmacao({
-                      titulo: 'Entrar como suporte',
-                      mensagem: `Você vai entrar em "${t.nome}" para diagnosticar, em modo somente-leitura.`,
-                      dica: 'A entrada fica registrada na auditoria que o próprio cliente enxerga. Sua sessão de operador continua válida nesta aba.',
-                      confirmarTexto: 'Entrar',
-                      acao: () => suporte.mutate({ id: t.id }),
-                    })}
-                    className="text-xs px-3 py-1.5 rounded-full border border-black/15 text-stone-700 hover:bg-stone-50">
-                    Suporte
-                  </button>
-                  {t.status === 'ativo' ? (
-                    <button
-                      onClick={() => setConfirmacao({
-                        titulo: 'Suspender cliente',
-                        mensagem: `Suspender "${t.nome}"?`,
-                        dica: 'Bloqueia o login de todos os usuários dele e pausa os disparos de campanha.',
-                        confirmarTexto: 'Suspender',
-                        perigo: true,
-                        acao: () => alterarStatus.mutate({ id: t.id, acao: 'suspender' }),
-                      })}
-                      className="text-xs px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 hover:bg-amber-100 font-medium">
-                      Suspender
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => alterarStatus.mutate({ id: t.id, acao: 'reativar' })}
-                      className="text-xs px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-medium">
-                      Reativar
-                    </button>
-                  )}
-                </div>
+        <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Painel do operador">
+          {['Carteira', 'Governança'].map((grupo) => (
+            <div key={grupo} className="mt-5 first:mt-4">
+              <p className="px-2.5 mb-1.5 text-[10px] font-semibold text-white/40">{grupo}</p>
+              <div className="space-y-0.5">
+                {secoes.filter((item) => item.grupo === grupo).map((item) => (
+                  <NavLink
+                    key={item.id}
+                    to={item.to}
+                    aria-current={item.id === atual.id ? 'page' : undefined}
+                    className={({ isActive }) => `min-h-10 px-2.5 rounded-lg border flex items-center gap-2.5 text-[13px] font-medium ${
+                      isActive
+                        ? 'bg-brand-400/15 border-brand-400/20 text-brand-300'
+                        : 'border-transparent text-white/70 hover:bg-white/[0.07] hover:text-white'
+                    }`}
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <Icon name={item.icon} size={16} className={isActive ? 'text-brand-300' : 'text-white/45'} />
+                        <span className="truncate">{item.label}</span>
+                      </>
+                    )}
+                  </NavLink>
+                ))}
               </div>
             </div>
           ))}
-          {tenants.data?.length === 0 && (
-            <p className="p-6 text-sm text-stone-500 text-center">Nenhum cliente ainda. Provisione o primeiro ao lado.</p>
-          )}
-        </section>
+        </nav>
 
-        {/* Auditoria */}
-        <section className="col-span-12 bg-white rounded-2xl border border-black/[0.06]">
-          <div className="px-4 py-3 flex items-center gap-2 border-b border-black/[0.06]">
-            <span className="section-bar" />
-            <h2 className="font-display font-bold text-sm text-stone-800 flex-1">Auditoria do operador</h2>
-            <select className="text-xs border border-black/15 rounded-lg px-2 py-1"
-              value={filtroAuditoria} onChange={(e) => setFiltroAuditoria(e.target.value)}>
-              <option value="">Todos os clientes</option>
-              {lista.map((t) => <option key={t.id} value={t.id}>{t.nome}</option>)}
-            </select>
+        <div className="p-3 border-t border-white/10">
+          <div className="px-2 py-2 flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-full bg-white/[0.08] border border-white/10 text-white flex items-center justify-center text-xs font-semibold">{inicial}</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-white truncate">{eu.data?.nome || eu.data?.email || 'Operador'}</p>
+              <p className="text-[10px] text-white/45 truncate">{eu.data?.email}</p>
+            </div>
+            <button onClick={sair} className="w-9 h-9 rounded-lg flex items-center justify-center text-white/50 hover:bg-white/[0.08] hover:text-white" aria-label="Sair">
+              <Icon name="logout" size={17} />
+            </button>
           </div>
-          {auditoria.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
-          <div className="divide-y divide-black/[0.05] max-h-96 overflow-y-auto">
-            {(auditoria.data || []).map((a) => (
-              <div key={a.id} className="px-4 py-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs">
-                <span className="font-mono text-stone-400 tabular">
-                  {new Date(a.criadoEm).toLocaleString('pt-BR')}
-                </span>
-                <span className="font-semibold text-stone-800">{a.acao}</span>
-                <span className="text-stone-500">{a.operadorEmail}</span>
-                {a.tenantSlug && <span className="font-mono text-brand-700">{a.tenantSlug}</span>}
-                {a.ip && <span className="font-mono text-stone-300">{a.ip}</span>}
-              </div>
+        </div>
+      </aside>
+
+      <div className="min-w-0 flex-1">
+        <header className="lg:hidden sticky top-0 z-30 bg-white border-b border-paper-300">
+          <div className="h-16 px-4 flex items-center gap-3">
+            <Brand compact />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink-950 truncate">Central de operações</p>
+              <p className="text-[11px] text-stone-500 truncate">{atual.label}</p>
+            </div>
+            <ThemeMenu />
+            <button onClick={sair} className="w-10 h-10 rounded-lg flex items-center justify-center text-stone-500 hover:bg-paper-100 hover:text-ink-950" aria-label="Sair">
+              <Icon name="logout" />
+            </button>
+          </div>
+          <nav className="flex gap-1 px-3 pb-2 overflow-x-auto" aria-label="Seções do operador">
+            {secoes.map((item) => (
+              <NavLink
+                key={item.id}
+                to={item.to}
+                className={({ isActive }) => `shrink-0 min-h-9 px-3 rounded-lg border flex items-center gap-2 text-xs font-medium ${
+                  isActive
+                    ? 'bg-brand-50 border-brand-100 text-brand-800'
+                    : 'border-transparent text-stone-600 hover:bg-paper-100'
+                }`}
+              >
+                <Icon name={item.icon} size={15} />
+                {item.label}
+              </NavLink>
             ))}
-            {auditoria.data?.length === 0 && (
-              <p className="p-6 text-sm text-stone-500 text-center">Nenhuma ação registrada ainda.</p>
+          </nav>
+        </header>
+
+        <header className="hidden lg:flex h-[56px] px-6 items-center justify-between bg-white border-b border-paper-300 sticky top-0 z-20">
+          <div className="flex items-center gap-2 text-[13px]">
+            <span className="text-stone-500">Central de operações</span>
+            <Icon name="arrow" size={13} className="text-stone-400" />
+            <span className="text-stone-500">{atual.grupo}</span>
+            <Icon name="arrow" size={13} className="text-stone-400" />
+            <span className="font-semibold text-ink-950">{atual.label}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-2 text-xs font-medium text-stone-600">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              Ambiente operacional
+            </span>
+            <ThemeMenu />
+          </div>
+        </header>
+
+        <main key={atual.id} className="px-4 py-5 md:px-6 lg:px-6 lg:py-5 animate-slide-up">
+          <div className="max-w-screen-2xl mx-auto">
+            <div className="page-heading">
+              <div>
+                <h1 className="page-title">
+                  {secao === 'clientes' && 'Carteira de clientes'}
+                  {secao === 'novo-cliente' && 'Cadastrar novo cliente'}
+                  {secao === 'auditoria' && 'Auditoria'}
+                </h1>
+                <p className="page-description">
+                  {secao === 'clientes' && 'Acompanhe a carteira, o uso e os acessos de suporte de cada empresa.'}
+                  {secao === 'novo-cliente' && 'Crie a empresa e entregue ao administrador um acesso pronto para configuração.'}
+                  {secao === 'auditoria' && 'Consulte a trilha das ações realizadas pela equipe de operações.'}
+                </p>
+              </div>
+              {secao === 'clientes' && (
+                <Link to="/operador/novo-cliente" className="min-h-10 px-4 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold inline-flex items-center gap-2">
+                  <Icon name="plus" size={17} />
+                  Novo cliente
+                </Link>
+              )}
+              {secao !== 'clientes' && (
+                <Link to="/operador/clientes" className="min-h-10 px-4 rounded-lg border border-paper-400 bg-white hover:bg-paper-100 text-stone-700 text-sm font-semibold inline-flex items-center gap-2">
+                  <Icon name="arrow" size={15} className="rotate-180" />
+                  Voltar aos clientes
+                </Link>
+              )}
+            </div>
+
+            {erro && (
+              <div className="mb-5 p-3.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 flex items-start gap-3" role="alert">
+                <Icon name="alert" size={18} className="mt-0.5 shrink-0" />
+                <span className="flex-1">{erro}</span>
+                <button onClick={() => setErro('')} className="font-semibold" aria-label="Fechar aviso">Fechar</button>
+              </div>
+            )}
+
+            {secao === 'clientes' && (
+              <div className="space-y-5">
+                <Summary totais={totais} mensagens={mensagens} />
+                <ClientList
+                  lista={lista}
+                  tenants={tenants}
+                  renomeando={renomeando}
+                  setRenomeando={setRenomeando}
+                  renomear={renomear}
+                  setConfirmacao={setConfirmacao}
+                  suporte={suporte}
+                  alterarStatus={alterarStatus}
+                  setIaModal={setIaModal}
+                />
+              </div>
+            )}
+
+            {secao === 'novo-cliente' && (
+              <div className="space-y-5">
+                {convite && <Convite dados={convite} onFechar={() => setConvite(null)} />}
+                <div className="grid xl:grid-cols-[minmax(0,1fr)_320px] gap-5 items-start">
+                  <Provisionamento form={form} setForm={setForm} podeProvisionar={podeProvisionar} provisionar={provisionar} />
+                  <aside className="app-panel p-5 xl:sticky xl:top-20">
+                    <h2 className="font-semibold text-ink-950">Como ativar uma empresa</h2>
+                    <ol className="mt-4 space-y-4">
+                      {[
+                        ['Cadastre a empresa', 'Informe o identificador e o primeiro administrador.'],
+                        ['Envie o convite', 'Copie o link único e encaminhe por um canal seguro.'],
+                        ['Conecte o WhatsApp', 'O administrador entra no painel e conclui a conexão com a Meta.'],
+                        ['Valide a operação', 'Confirme canais, atendentes e primeiro atendimento antes da entrega.'],
+                      ].map(([title, text], index) => (
+                        <li key={title} className="flex gap-3">
+                          <span className="w-7 h-7 rounded-lg bg-paper-200 text-stone-700 flex items-center justify-center text-xs font-semibold shrink-0">{index + 1}</span>
+                          <div>
+                            <p className="text-xs font-semibold text-ink-950">{title}</p>
+                            <p className="mt-0.5 text-xs leading-relaxed text-stone-600">{text}</p>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                    <div className="mt-5 pt-4 border-t border-paper-300">
+                      <p className="text-xs text-stone-600">
+                        O modo de implantação permite administrar toda a configuração do cliente sem criar o operador como atendente. A sessão é temporária e auditada.
+                      </p>
+                    </div>
+                  </aside>
+                </div>
+              </div>
+            )}
+
+            {secao === 'auditoria' && (
+              <Audit auditoria={auditoria} filtro={filtroAuditoria} setFiltro={setFiltroAuditoria} lista={lista} />
             )}
           </div>
-        </section>
-      </main>
+        </main>
+      </div>
+
+      {iaModal && <IaModal tenant={iaModal} onClose={() => setIaModal(null)} />}
 
       {confirmacao && (
         <Confirmar

@@ -12,7 +12,7 @@ const router = express.Router();
 
 // Chaves conhecidas (whitelist — evita virar despejo de dados arbitrários).
 const CHAVES = ['despedida_padrao', 'comando_encerrar', 'msg_encerrar_cliente',
-  'fora_horario_ativo', 'horario_atendimento', 'fora_horario_msg'];
+  'fora_horario_ativo', 'horario_atendimento', 'fora_horario_msg', 'ia_sugestao_ativa'];
 
 // GET /api/config — todas as configurações { chave: valor }.
 router.get('/', async (req, res, next) => {

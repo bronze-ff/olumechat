@@ -1,138 +1,142 @@
-// Primeiro acesso (FIL-67): o administrador cadastra o usuário e manda um
-// link /definir-senha?empresa=<slug>&token=<token>. O token vale UMA vez e
-// expira — o backend confere isso; aqui a tela só reage ao veredito dele.
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
+import Brand from '../components/ui/Brand';
+import Icon from '../components/ui/Icon';
+import ThemeMenu from '../components/ui/ThemeMenu';
 
-const BORDEAUX = '#9B1B1B';
 const MIN_PADRAO = 10;
-
-function MiniSpinner() {
-  return (
-    <span className="inline-block w-4 h-4 rounded-full border-2 animate-spin"
-      style={{ borderColor: 'rgba(255,255,255,0.4)', borderTopColor: '#fff' }} />
-  );
-}
 
 export default function DefinirSenha() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const empresa = (params.get('empresa') || '').trim().toLowerCase();
   const token = params.get('token') || '';
-
   const [checando, setChecando] = useState(true);
-  const [dono, setDono] = useState(null);      // { nome, email } | null
+  const [dono, setDono] = useState(null);
   const [minimo, setMinimo] = useState(MIN_PADRAO);
   const [form, setForm] = useState({ senha: '', repetir: '' });
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState('');
   const [pronto, setPronto] = useState(false);
+  const set = (key) => (event) => setForm((prev) => ({ ...prev, [key]: event.target.value }));
 
-  const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
-
-  // Confere o link ANTES de o usuário digitar: nada pior que escolher a senha
-  // e só então descobrir que o link venceu. Esta chamada não consome o token.
   useEffect(() => {
-    if (!empresa || !token) { setErro('Link incompleto.'); setChecando(false); return; }
+    if (!empresa || !token) {
+      setErro('Este link está incompleto. Solicite um novo convite.');
+      setChecando(false);
+      return;
+    }
     api.get('/auth/definir-senha', { params: { empresa, token } })
-      .then(({ data }) => { setDono({ nome: data.nome, email: data.email }); setMinimo(data.minimo || MIN_PADRAO); })
-      .catch((e) => setErro(e.response?.data?.error || 'Link inválido ou expirado.'))
+      .then(({ data }) => {
+        setDono({ nome: data.nome, email: data.email });
+        setMinimo(data.minimo || MIN_PADRAO);
+      })
+      .catch((error) => setErro(error.response?.data?.error || 'Este convite é inválido ou já expirou.'))
       .finally(() => setChecando(false));
   }, [empresa, token]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setErro('');
-    if (form.senha !== form.repetir) { setErro('As duas senhas não são iguais.'); return; }
-    if (form.senha.length < minimo) { setErro(`A senha precisa ter pelo menos ${minimo} caracteres.`); return; }
+    if (form.senha !== form.repetir) {
+      setErro('As senhas não são iguais. Digite novamente.');
+      return;
+    }
+    if (form.senha.length < minimo) {
+      setErro(`Use uma senha com pelo menos ${minimo} caracteres.`);
+      return;
+    }
     setSalvando(true);
     try {
       await api.post('/auth/definir-senha', { empresa, token, senha: form.senha });
       setPronto(true);
       localStorage.setItem('empresa', empresa);
-    } catch (err) {
-      setErro(err.response?.data?.error || 'Não foi possível definir a senha. Peça um link novo.');
+    } catch (error) {
+      setErro(error.response?.data?.error || 'Não foi possível criar a senha. Solicite um novo convite.');
     } finally {
       setSalvando(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-white flex items-center justify-center px-6 py-12 relative overflow-hidden">
-      <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ opacity: 0.12 }} xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <pattern id="system-grid-senha" width="40" height="40" patternUnits="userSpaceOnUse">
-            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1B5E7B" strokeWidth="0.7" />
-          </pattern>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#system-grid-senha)" />
-      </svg>
-
-      <div className="w-full max-w-sm animate-slide-up relative">
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="rounded-full shrink-0" style={{ width: 4, height: 16, background: BORDEAUX }} />
-            <span className="font-mono text-[10px] uppercase tracking-widest text-stone-400">Primeiro acesso</span>
+    <main className="min-h-screen bg-paper-100">
+      <header className="h-20 px-5 md:px-8 flex items-center justify-between bg-white border-b border-paper-300">
+        <Brand />
+        <ThemeMenu />
+      </header>
+      <div className="px-5 py-10 md:py-16 flex justify-center">
+        <section className="w-full max-w-[460px] bg-white border border-paper-300 rounded-xl p-6 sm:p-8 animate-slide-up">
+          <div className="w-10 h-10 rounded-xl bg-brand-100 text-brand-800 flex items-center justify-center">
+            <Icon name={pronto ? 'check' : 'shield'} size={19} />
           </div>
-          <h2 className="font-display text-2xl font-bold" style={{ color: '#1A5276' }}>Defina sua senha</h2>
-          {dono && (
-            <p className="text-sm text-stone-500 mt-1">
-              {dono.nome ? `${dono.nome} — ` : ''}<span className="font-mono">{dono.email}</span>
+          <p className="mt-5 text-sm font-medium text-brand-700">Primeiro acesso · {empresa || 'Falatta'}</p>
+          <h1 className="mt-2 text-2xl font-semibold tracking-[-0.025em] text-ink-950">
+            {pronto ? 'Seu acesso está pronto' : 'Crie uma senha segura'}
+          </h1>
+          {dono && !pronto && (
+            <p className="mt-2 text-sm text-stone-600">
+              Convite para {dono.nome ? <strong>{dono.nome}</strong> : dono.email}
+              {dono.nome ? <span className="block text-xs mt-0.5">{dono.email}</span> : null}
             </p>
           )}
-        </div>
 
-        {checando && <p className="text-sm text-stone-500">Conferindo o link…</p>}
-
-        {!checando && pronto && (
-          <div className="space-y-5">
-            <div className="p-3 bg-green-50 border border-green-200 rounded text-sm text-green-800">
-              Senha definida. Já dá para entrar.
+          {checando && (
+            <div className="mt-8 flex items-center gap-3 text-sm text-stone-600">
+              <span className="w-4 h-4 rounded-full border-2 border-brand-200 border-t-brand-700 animate-spin" />
+              Validando seu convite…
             </div>
-            <button type="button" onClick={() => navigate('/login', { replace: true })}
-              className="w-full py-3 text-sm font-medium text-white"
-              style={{ background: BORDEAUX, borderRadius: 4 }}>
-              Ir para o login
-            </button>
-          </div>
-        )}
+          )}
 
-        {!checando && !pronto && !dono && (
-          <div className="space-y-5">
-            <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{erro}</div>
-            <p className="text-xs text-stone-500">
-              Links de primeiro acesso valem uma vez só e expiram. Peça um novo ao
-              administrador da sua empresa.
-            </p>
-          </div>
-        )}
-
-        {!checando && !pronto && dono && (
-          <form onSubmit={handleSubmit} noValidate className="space-y-5">
-            <div>
-              <label htmlFor="senha" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Nova senha</label>
-              <input id="senha" type="password" value={form.senha} onChange={set('senha')}
-                autoComplete="new-password" placeholder="••••••••" className="input-field font-mono" />
-              <p className="mt-1.5 text-xs text-stone-500">Pelo menos {minimo} caracteres.</p>
+          {!checando && pronto && (
+            <div className="mt-7">
+              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-900">
+                Senha criada com sucesso. Agora você pode entrar no workspace da sua empresa.
+              </div>
+              <button type="button" onClick={() => navigate('/login', { replace: true })} className="mt-5 w-full min-h-11 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold inline-flex items-center justify-center gap-2">
+                Ir para o acesso
+                <Icon name="arrow" size={16} />
+              </button>
             </div>
-            <div>
-              <label htmlFor="repetir" className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Repita a senha</label>
-              <input id="repetir" type="password" value={form.repetir} onChange={set('repetir')}
-                autoComplete="new-password" placeholder="••••••••" className="input-field font-mono" />
+          )}
+
+          {!checando && !pronto && !dono && (
+            <div className="mt-7">
+              <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 flex gap-2">
+                <Icon name="alert" size={18} className="shrink-0 mt-0.5" />
+                {erro}
+              </div>
+              <p className="mt-4 text-xs leading-relaxed text-stone-600">
+                Convites funcionam uma única vez e expiram por segurança. Fale com o administrador da empresa para receber outro.
+              </p>
             </div>
+          )}
 
-            {erro && <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{erro}</div>}
-
-            <button type="submit" disabled={salvando}
-              className="w-full flex items-center justify-center gap-2 py-3 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ background: BORDEAUX, borderRadius: 4 }}>
-              {salvando ? <MiniSpinner /> : null}
-              Salvar senha
-            </button>
-          </form>
-        )}
+          {!checando && !pronto && dono && (
+            <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-5">
+              <div>
+                <label htmlFor="senha" className="field-label">Nova senha</label>
+                <input id="senha" type="password" value={form.senha} onChange={set('senha')} autoComplete="new-password" placeholder={`Pelo menos ${minimo} caracteres`} className="input-field" />
+                <p className="mt-1.5 text-xs text-stone-500">Use uma combinação que você não utiliza em outros serviços.</p>
+              </div>
+              <div>
+                <label htmlFor="repetir" className="field-label">Confirme a nova senha</label>
+                <input id="repetir" type="password" value={form.repetir} onChange={set('repetir')} autoComplete="new-password" placeholder="Digite a mesma senha" className="input-field" />
+              </div>
+              {erro && (
+                <div className="p-3.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 flex gap-2" role="alert">
+                  <Icon name="alert" size={17} className="shrink-0 mt-0.5" />
+                  {erro}
+                </div>
+              )}
+              <button type="submit" disabled={salvando} className="w-full min-h-11 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-50 inline-flex items-center justify-center gap-2">
+                {salvando && <span className="w-4 h-4 rounded-full border-2 border-white/35 border-t-white animate-spin" />}
+                {salvando ? 'Criando senha…' : 'Criar senha e continuar'}
+              </button>
+            </form>
+          )}
+        </section>
       </div>
-    </div>
+    </main>
   );
 }

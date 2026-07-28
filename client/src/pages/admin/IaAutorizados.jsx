@@ -9,7 +9,7 @@ import { formatPhone } from '../../utils/formatters';
 // Telefones que podem conversar com o bot de IA. O backend devolve as colunas em
 // MAIÚSCULO (ID, TELEFONE, NOME, NUMERO_ID, ATIVO) — diferente das outras telas.
 export default function IaAutorizados() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const [telefone, setTelefone] = useState('');
   const [numeroId, setNumeroId] = useState('');
   const [nome, setNome] = useState('');
@@ -20,12 +20,14 @@ export default function IaAutorizados() {
   const autorizados = useQuery({
     queryKey: ['ia-autorizados'],
     queryFn: () => api.get('/ia-autorizados').then((r) => r.data),
+    enabled: !!user?.iaHabilitada,
   });
   // Números da empresa (canais) — para escolher em qual número o telefone fala com o bot.
   const numeros = useQuery({
     queryKey: ['numeros-lista'],
     queryFn: () => api.get('/numeros/lista').then((r) => r.data),
     staleTime: 5 * 60_000,
+    enabled: !!user?.iaHabilitada,
   });
   const rotuloNumero = (id) => {
     const n = (numeros.data || []).find((x) => x.id === id);
@@ -49,6 +51,17 @@ export default function IaAutorizados() {
   const telOk = telefone.replace(/\D/g, '').length >= 10;
   const podeCriar = telOk && numeroId && !criar.isPending;
   const lista = autorizados.data || [];
+
+  if (!user?.iaHabilitada) {
+    return (
+      <div className="bg-white rounded-2xl border border-black/[0.06] p-4">
+        <p className="text-sm font-medium text-stone-800">Não incluído no seu plano</p>
+        <p className="mt-1 text-xs leading-relaxed text-stone-500 max-w-[54ch]">
+          O agente de IA é um recurso vendido à parte. Fale com o time Falatta para adicionar ao seu plano.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-screen-xl mx-auto grid grid-cols-12 gap-4 items-start">

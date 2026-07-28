@@ -28,6 +28,16 @@ router.put('/', async (req, res, next) => {
 // Atua na MEMÓRIA + banco + avisa por SSE na hora — o atendente NÃO precisa dar
 // F5. Só age sobre quem está conectado (presença é em memória; mexer no banco de
 // quem está offline só valeria no próximo login, então retornamos 409 e orientamos).
+// Visão enxuta para o atendimento: qualquer usuário autenticado pode ver os
+// demais colegas disponíveis no mesmo tenant, sem receber ações de gestão.
+router.get('/equipe', (req, res) => {
+  const proprioId = Number(req.perfil && req.perfil.atendenteId);
+  const equipe = presence.snapshot(req.user.tenantId)
+    .filter((item) => item.estado === 'online' && item.atendenteId !== proprioId)
+    .map(({ atendenteId, nome, deptoIds }) => ({ atendenteId, nome, deptoIds }));
+  res.json(equipe);
+});
+
 router.put('/:atendenteId', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
   const atendenteId = Number(req.params.atendenteId);
   const estado = String((req.body && req.body.estado) || '');
@@ -55,7 +65,7 @@ router.put('/:atendenteId', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res,
   }
 });
 
-router.get('/', exigirPapel('ADMIN', 'SUPERVISOR'), (req, res) => {
+router.get('/', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), (req, res) => {
   res.json(presence.snapshot(req.user.tenantId));
 });
 

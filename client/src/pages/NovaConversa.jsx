@@ -13,7 +13,7 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
   // Modo "Reabrir": o contato já está definido (janela de 24h expirou) — o
   // atendente só escolhe o template; telefone, cliente, canal e fila ficam fixos.
   const fixo = !!contatoInicial;
-  const [aba, setAba] = useState('cliente'); // 'cliente' | 'manual'
+  const [aba, setAba] = useState('historico'); // 'historico' | 'manual'
   const [busca, setBusca] = useState('');
   const [telefone, setTelefone] = useState(contatoInicial?.telefone || '');
   const [codigoExterno, setCodigoExterno] = useState(contatoInicial?.codigoExterno || null);
@@ -55,10 +55,10 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
   const verTudo = user?.papel === 'ADMIN' || user?.papel === 'AUDITOR';
   const deptoOpcoes = (departamentos.data || []).filter((d) => verTudo || (user?.deptoIds || []).includes(d.id));
 
-  const clientes = useQuery({
-    queryKey: ['clientes', busca],
-    queryFn: () => api.get('/clientes', { params: { q: busca } }).then((r) => r.data),
-    enabled: aba === 'cliente' && busca.trim().length >= 2,
+  const historico = useQuery({
+    queryKey: ['contatos-historico', busca],
+    queryFn: () => api.get('/contatos/historico', { params: { q: busca } }).then((r) => r.data),
+    enabled: !fixo && aba === 'historico',
   });
 
   const tpl = useMemo(
@@ -89,10 +89,8 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
   }
   function selecionarCliente(c) {
     setTelefone(c.telefone || '');
-    // `/clientes` ainda não foi portado (fora do escopo do FIL-60) — aceita o
-    // formato novo (codigoExterno) e o antigo (cod/codcli) como fallback.
-    setCodigoExterno(c.codigoExterno ?? c.cod ?? c.codcli ?? null);
-    setClienteNome(c.cliente || '');
+    setCodigoExterno(null);
+    setClienteNome(c.nome || '');
   }
 
   const podeEnviar = telefone.trim() && templateName && !enviar.isPending
@@ -110,7 +108,7 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
           <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
         </div>
 
-        <div className="p-4 overflow-y-auto space-y-4">
+        <div className="modal-body space-y-4">
           {fixo ? (
             <div className="bg-paper-50 border border-black/[0.07] rounded-lg p-3">
               <p className="text-sm font-semibold text-stone-800 truncate">{clienteNome || formatPhone(telefone)}</p>
@@ -119,31 +117,39 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
           ) : (<>
           {/* Origem do contato */}
           <div className="flex gap-1 bg-stone-100 rounded-lg p-1">
-            {['cliente', 'manual'].map((a) => (
+            {['historico', 'manual'].map((a) => (
               <button key={a} onClick={() => setAba(a)}
                 className={`flex-1 py-1.5 text-sm rounded-md font-medium transition-colors
                   ${aba === a ? 'bg-white text-brand-700 shadow-sm' : 'text-stone-500'}`}>
-                {a === 'cliente' ? 'Buscar cliente' : 'Telefone manual'}
+                {a === 'historico' ? 'Buscar no histórico' : 'Digitar número'}
               </button>
             ))}
           </div>
 
-          {aba === 'cliente' ? (
+          {aba === 'historico' ? (
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Cliente (nome ou código)</label>
-              <input className="input-field" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Ex.: Padaria do João ou 12345" />
-              {clientes.isFetching && <p className="text-xs text-stone-400 mt-1">Buscando…</p>}
-              {clientes.isError && <p className="text-xs text-red-600 mt-1">{clientes.error.response?.data?.error || 'Erro na busca.'}</p>}
+              <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">Meus contatos atendidos</label>
+              <input className="input-field" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Busque por nome ou telefone" />
+              <p className="mt-1 text-[11px] text-stone-500">
+                A busca mostra somente pessoas que já passaram pelos seus atendimentos.
+              </p>
+              {historico.isFetching && <p className="text-xs text-stone-400 mt-2">Buscando…</p>}
+              {historico.isError && <p className="text-xs text-red-600 mt-2">{historico.error.response?.data?.error || 'Erro na busca.'}</p>}
               <div className="mt-2 max-h-40 overflow-y-auto divide-y divide-black/[0.05]">
-                {(clientes.data || []).map((c) => (
-                  <button key={c.codigoExterno ?? c.cod ?? c.codcli} onClick={() => selecionarCliente(c)}
+                {(historico.data || []).map((c) => (
+                  <button key={c.id} onClick={() => selecionarCliente(c)}
                     className={`w-full text-left px-2 py-2 text-sm rounded hover:bg-paper-50
-                      ${codigoExterno === (c.codigoExterno ?? c.cod ?? c.codcli) ? 'bg-brand-50' : ''}`}>
-                    <div className="font-medium text-stone-800 truncate">{c.cliente}</div>
-                    <div className="text-xs text-stone-500 font-mono">#{c.codigoExterno ?? c.cod ?? c.codcli} · {formatPhone(c.telefone)}</div>
+                      ${telefone === c.telefone ? 'bg-brand-50' : ''}`}>
+                    <div className="font-medium text-stone-800 truncate">{c.nome}</div>
+                    <div className="text-xs text-stone-500 font-mono">{formatPhone(c.telefone)}</div>
                   </button>
                 ))}
               </div>
+              {!historico.isFetching && historico.data?.length === 0 && (
+                <p className="mt-2 rounded-md border border-paper-300 bg-paper-50 px-3 py-2 text-xs text-stone-500">
+                  Nenhum contato encontrado no seu histórico. Use “Digitar número”.
+                </p>
+              )}
               {telefone && (
                 <p className="text-xs text-stone-600 mt-2">
                   Selecionado: <span className="font-semibold">{clienteNome}</span> — {formatPhone(telefone)}
@@ -245,7 +251,7 @@ export default function NovaConversa({ onClose, onCreated, contatoInicial }) {
           {erro && <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{erro}</div>}
         </div>
 
-        <div className="p-3 border-t border-black/[0.06] flex gap-2 safe-bottom">
+        <div className="modal-footer">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Cancelar</button>
           <button onClick={() => { setErro(''); enviar.mutate(); }} disabled={!podeEnviar}
             className="flex-1 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40 disabled:cursor-not-allowed">
