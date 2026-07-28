@@ -3,6 +3,7 @@
 //   POST /webhook  → eventos (valida assinatura, responde 200 rápido, processa async)
 const express = require('express');
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 const { rawBodyJson } = require('./rawBody');
 const { isValidSignature } = require('./verifySignature');
 const { processPayload } = require('./processEvent');
@@ -16,11 +17,32 @@ function igualSeguro(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
+// Atrás de um proxy o X-Forwarded-For pode chegar com PORTA e a lib rejeita
+// (ERR_ERL_INVALID_IP_ADDRESS). Mesmo tratamento do auth/routes.js.
+function chavePorIp(req) {
+  const ip = String(req.ip || req.socket?.remoteAddress || '');
+  const m = ip.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+  return m ? m[1] : ip;
+}
+
 function buildWebhookRouter(cfg) {
   const router = express.Router();
 
+  // Rota pública, sem autenticação: qualquer um na internet pode tentar
+  // adivinhar o WEBHOOK_VERIFY_TOKEN por força bruta. Throttle básico por IP —
+  // a Meta só chama isto na configuração inicial do webhook, então não há
+  // tráfego legítimo de alta frequência para acomodar aqui.
+  const verificacaoLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: Number(process.env.WEBHOOK_VERIFY_RATE_LIMIT_MAX) || 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: chavePorIp,
+    validate: { trustProxy: false },
+  });
+
   // --- GET: verificação do webhook (PRD §5.3) ---
-  router.get('/webhook', (req, res) => {
+  router.get('/webhook', verificacaoLimiter, (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
