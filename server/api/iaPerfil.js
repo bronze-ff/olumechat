@@ -254,7 +254,7 @@ conhecimento.post('/extrair', extrairIaLimiter, (req, res, next) => {
     else if (ext === '.xlsx') texto = await extrairArquivo.extrairXlsx(req.file.buffer);
     else texto = extrairArquivo.extrairCsv(req.file.buffer);
 
-    const propostos = extrairArquivo.propostaBlocos(tituloBase, texto, LIMITES.blocoConteudo);
+    const propostos = extrairArquivo.propostaBlocos(tituloBase, texto, LIMITES.blocoConteudo, LIMITES.blocoTitulo);
     if (!propostos.length) return res.status(422).json({ error: 'Não foi possível extrair texto deste arquivo.' });
 
     // Teto de blocos por empresa é checado ANTES de mostrar o preview — de
