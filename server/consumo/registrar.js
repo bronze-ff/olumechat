@@ -23,7 +23,11 @@
 const db = require('../db/pool');
 const limitePlano = require('../ia/limitePlano');
 
-const TIPOS = Object.freeze(['ia_tokens', 'mensagem_enviada', 'conversa_iniciada', 'midia_armazenada']);
+// 'ia_audio_seg' (FIL-84): segundos de áudio transcritos pelo STT. Unidade
+// DIFERENTE de token — de propósito NÃO entra no teto mensal de tokens do
+// FIL-78 (ia/limitePlano.js) na v1. Gatilho para reconsiderar: custo de STT
+// relevante nos números reais.
+const TIPOS = Object.freeze(['ia_tokens', 'mensagem_enviada', 'conversa_iniciada', 'midia_armazenada', 'ia_audio_seg']);
 
 /**
  * Grava 1 evento de consumo. NUNCA lança.
