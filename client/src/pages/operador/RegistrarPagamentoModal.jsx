@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import apiOperador from '../../services/apiOperador';
 import Icon from '../../components/ui/Icon';
-import { formatarCentavos } from '../../utils/dinheiro';
+import { formatarCentavos, paraCentavos } from '../../utils/dinheiro';
 
 // Ação de "registrar pagamento" da lista de cobrança (FIL-80) — chama a MESMA
 // rota já usada pela ficha financeira/FIL-79 (POST
@@ -13,12 +13,6 @@ const MEIOS = [
   { id: 'transferencia', label: 'Transferência' },
   { id: 'cartao', label: 'Cartão' },
 ];
-
-function paraCentavos(texto) {
-  const normalizado = String(texto).trim().replace(/\./g, '').replace(',', '.');
-  const valor = Number.parseFloat(normalizado);
-  return Number.isFinite(valor) ? Math.round(valor * 100) : 0;
-}
 
 export default function RegistrarPagamentoModal({ fatura, onClose }) {
   const qc = useQueryClient();

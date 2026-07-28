@@ -27,7 +27,7 @@ const { comOperador } = require('./db');
 const auditoria = require('./auditoria');
 const { ErroOperador } = require('./erroOperador');
 const { mapRow, mapRows } = require('../utils/linhas');
-const { validarDataYYYYMMDD } = require('../utils/data');
+const { validarDataYYYYMMDD, paraDataTexto } = require('../utils/data');
 
 const CICLOS = Object.freeze(['mensal', 'trimestral', 'anual']);
 const TIPOS_ITEM = Object.freeze(['implementacao', 'addon_ia', 'numero_extra', 'excedente_mensagem', 'desconto', 'avulso']);
@@ -193,6 +193,44 @@ async function criarOuTrocarContrato({ operador, tenantId, dados, ip }) {
   });
 }
 
+/**
+ * Contrato vigente (ou ausência dele) de TODOS os clientes — a seção
+ * "Contratos" do menu lateral (FIL-82, complemento do dono do produto: além
+ * do modal de UM cliente, precisa de uma tela cross-tenant de carteira, como
+ * financeiro/painel.js::listarClientesFinanceiro). Cliente sem contrato ativo
+ * aparece com os campos de contrato em null — é assim que a tela oferece
+ * "criar contrato" em vez de esconder a linha.
+ */
+async function listarContratosVigentes() {
+  return comOperador(async (conn) => {
+    const r = await conn.execute(
+      `SELECT t.id AS tenant_id, t.nome AS tenant_nome, t.slug AS tenant_slug, t.status AS tenant_status,
+              c.id AS contrato_id, c.plano_nome, c.valor_recorrente_centavos, c.ciclo,
+              c.dia_vencimento, c.inicio_cobranca, c.reajuste_indice, c.reajuste_mes, c.observacoes
+         FROM tenant t
+         LEFT JOIN contrato c ON c.tenant_id = t.id AND c.fim_vigencia IS NULL
+        WHERE t.status IN ('ativo', 'suspenso')
+        ORDER BY t.nome`
+    );
+    return r.rows.map((row) => ({
+      tenantId: Number(row.TENANT_ID),
+      tenantNome: row.TENANT_NOME,
+      tenantSlug: row.TENANT_SLUG,
+      tenantStatus: row.TENANT_STATUS,
+      contratoId: row.CONTRATO_ID !== null && row.CONTRATO_ID !== undefined ? Number(row.CONTRATO_ID) : null,
+      planoNome: row.PLANO_NOME || null,
+      valorRecorrenteCentavos: row.VALOR_RECORRENTE_CENTAVOS !== null && row.VALOR_RECORRENTE_CENTAVOS !== undefined
+        ? Number(row.VALOR_RECORRENTE_CENTAVOS) : null,
+      ciclo: row.CICLO || null,
+      diaVencimento: row.DIA_VENCIMENTO !== null && row.DIA_VENCIMENTO !== undefined ? Number(row.DIA_VENCIMENTO) : null,
+      inicioCobranca: paraDataTexto(row.INICIO_COBRANCA),
+      reajusteIndice: row.REAJUSTE_INDICE || null,
+      reajusteMes: row.REAJUSTE_MES !== null && row.REAJUSTE_MES !== undefined ? Number(row.REAJUSTE_MES) : null,
+      observacoes: row.OBSERVACOES || null,
+    }));
+  });
+}
+
 /** Itens de um contrato (qualquer um — ativo ou histórico). */
 async function listarItens({ tenantId, contratoId }) {
   return comOperador(async (conn) => {
@@ -298,7 +336,7 @@ async function removerItem({ operador, tenantId, contratoId, itemId, ip }) {
 
 module.exports = {
   CICLOS, TIPOS_ITEM,
-  listarContratos, criarOuTrocarContrato,
+  listarContratos, listarContratosVigentes, criarOuTrocarContrato,
   listarItens, adicionarItem, atualizarItem, removerItem,
   validarNovoContrato, validarItem,
 };

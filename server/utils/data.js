@@ -22,4 +22,22 @@ function validarDataYYYYMMDD(v, nomeCampo, ErroClasse) {
   return s;
 }
 
-module.exports = { validarDataYYYYMMDD };
+/**
+ * DATE do Postgres chega como `Date` interpretado em hora LOCAL do processo
+ * (pg-types faz `new Date(ano, mês, dia)`, não UTC — ver postgres-date). Ler
+ * os componentes locais (getFullYear/getMonth/getDate) evita a armadilha de
+ * `toISOString()` (que converte pra UTC e pode empurrar a data em um fuso
+ * positivo) — mesma classe de bug do achado de review sobre data sem fuso.
+ */
+function paraDataTexto(v) {
+  if (!v) return null;
+  if (v instanceof Date) {
+    const y = v.getFullYear();
+    const m = String(v.getMonth() + 1).padStart(2, '0');
+    const d = String(v.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(v).slice(0, 10);
+}
+
+module.exports = { validarDataYYYYMMDD, paraDataTexto };
