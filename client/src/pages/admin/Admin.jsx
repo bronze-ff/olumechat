@@ -16,8 +16,13 @@ import Ajustes from './Ajustes';
 import IaConfig from './IaConfig';
 import IaAutorizados from './IaAutorizados';
 import Clientes from './Clientes';
+import OnboardingMeta from './OnboardingMeta';
 
 const ABAS = [
+  // 100% do operador (FIL-81): só existe DENTRO de uma sessão de suporte — o
+  // backend já rejeita qualquer outro JWT com 403 (server/api/onboardingMeta.js),
+  // e o filtro abaixo evita nem oferecer o link a quem nunca vai poder abrir.
+  { id: 'onboarding-meta', rotulo: 'Onboarding Meta', descricao: 'Acompanhe o processo assistido de conexão com a Meta deste cliente.', icon: 'support', grupo: 'Sistema', el: OnboardingMeta, suporteOnly: true },
   { id: 'monitor', rotulo: 'Operação ao vivo', descricao: 'Acompanhe filas, carga e disponibilidade da equipe em tempo real.', icon: 'pulse', grupo: 'Operação', el: Monitor },
   { id: 'dashboard', rotulo: 'Indicadores', descricao: 'Entenda volume, tempos e desempenho do atendimento.', icon: 'chart', grupo: 'Operação', el: Dashboard },
   { id: 'historico', rotulo: 'Histórico', descricao: 'Consulte atendimentos, mensagens e registros anteriores.', icon: 'history', grupo: 'Operação', el: Historico },
@@ -73,7 +78,7 @@ export default function Admin() {
   if (loading) return null;
   if (!podeVerAdmin) return <Navigate to="/conversas" replace />;
 
-  const abas = ABAS.filter((item) => !item.adminOnly || isAdmin);
+  const abas = ABAS.filter((item) => (!item.adminOnly || isAdmin) && (!item.suporteOnly || user?.suporte));
   const atual = abas.find((item) => item.id === aba) || abas[0];
   const Conteudo = atual.el;
   const empresa = localStorage.getItem('empresa') || 'sua empresa';
