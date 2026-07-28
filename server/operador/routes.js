@@ -36,6 +36,7 @@ const consumo = require('./consumo');
 const contrato = require('./contrato');
 const implementacao = require('./implementacao');
 const fatura = require('./fatura');
+const painel = require('../financeiro/painel');
 const precos = require('../consumo/precos');
 const iaConfigStore = require('../ia/iaConfigStore');
 const onboarding = require('./onboarding');
@@ -865,6 +866,55 @@ router.post(
     }
   }
 );
+
+// ---------------------------------------------------------------------------
+// Painel financeiro do operador (FIL-80) — MRR, a receber, atrasados, margem
+// por cliente. Camada de LEITURA sobre contrato/consumo/fatura (FIL-76/77/79);
+// não reimplementa nenhum cálculo daqueles módulos (ver financeiro/painel.js).
+// Nenhuma rota de tenant nem de suporte expõe isto (ver docs/SEGURANCA.md).
+// ---------------------------------------------------------------------------
+router.get('/financeiro/resumo', async (req, res, next) => {
+  try {
+    res.json(await painel.resumoGeral());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.get(
+  '/financeiro/clientes',
+  query('competencia').optional({ nullable: true }).isString(),
+  async (req, res, next) => {
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(await painel.listarClientesFinanceiro({ competencia: req.query.competencia }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+router.get(
+  '/financeiro/faturas',
+  query('competencia').optional({ nullable: true }).isString(),
+  query('status').optional({ nullable: true }).isString(),
+  async (req, res, next) => {
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(await painel.listarFaturasDoMes({ competencia: req.query.competencia, status: req.query.status }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+router.get('/financeiro/alertas', async (req, res, next) => {
+  try {
+    res.json(await painel.listarAlertas());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // GET /api/operador/auditoria?tenantId=&limite= — trilha do operador.

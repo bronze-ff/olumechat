@@ -12,6 +12,7 @@ const Conversas = lazy(() => import('./pages/Conversas'));
 const Admin = lazy(() => import('./pages/admin/Admin'));
 const LoginOperador = lazy(() => import('./pages/operador/LoginOperador'));
 const Operador = lazy(() => import('./pages/operador/Operador'));
+const Financeiro = lazy(() => import('./pages/operador/Financeiro'));
 
 function RouteFallback() {
   return (
@@ -40,6 +41,12 @@ export default function App() {
                 <Route path="/operador/clientes" element={<Operador secao="clientes" />} />
                 <Route path="/operador/novo-cliente" element={<Operador secao="novo-cliente" />} />
                 <Route path="/operador/onboarding" element={<Operador secao="onboarding" />} />
+                {/* Painel financeiro (FIL-80) — só o operador vê MRR, a receber,
+                    atrasados e margem; nenhuma sessão de tenant/suporte chega aqui
+                    (ver docs/SEGURANCA.md e server/operador/routes.js). */}
+                <Route path="/operador/financeiro" element={<Financeiro secao="financeiro" />} />
+                <Route path="/operador/financeiro/cobranca" element={<Financeiro secao="financeiro-cobranca" />} />
+                <Route path="/operador/financeiro/alertas" element={<Financeiro secao="financeiro-alertas" />} />
                 <Route path="/operador/auditoria" element={<Operador secao="auditoria" />} />
               </Route>
               <Route element={<ProtectedRoute />}>
