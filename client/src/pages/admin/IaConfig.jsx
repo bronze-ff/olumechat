@@ -119,6 +119,30 @@ function Medidor({ medidor }) {
   );
 }
 
+// FIL-86: bloco PROPOSTO por upload de arquivo — ainda não existe no banco
+// (sem id), por isso não tem ativo/ordem/mover: só título e conteúdo
+// editáveis até o admin decidir salvar ou descartar.
+function PropostaBloco({ proposta, limiteConteudo, onMudar, onSalvar, onRemover, salvando }) {
+  return (
+    <div className="rounded-xl border border-brand-700/30 bg-brand-700/[0.03] p-3 space-y-2">
+      <input value={proposta.titulo} maxLength={120} placeholder="Título do bloco"
+        onChange={(e) => onMudar({ ...proposta, titulo: e.target.value })} className="input-field" />
+      <textarea rows={6} value={proposta.conteudo}
+        onChange={(e) => onMudar({ ...proposta, conteudo: e.target.value })}
+        className="input-field resize-y font-mono text-xs" />
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={onSalvar} disabled={!proposta.titulo.trim() || !proposta.conteudo.trim() || salvando}
+          className="px-4 py-1.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold disabled:opacity-40">
+          {salvando ? 'Salvando…' : 'Salvar este bloco'}
+        </button>
+        <button type="button" onClick={onRemover} disabled={salvando}
+          className="text-xs text-stone-500 hover:text-stone-800 disabled:opacity-40">Descartar</button>
+        <Contador atual={proposta.conteudo.length} limite={limiteConteudo} />
+      </div>
+    </div>
+  );
+}
+
 function Bloco({ bloco, posicao, total, limiteConteudo, editavel, onSalvar, onMover, onRemover, salvando }) {
   const [aberto, setAberto] = useState(false);
   const [titulo, setTitulo] = useState(bloco.titulo);
@@ -192,6 +216,10 @@ export default function IaConfig() {
   const [erroPerfil, setErroPerfil] = useState('');
   const [novo, setNovo] = useState(null); // { titulo, conteudo } enquanto adiciona
   const [erroBloco, setErroBloco] = useState('');
+  const [propostos, setPropostos] = useState(null); // FIL-86: blocos propostos pelo upload, em revisão
+  const [erroUpload, setErroUpload] = useState('');
+  const [salvandoTodosPropostos, setSalvandoTodosPropostos] = useState(false);
+  const arquivoRef = useRef(null);
   const [pergunta, setPergunta] = useState('');
   const [resposta, setResposta] = useState('');
   const [erroTeste, setErroTeste] = useState('');
@@ -262,6 +290,18 @@ export default function IaConfig() {
     onSuccess: () => { setErroBloco(''); qc.invalidateQueries({ queryKey: ['ia-perfil'] }); },
     onError: (e) => setErroBloco(e.response?.data?.error || 'Falha ao remover o bloco.'),
   });
+  // FIL-86: POST /ia-conhecimento/extrair é STATELESS — só devolve blocos
+  // PROPOSTOS pra revisão. Quem persiste é o mesmo `criarBloco` de sempre
+  // (auditoria + invalidação de cache já existentes na FIL-83).
+  const enviarArquivo = useMutation({
+    mutationFn: (arquivo) => {
+      const fd = new FormData();
+      fd.append('arquivo', arquivo);
+      return api.post('/ia-conhecimento/extrair', fd).then((r) => r.data);
+    },
+    onSuccess: (d) => { setErroUpload(''); setErroBloco(''); setPropostos(d.blocos); },
+    onError: (e) => setErroUpload(e.response?.data?.error || 'Falha ao extrair o arquivo.'),
+  });
   // Reordenar = reescrever a `ordem` de quem mudou de posição, em sequência.
   // Na primeira vez costuma tocar em vários (todos nascem com ordem 0); depois,
   // só nos dois que trocaram de lugar.
@@ -301,6 +341,52 @@ export default function IaConfig() {
     const mudancas = [];
     lista.forEach((b, i) => { if (b.ordem !== i) mudancas.push({ id: b.id, ordem: i }); });
     if (mudancas.length) reordenarBlocos.mutate(mudancas);
+  };
+
+  // FIL-86 — upload de arquivo -----------------------------------------------
+  const escolherArquivo = (e) => {
+    const arquivo = e.target.files && e.target.files[0];
+    e.target.value = ''; // permite escolher o MESMO arquivo de novo depois de um erro
+    if (!arquivo) return;
+    setPropostos(null);
+    enviarArquivo.mutate(arquivo);
+  };
+
+  const mudarProposto = (idx, proposta) => {
+    setPropostos((atual) => atual.map((p, i) => (i === idx ? proposta : p)));
+  };
+
+  const removerProposto = (idx) => {
+    setPropostos((atual) => {
+      const restante = atual.filter((_, i) => i !== idx);
+      return restante.length ? restante : null;
+    });
+  };
+
+  const salvarProposto = (idx) => {
+    criarBloco.mutate(propostos[idx], { onSuccess: () => removerProposto(idx) });
+  };
+
+  const salvarTodosPropostos = async () => {
+    setSalvandoTodosPropostos(true);
+    setErroBloco('');
+    // Fila local, não o state `propostos`: dentro deste laço o state só é
+    // atualizado no próximo render, então reler `propostos` a cada iteração
+    // repetiria o mesmo bloco já salvo. Sequencial, não Promise.all: cada
+    // salvamento conta pro teto de 50 — em paralelo, dois POSTs simultâneos
+    // poderiam ambos passar na checagem de contagem e estourar o limite.
+    let fila = propostos || [];
+    while (fila.length) {
+      try {
+        await criarBloco.mutateAsync(fila[0]);
+        fila = fila.slice(1);
+        setPropostos(fila.length ? fila : null);
+      } catch (e) {
+        setErroBloco(e.response?.data?.error || 'Falha ao salvar um dos blocos — os demais continuam em revisão.');
+        break;
+      }
+    }
+    setSalvandoTodosPropostos(false);
   };
 
   if (perfil.isError) {
@@ -404,19 +490,58 @@ export default function IaConfig() {
       {/* 4 — Base de conhecimento ------------------------------------------ */}
       <Secao
         titulo="Base de conhecimento"
-        acao={isAdmin && !novo && blocos.length < limites.blocos && (
-          <button type="button" onClick={() => setNovo({ titulo: '', conteudo: '' })}
-            className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-800">
-            <Icon name="plus" size={14} /> Adicionar bloco
-          </button>
+        acao={isAdmin && !novo && !propostos && blocos.length < limites.blocos && (
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={() => arquivoRef.current?.click()} disabled={enviarArquivo.isPending}
+              className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-800 disabled:opacity-40">
+              <Icon name="upload" size={14} /> {enviarArquivo.isPending ? 'Extraindo…' : 'Enviar arquivo (PDF, XLSX, CSV)'}
+            </button>
+            <button type="button" onClick={() => setNovo({ titulo: '', conteudo: '' })}
+              className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-800">
+              <Icon name="plus" size={14} /> Adicionar bloco
+            </button>
+          </div>
         )}
       >
+        <input ref={arquivoRef} type="file" accept=".pdf,.xlsx,.csv" className="hidden" onChange={escolherArquivo} />
         <p className="text-xs leading-relaxed text-stone-500">
           Textos que o agente consulta para responder: cardápio, políticas, perguntas frequentes.
           Um assunto por bloco — assim dá para desligar o que sai de época sem perder o texto.
         </p>
 
-        {blocos.length === 0 && !novo && (
+        {erroUpload && <p className="text-xs text-red-600">{erroUpload}</p>}
+
+        {propostos && (
+          <div className="rounded-xl border border-black/[0.08] bg-paper-100 p-3 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium text-stone-800">
+                {propostos.length} bloco{propostos.length === 1 ? '' : 's'} proposto{propostos.length === 1 ? '' : 's'} — revise antes de salvar
+              </p>
+              <button type="button" onClick={() => setPropostos(null)} disabled={salvandoTodosPropostos}
+                className="text-xs text-stone-500 hover:text-stone-800 disabled:opacity-40 shrink-0">
+                Descartar todos
+              </button>
+            </div>
+            <p className="text-xs leading-relaxed text-stone-500">
+              Nada foi salvo ainda. Corrija título e conteúdo de cada bloco e salve — individualmente ou todos de uma vez.
+            </p>
+            <div className="space-y-2">
+              {propostos.map((p, i) => (
+                <PropostaBloco key={i} proposta={p} limiteConteudo={limites.blocoConteudo}
+                  onMudar={(nova) => mudarProposto(i, nova)}
+                  onSalvar={() => salvarProposto(i)}
+                  onRemover={() => removerProposto(i)}
+                  salvando={criarBloco.isPending || salvandoTodosPropostos} />
+              ))}
+            </div>
+            <button type="button" onClick={salvarTodosPropostos} disabled={salvandoTodosPropostos || criarBloco.isPending}
+              className="px-4 py-1.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold disabled:opacity-40">
+              {salvandoTodosPropostos ? 'Salvando todos…' : 'Salvar todos'}
+            </button>
+          </div>
+        )}
+
+        {blocos.length === 0 && !novo && !propostos && (
           // Estado vazio que ENSINA o que escrever — é a primeira tela de quem
           // acabou de contratar.
           <div className="rounded-xl border border-dashed border-black/[0.12] p-4 text-center">

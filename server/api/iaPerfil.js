@@ -18,7 +18,9 @@
 // valores em 2.000 caracteres, o que mataria um cardápio.
 'use strict';
 
+const path = require('node:path');
 const express = require('express');
+const multer = require('multer');
 const db = require('../db/pool');
 const { exigirPapel } = require('../auth/rbac');
 const { limiterPorUsuario } = require('../utils/rateLimitPorUsuario');
@@ -28,6 +30,7 @@ const client = require('../ia/client');
 const limitePlano = require('../ia/limitePlano');
 const consumo = require('../consumo/registrar');
 const precos = require('../consumo/precos');
+const extrairArquivo = require('../ia/extrairArquivo');
 
 const { LIMITES } = perfilStore;
 
@@ -206,6 +209,74 @@ perfil.post('/testar', exigirPapel('ADMIN'), testarIaLimiter, async (req, res, n
 // ===========================================================================
 const conhecimento = express.Router();
 conhecimento.use(exigirIaHabilitada, exigirPapel('ADMIN'));
+
+// Extração é CPU-bound (parse de PDF/XLSX), não $-cost como /testar — mesmo
+// padrão de teto por USUÁRIO, janela mais curta e teto mais folgado.
+const extrairIaLimiter = limiterPorUsuario({
+  windowMs: 10 * 60 * 1000,
+  max: Number(process.env.IA_EXTRAIR_RATE_LIMIT_MAX) || 20,
+  mensagem: 'Muitos arquivos enviados em pouco tempo. Aguarde um instante antes de tentar de novo.',
+});
+
+const EXTENSOES_ACEITAS = new Set(['.pdf', '.xlsx', '.csv']);
+
+const uploadExtrair = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+/** POST /extrair — STATELESS: extrai texto do arquivo e devolve blocos
+ *  PROPOSTOS, sem gravar nada. Quem persiste é o POST/PUT normal desta mesma
+ *  rota, que já audita e invalida o cache (ver cabeçalho do arquivo). Falhou
+ *  ou o admin abandonou a revisão: não sobra lixo no banco. */
+conhecimento.post('/extrair', extrairIaLimiter, (req, res, next) => {
+  uploadExtrair.single('arquivo')(req, res, (err) => {
+    if (!err) return next();
+    const msg = err.code === 'LIMIT_FILE_SIZE' ? 'Arquivo excede 10 MB.' : 'Falha no upload do arquivo.';
+    res.status(400).json({ error: msg });
+  });
+}, async (req, res, next) => {
+  if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
+
+  // busboy (multer 2.x) decodifica o header Content-Disposition como latin1
+  // por padrão — nome de arquivo acentuado ("Cardápio.pdf", comum aqui) sai
+  // com "Ã¡" no lugar de "á" a não ser que a gente refaça o decode como UTF-8.
+  const nomeOriginal = Buffer.from(req.file.originalname || '', 'latin1').toString('utf8');
+  const ext = path.extname(nomeOriginal).toLowerCase();
+  if (!EXTENSOES_ACEITAS.has(ext)) {
+    return res.status(400).json({ error: 'Formato não suportado. Envie PDF, XLSX ou CSV.' });
+  }
+  const tituloBase = path.basename(nomeOriginal, ext).trim() || 'Arquivo';
+
+  try {
+    let texto;
+    if (ext === '.pdf') texto = await extrairArquivo.extrairPdf(req.file.buffer);
+    else if (ext === '.xlsx') texto = await extrairArquivo.extrairXlsx(req.file.buffer);
+    else texto = extrairArquivo.extrairCsv(req.file.buffer);
+
+    const propostos = extrairArquivo.propostaBlocos(tituloBase, texto, LIMITES.blocoConteudo, LIMITES.blocoTitulo);
+    if (!propostos.length) return res.status(422).json({ error: 'Não foi possível extrair texto deste arquivo.' });
+
+    // Teto de blocos por empresa é checado ANTES de mostrar o preview — de
+    // nada adianta o admin revisar 12 blocos pra descobrir só no salvar que
+    // não cabiam.
+    const totalAtual = await db.comTenant(req.tenantId, async (conn) => {
+      const c = await conn.execute(`SELECT count(*)::int AS N FROM ia_conhecimento WHERE tenant_id = :tenantId`, { tenantId: req.tenantId });
+      return Number((c.rows[0] || {}).N || 0);
+    });
+    if (totalAtual + propostos.length > LIMITES.blocos) {
+      return res.status(400).json({
+        error: `Este arquivo geraria ${propostos.length} bloco(s), o que ultrapassaria o limite de ${LIMITES.blocos} blocos por empresa (${totalAtual} já existente(s)).`,
+      });
+    }
+
+    res.json({ blocos: propostos });
+  } catch (err) {
+    if (err instanceof extrairArquivo.ArquivoInvalido) return res.status(422).json({ error: err.message });
+    if (err instanceof extrairArquivo.LimiteExcedido) return res.status(400).json({ error: err.message });
+    next(err);
+  }
+});
 
 /** @returns {{ titulo?, conteudo?, ativo?, ordem?, erro? }} */
 function validarBloco(body, { parcial = false } = {}) {
