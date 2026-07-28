@@ -39,6 +39,7 @@ export default function App() {
                 <Route path="/operador" element={<Navigate to="/operador/clientes" replace />} />
                 <Route path="/operador/clientes" element={<Operador secao="clientes" />} />
                 <Route path="/operador/novo-cliente" element={<Operador secao="novo-cliente" />} />
+                <Route path="/operador/onboarding" element={<Operador secao="onboarding" />} />
                 <Route path="/operador/auditoria" element={<Operador secao="auditoria" />} />
               </Route>
               <Route element={<ProtectedRoute />}>
