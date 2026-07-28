@@ -27,6 +27,7 @@ const paths = {
   menu: 'M4 7h16M4 12h16M4 17h16',
   palette: 'M12 3a9 9 0 1 0 0 18h1.5a1.5 1.5 0 0 0 0-3H12a2 2 0 0 1 0-4 4 4 0 0 0 4-4c0-5-4-9-9-9Zm-4 6h.01M12 7h.01m4 2h.01M7 13h.01',
   contract: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Zm0 0v6h6M8 13h8M8 17h8M8 9h1',
+  upload: 'M12 3v12m0-12 4 4m-4-4-4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2',
 };
 
 export default function Icon({ name, size = 18, className = '', strokeWidth = 1.8 }) {
