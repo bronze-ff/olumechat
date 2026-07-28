@@ -31,6 +31,8 @@ const autenticarOperador = require('./middleware');
 const contas = require('./contas');
 const auditoria = require('./auditoria');
 const tenants = require('./tenants');
+const credencialIa = require('./credencialIa');
+const iaConfigStore = require('../ia/iaConfigStore');
 const { trocarCodigo } = require('../api/meta');
 const { guardar } = require('../meta/connection');
 const { linkDeConvite } = require('../utils/conviteLink');
@@ -394,6 +396,47 @@ router.put(
         baseUrl: req.body.baseUrl, apiKey: req.body.apiKey,
         ip: auditoria.ipDaRequisicao(req),
       }));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/operador/ia-credencial — credenciais do PROVEDOR configuradas
+// (histórico por provider), sem a chave.
+// PUT /api/operador/ia-credencial { provider, modeloPadrao, baseUrl?, apiKey? }
+// Grava/atualiza e torna esta A credencial ativa (FIL-78: fim da chave por
+// tenant — o operador é dono de UMA conta do provedor, compartilhada por
+// todos os tenants sem chave própria). Ver operador/credencialIa.js.
+// ---------------------------------------------------------------------------
+router.get('/ia-credencial', async (req, res, next) => {
+  try {
+    res.json(await credencialIa.listarCredenciais());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.put(
+  '/ia-credencial',
+  body('provider').isString(),
+  body('modeloPadrao').isString(),
+  body('baseUrl').optional({ nullable: true }).isString(),
+  body('apiKey').optional({ nullable: true }).isString(),
+  async (req, res, next) => {
+    if (checarValidacao(req, res)) return;
+    try {
+      const r = await credencialIa.salvarCredencial({
+        operador: req.operador,
+        provider: req.body.provider, modeloPadrao: req.body.modeloPadrao,
+        baseUrl: req.body.baseUrl, apiKey: req.body.apiKey,
+        ip: auditoria.ipDaRequisicao(req),
+      });
+      // Sem isto, o runtime (ia/iaConfigStore.js) seguiria servindo a
+      // credencial antiga do cache até o TTL de 60s expirar sozinho.
+      iaConfigStore.invalidarGlobal();
+      res.json(r);
     } catch (err) {
       tratar(err, res, next);
     }
