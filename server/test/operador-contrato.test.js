@@ -30,7 +30,7 @@ function conexao({ tenantExiste = true, ativo = null, contratoRow = null, itens 
       if (/^SELECT id, plano_nome, valor_recorrente_centavos, ciclo, fim_vigencia FROM contrato WHERE tenant_id = :tid AND fim_vigencia IS NULL/i.test(s)) {
         return { rows: ativo ? [ativo] : [] };
       }
-      if (/^UPDATE contrato SET fim_vigencia = CURRENT_DATE WHERE id = :id/i.test(s)) {
+      if (/^UPDATE contrato SET fim_vigencia = GREATEST\(CURRENT_DATE, inicio_cobranca\) WHERE id = :id/i.test(s)) {
         return { rowsAffected: 1, rows: [] };
       }
       if (/^INSERT INTO contrato\s*\(/i.test(s)) {
@@ -159,7 +159,7 @@ test('criarOuTrocarContrato: com um contrato ATIVO, encerra-o (fim_vigencia = ho
     operador: OPERADOR, tenantId: 5, dados: { ...DADOS_VALIDOS, planoNome: 'Plano Premium', valorRecorrenteCentavos: 250000 },
   });
 
-  const encerra = conn.cap.find((c) => /^UPDATE contrato SET fim_vigencia = CURRENT_DATE WHERE id = :id/i.test(c.sql));
+  const encerra = conn.cap.find((c) => /^UPDATE contrato SET fim_vigencia = GREATEST\(CURRENT_DATE, inicio_cobranca\) WHERE id = :id/i.test(c.sql));
   assert.ok(encerra, 'encerra o contrato anterior');
   assert.equal(encerra.binds.id, 10, 'encerra exatamente o contrato que estava ativo');
 
@@ -179,6 +179,42 @@ test('criarOuTrocarContrato: com um contrato ATIVO, encerra-o (fim_vigencia = ho
   assert.equal(detalhe.antes.valorRecorrenteCentavos, 9900, 'o histórico do que era cobrado antes não é reescrito');
   assert.equal(detalhe.depois.planoNome, 'Plano Premium');
   assert.equal(detalhe.depois.valorRecorrenteCentavos, 250000);
+});
+
+test('criarOuTrocarContrato: contrato ativo com início de cobrança FUTURO (ainda em implantação) é encerrado sem violar a vigência', async () => {
+  // Achado de review: encerrar com fim_vigencia = CURRENT_DATE (hoje) viola
+  // ck_contrato_vigencia (fim_vigencia >= inicio_cobranca) quando a cobrança
+  // ainda nem começou — a troca de plano falharia com rollback justo no caso
+  // comum de "cliente muda de ideia antes de começar a pagar". A correção usa
+  // GREATEST(CURRENT_DATE, inicio_cobranca) — nunca fica antes do início de
+  // cobrança do próprio contrato que está sendo encerrado.
+  const ativo = { ID: 11, PLANO_NOME: 'Em implantação', VALOR_RECORRENTE_CENTAVOS: 5000, CICLO: 'mensal', FIM_VIGENCIA: null };
+  const conn = conexao({ ativo });
+  db.getConnection = async () => conn;
+  await contrato.criarOuTrocarContrato({ operador: OPERADOR, tenantId: 5, dados: DADOS_VALIDOS });
+
+  const encerra = conn.cap.find((c) => /^UPDATE contrato SET fim_vigencia/i.test(c.sql));
+  assert.ok(encerra, 'encerra o contrato anterior mesmo com início de cobrança futuro');
+  assert.match(encerra.sql, /GREATEST\(CURRENT_DATE, inicio_cobranca\)/i, 'nunca usa CURRENT_DATE puro — violaria a vigência quando a cobrança ainda não começou');
+});
+
+// ===========================================================================
+// Datas de calendário impossíveis — não podem chegar cruas no Postgres.
+// ===========================================================================
+test('criarOuTrocarContrato rejeita dia impossível dentro do mês (2026-02-31)', async () => {
+  db.getConnection = async () => conexao();
+  await assert.rejects(
+    contrato.criarOuTrocarContrato({ operador: OPERADOR, tenantId: 5, dados: { ...DADOS_VALIDOS, inicioCobranca: '2026-02-31' } }),
+    (err) => err.deOperador && err.status === 400
+  );
+});
+
+test('criarOuTrocarContrato rejeita mês impossível (2026-99-01)', async () => {
+  db.getConnection = async () => conexao();
+  await assert.rejects(
+    contrato.criarOuTrocarContrato({ operador: OPERADOR, tenantId: 5, dados: { ...DADOS_VALIDOS, inicioCobranca: '2026-99-01' } }),
+    (err) => err.deOperador && err.status === 400
+  );
 });
 
 test('listarContratos: 404 se o tenant não existe', async () => {

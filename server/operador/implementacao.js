@@ -3,16 +3,28 @@
 // projeto de implantação sobrevive a uma troca de plano posterior. Mesma
 // tabela fechada para o caminho de tenant que `contrato` (migração 018) — ver
 // docs/SEGURANCA.md.
+//
+// ── TERMOS FINANCEIROS TRAVAM DEPOIS DA 1ª PARCELA (FIL-79, achado de review
+// do PR #26) ─────────────────────────────────────────────────────────────
+// financeiro/faturamento.js deriva a PRÓXIMA parcela a cobrar contando
+// quantos fatura_item (origem_tipo='implementacao') já existem — não do
+// numero_parcelas atual. Editar valorCentavos/formaPagamento/numeroParcelas
+// depois que a 1ª parcela (não cancelada) foi faturada desalinha essa conta:
+// ex. 3.333 já cobrado de um setup de 10.000/3, o operador muda o valor para
+// 12.000 → as próximas parcelas recalculam em cima de 12.000/3, e a soma
+// (3.333 + 4.000 + 4.000 = 11.333) nunca bate nem o valor antigo nem o novo.
+// Por isso atualizarImplementacao rejeita mudar esses três campos assim que
+// existe parcela faturada — status/datas/responsável continuam livres.
 'use strict';
 
 const { comOperador } = require('./db');
 const auditoria = require('./auditoria');
 const { ErroOperador } = require('./erroOperador');
 const { mapRow } = require('../utils/linhas');
+const { validarDataYYYYMMDD } = require('../utils/data');
 
 const FORMAS_PAGAMENTO = Object.freeze(['a_vista', 'parcelado']);
 const STATUS = Object.freeze(['a_iniciar', 'em_andamento', 'entregue']);
-const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
 
 function inteiro(v, nomeCampo, { min, max } = {}) {
   const n = Number(v);
@@ -24,9 +36,7 @@ function inteiro(v, nomeCampo, { min, max } = {}) {
 
 function validarDataOpcional(v, nomeCampo) {
   if (v === undefined || v === null || v === '') return null;
-  const s = String(v);
-  if (!RE_DATA.test(s)) throw new ErroOperador(400, `${nomeCampo} inválida — use AAAA-MM-DD.`);
-  return s;
+  return validarDataYYYYMMDD(v, nomeCampo, ErroOperador);
 }
 
 function textoOpcional(v, max) {
@@ -112,6 +122,19 @@ async function carregarImplementacaoDoTenant(conn, tenantId, implementacaoId) {
   return r.rows[0];
 }
 
+/** Parcelas já faturadas desta implementação — EXCLUI as que só existem numa
+ *  fatura `cancelada` (mesmo critério de financeiro/faturamento.js::parcelasJaFaturadas). */
+async function parcelasJaFaturadas(conn, implementacaoId) {
+  const r = await conn.execute(
+    `SELECT COUNT(*) AS cnt
+       FROM fatura_item fi
+       JOIN fatura f ON f.id = fi.fatura_id
+      WHERE fi.origem_tipo = 'implementacao' AND fi.origem_id = :id AND f.status <> 'cancelada'`,
+    { id: implementacaoId }
+  );
+  return Number((r.rows[0] || {}).CNT || 0);
+}
+
 function snapshot(row) {
   return {
     valorCentavos: Number(row.VALOR_CENTAVOS), formaPagamento: row.FORMA_PAGAMENTO,
@@ -136,6 +159,14 @@ async function atualizarImplementacao({ operador, tenantId, implementacaoId, dad
       responsavel: dados.responsavel !== undefined ? dados.responsavel : antes.RESPONSAVEL,
     };
     const v = validarImplementacao(merge);
+
+    const termosMudaram = v.valorCentavos !== Number(antes.VALOR_CENTAVOS)
+      || v.formaPagamento !== antes.FORMA_PAGAMENTO
+      || v.numeroParcelas !== (antes.NUMERO_PARCELAS === null ? null : Number(antes.NUMERO_PARCELAS));
+    if (termosMudaram && (await parcelasJaFaturadas(conn, implementacaoId)) > 0) {
+      throw new ErroOperador(409, 'Valor, forma de pagamento ou número de parcelas não podem mudar depois que o faturamento já começou.');
+    }
+
     const upd = await conn.execute(
       `UPDATE implementacao
           SET valor_centavos = :valor, forma_pagamento = :forma, numero_parcelas = :parcelas,

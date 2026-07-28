@@ -274,6 +274,18 @@ test('marcarEmNegociacao: atrasada -> em_negociacao', async () => {
 // ===========================================================================
 // Pagamento — parcial mantém saldo aberto; total fecha (critério de aceite).
 // ===========================================================================
+test('CORRIDA DE SALDO (achado de review do PR #26): registrarPagamento trava a fatura com FOR UPDATE', async () => {
+  const conn = conexao({ fatura: { ...FATURA_PREVISTA, STATUS: 'emitida', VALOR_TOTAL_CENTAVOS: 10000 } });
+  db.getConnection = async () => conn;
+  await fatura.registrarPagamento({
+    operador: OPERADOR, tenantId: 5, faturaId: 100,
+    dados: { valorCentavos: 4000, data: '2026-07-15', meio: 'pix' },
+  });
+  const leituraDaFatura = conn.cap.find((c) => /^SELECT \* FROM fatura WHERE id = :id AND tenant_id = :tid/i.test(c.sql));
+  assert.ok(leituraDaFatura, 'deveria ter lido a fatura antes de gravar o pagamento');
+  assert.match(leituraDaFatura.sql, /FOR UPDATE/i, 'sem o lock, dois pagamentos concorrentes podem somar mais que o total da fatura');
+});
+
 test('registrarPagamento: fatura ainda prevista (não emitida) rejeita pagamento (409)', async () => {
   db.getConnection = async () => conexao({ fatura: FATURA_PREVISTA });
   await assert.rejects(

@@ -14,6 +14,8 @@ const store = require('../ia/iaConfigStore');
 const client = require('../ia/client');
 const auth = require('../ia/autorizacao');
 const precos = require('../consumo/precos');
+const limitePlano = require('../ia/limitePlano');
+const toolExec = require('../ia/toolExecutor');
 const runtime = require('../ia/runtime');
 
 const TENANT_A = 501;
@@ -62,9 +64,32 @@ test('cada chamada ao provedor grava um evento ia_tokens com os TOKENS REAIS dev
   const teto = conn.ins.find((i) => /INSERT INTO ia_consumo_mensal/i.test(i.sql));
   assert.ok(teto, 'não alimentou o teto do FIL-78');
   assert.equal(teto.binds.tokens, 520);
+
+  // Achado de review (P1): medir todo caminho de envio, não só as rotas
+  // manuais de conversas.js — a resposta do bot também é uma mensagem
+  // enviada de verdade.
+  const envio = conn.ins.find((i) => /INSERT INTO consumo_evento/i.test(i.sql) && i.binds.tipo === 'mensagem_enviada');
+  assert.ok(envio, 'a resposta do bot deveria contar como mensagem_enviada');
 });
 
-test('sem `usage` na resposta do provedor: nenhum evento é gravado (nunca estima por caractere)', async () => {
+test('FIL-76 (achado de review): a resposta final enviada ao cliente grava um evento mensagem_enviada (não existia produtor)', async () => {
+  const conn = connConversa();
+  db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'claude-sonnet-5', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  precos.carregarPreco = async () => null;
+  client.chamar = async () => ({ texto: 'Tudo certo!', toolCalls: [], uso: { tokensEntrada: 10, tokensSaida: 5 } });
+  global.fetch = async (u, o) => ({ ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) });
+
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
+
+  const evt = conn.ins.find((i) => /INSERT INTO consumo_evento/i.test(i.sql) && i.binds.tipo === 'mensagem_enviada');
+  assert.ok(evt, 'não gravou o evento de mensagem_enviada da resposta do bot de IA');
+  assert.equal(evt.binds.tenantId, TENANT_A);
+  assert.equal(evt.binds.qtd, 1);
+});
+
+test('sem `usage` na resposta do provedor: nenhum evento ia_tokens é gravado (nunca estima por caractere) — mas a resposta enviada ainda conta como mensagem_enviada', async () => {
   const conn = connConversa();
   db.getConnection = async () => conn;
   store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
@@ -73,7 +98,9 @@ test('sem `usage` na resposta do provedor: nenhum evento é gravado (nunca estim
   global.fetch = async () => ({ ok: true, json: async () => ({ messages: [{ id: 'w' }] }) });
 
   await runtime.processarEntrada(TENANT_A, 88, 'oi');
-  assert.equal(conn.ins.filter((i) => /INSERT INTO consumo_evento/i.test(i.sql)).length, 0);
+  const eventos = conn.ins.filter((i) => /INSERT INTO consumo_evento/i.test(i.sql));
+  assert.equal(eventos.filter((e) => e.binds.tipo === 'ia_tokens').length, 0, 'sem uso, não pode inventar um evento de tokens');
+  assert.equal(eventos.filter((e) => e.binds.tipo === 'mensagem_enviada').length, 1, 'a resposta ainda saiu e ainda conta como envio');
 });
 
 test('REGRESSÃO (critério de aceite): falha ao gravar consumo NÃO impede o bot de responder ao cliente', async () => {
@@ -88,4 +115,42 @@ test('REGRESSÃO (critério de aceite): falha ao gravar consumo NÃO impede o bo
 
   await runtime.processarEntrada(TENANT_A, 88, 'oi');
   assert.ok(enviados.some((e) => /Resposta normal do bot\./.test(e.text.body)), 'o cliente TEM que receber a resposta mesmo com a gravação de consumo falhando');
+});
+
+test('ACHADO DE REVIEW (P2): teto é RECHECADO entre chamadas do loop de tool-calls — não deixa passar 3 chamadas extras pagas depois de estourar', async () => {
+  const conn = connConversa();
+  db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  precos.carregarPreco = async () => null;
+  toolExec.executar = async () => ({ colunas: [], linhas: [] });
+
+  let chamadasAoTeto = 0;
+  const original = limitePlano.estourouTeto;
+  limitePlano.estourouTeto = async () => {
+    chamadasAoTeto += 1;
+    // 1ª chamada = gate da fase 1 (ainda não estourou); da 2ª em diante =
+    // rechecagem dentro do loop (já estourou, porque a 1ª chamada ao
+    // provedor acabou de consumir o que faltava do teto).
+    return chamadasAoTeto > 1;
+  };
+
+  let chamadasAoProvedor = 0;
+  client.chamar = async () => {
+    chamadasAoProvedor += 1;
+    // SEMPRE devolve tool_call — sem a rechecagem, o loop rodaria até MAX_ITER.
+    return { texto: '', toolCalls: [{ id: 't1', nome: 'consultar_vendas', args: {} }], uso: { tokensEntrada: 500, tokensSaida: 0 } };
+  };
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+
+  try {
+    await runtime.processarEntrada(TENANT_A, 88, 'vendas de hoje?');
+  } finally {
+    limitePlano.estourouTeto = original;
+  }
+
+  assert.equal(chamadasAoProvedor, 1, 'só podia ter feito UMA chamada paga ao provedor antes de perceber que estourou');
+  assert.ok(enviados.some((e) => /limite de uso/i.test(e.text.body)), 'precisa avisar o cliente que o limite foi atingido');
+  assert.ok(!enviados.some((e) => /custo|token|R\$/i.test(e.text.body)), 'mensagem não pode expor custo/tokens');
 });

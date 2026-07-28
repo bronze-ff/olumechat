@@ -34,6 +34,7 @@ const presence = require('../realtime/presence');
 const { publish } = require('../realtime/hub');
 const { tentar: tentarLock } = require('../workers/leaderLock');
 const { sendText } = require('../graph/sendText');
+const consumo = require('../consumo/registrar');
 
 const cadeias = new Map(); // departamentoId -> Promise (fila de execução)
 const RETRY_LOCK_MS = 50;
@@ -274,6 +275,11 @@ async function rodada(departamentoId, tentativa = 0) {
           `UPDATE conversa SET ultima_msg_em = now() WHERE id = :id`,
           { id: resultado.conversaId }
         );
+        // Medição de consumo (FIL-76/FIL-77): achado de review — aviso de
+        // indisponibilidade não tinha produtor de mensagem_enviada nenhum.
+        // Este aviso REALMENTE saiu pelo WhatsApp (chegamos aqui só depois
+        // do sendText ter sucesso, ver try acima).
+        await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: resultado.conversaId });
       });
       publish({
         tipo: 'mensagem',

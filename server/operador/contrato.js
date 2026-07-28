@@ -27,10 +27,10 @@ const { comOperador } = require('./db');
 const auditoria = require('./auditoria');
 const { ErroOperador } = require('./erroOperador');
 const { mapRow, mapRows } = require('../utils/linhas');
+const { validarDataYYYYMMDD } = require('../utils/data');
 
 const CICLOS = Object.freeze(['mensal', 'trimestral', 'anual']);
 const TIPOS_ITEM = Object.freeze(['implementacao', 'addon_ia', 'numero_extra', 'excedente_mensagem', 'desconto', 'avulso']);
-const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Inteiro seguro (centavos nunca são float). */
 function inteiro(v, nomeCampo, { min, max } = {}) {
@@ -42,9 +42,7 @@ function inteiro(v, nomeCampo, { min, max } = {}) {
 }
 
 function validarData(v, nomeCampo) {
-  const s = String(v || '');
-  if (!RE_DATA.test(s)) throw new ErroOperador(400, `${nomeCampo} inválida — use AAAA-MM-DD.`);
-  return s;
+  return validarDataYYYYMMDD(v, nomeCampo, ErroOperador);
 }
 
 function textoObrigatorio(v, nomeCampo, max) {
@@ -147,8 +145,16 @@ async function criarOuTrocarContrato({ operador, tenantId, dados, ip }) {
     await carregarTenant(conn, tenantId);
     const anterior = await carregarContratoAtivo(conn, tenantId);
     if (anterior) {
+      // GREATEST(CURRENT_DATE, inicio_cobranca) — não CURRENT_DATE puro.
+      // Achado de review (FIL-76): quando o contrato ativo ainda não começou
+      // a cobrar (inicio_cobranca no futuro — período de implantação), hoje é
+      // ANTERIOR ao início de cobrança, e fim_vigencia = CURRENT_DATE violaria
+      // ck_contrato_vigencia (fim_vigencia >= inicio_cobranca), derrubando a
+      // troca de plano com rollback. Encerrar exatamente no início de
+      // cobrança (janela de 0 dias) reflete a realidade: nunca chegou a
+      // cobrar nada desse contrato — sem inventar um "cancelado" separado.
       await conn.execute(
-        `UPDATE contrato SET fim_vigencia = CURRENT_DATE WHERE id = :id`,
+        `UPDATE contrato SET fim_vigencia = GREATEST(CURRENT_DATE, inicio_cobranca) WHERE id = :id`,
         { id: anterior.ID }
       );
     }

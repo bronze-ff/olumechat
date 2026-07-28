@@ -40,6 +40,7 @@ export default function App() {
                 <Route path="/operador" element={<Navigate to="/operador/clientes" replace />} />
                 <Route path="/operador/clientes" element={<Operador secao="clientes" />} />
                 <Route path="/operador/novo-cliente" element={<Operador secao="novo-cliente" />} />
+                <Route path="/operador/onboarding" element={<Operador secao="onboarding" />} />
                 {/* Painel financeiro (FIL-80) — só o operador vê MRR, a receber,
                     atrasados e margem; nenhuma sessão de tenant/suporte chega aqui
                     (ver docs/SEGURANCA.md e server/operador/routes.js). */}

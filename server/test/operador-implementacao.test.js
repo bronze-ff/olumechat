@@ -14,7 +14,7 @@ const OPERADOR = { id: 1, email: 'op@falatta.com' };
 
 const DADOS_VALIDOS = { valorCentavos: 200000, formaPagamento: 'a_vista', responsavel: 'Ana' };
 
-function conexao({ tenantExiste = true, existente = null } = {}) {
+function conexao({ tenantExiste = true, existente = null, parcelasFaturadas = 0 } = {}) {
   const cap = [];
   return {
     cap,
@@ -23,6 +23,9 @@ function conexao({ tenantExiste = true, existente = null } = {}) {
       const s = cap[cap.length - 1].sql;
       if (/^SELECT id FROM tenant WHERE id = :id/i.test(s)) {
         return { rows: tenantExiste ? [{ ID: binds.id }] : [] };
+      }
+      if (/fi\.origem_tipo = 'implementacao' AND fi\.origem_id = :id/i.test(s)) {
+        return { rows: [{ CNT: parcelasFaturadas }] };
       }
       if (/^SELECT \* FROM implementacao WHERE tenant_id = :tid ORDER BY criado_em/i.test(s)) {
         return { rows: existente ? [existente] : [] };
@@ -74,6 +77,14 @@ test('criarImplementacao rejeita valor decimal (nunca float)', async () => {
   db.getConnection = async () => conexao();
   await assert.rejects(
     implementacao.criarImplementacao({ operador: OPERADOR, tenantId: 5, dados: { ...DADOS_VALIDOS, valorCentavos: 999.99 } }),
+    (err) => err.deOperador && err.status === 400
+  );
+});
+
+test('criarImplementacao rejeita data prevista impossível (2026-02-31)', async () => {
+  db.getConnection = async () => conexao();
+  await assert.rejects(
+    implementacao.criarImplementacao({ operador: OPERADOR, tenantId: 5, dados: { ...DADOS_VALIDOS, dataPrevista: '2026-02-31' } }),
     (err) => err.deOperador && err.status === 400
   );
 });
@@ -179,4 +190,51 @@ test('atualizarImplementacao: audita antes/depois com os valores reais', async (
   const detalhe = JSON.parse(aud[0].binds.det);
   assert.equal(detalhe.antes.valorCentavos, 400000, 'guarda o valor de ANTES da mudança');
   assert.equal(detalhe.depois.valorCentavos, 450000);
+});
+
+// ===========================================================================
+// TERMOS FINANCEIROS TRAVAM APÓS FATURAMENTO (achado de review do PR #26,
+// FIL-79): financeiro/faturamento.js deriva a próxima parcela do NÚMERO de
+// fatura_item já gerados — mudar valor/forma/parcelas depois de faturar
+// desalinha o que falta cobrar do que já foi cobrado.
+// ===========================================================================
+test('atualizarImplementacao: rejeita mudar valorCentavos depois que a 1ª parcela já foi faturada', async () => {
+  const conn = conexao({ existente: EXISTENTE, parcelasFaturadas: 1 });
+  db.getConnection = async () => conn;
+  await assert.rejects(
+    implementacao.atualizarImplementacao({ operador: OPERADOR, tenantId: 5, implementacaoId: 40, dados: { valorCentavos: 450000 } }),
+    (err) => err.deOperador && err.status === 409
+  );
+});
+
+test('atualizarImplementacao: rejeita mudar numeroParcelas/formaPagamento depois de faturado', async () => {
+  const parcelado = { ...EXISTENTE, FORMA_PAGAMENTO: 'parcelado', NUMERO_PARCELAS: 3 };
+  const conn = conexao({ existente: parcelado, parcelasFaturadas: 1 });
+  db.getConnection = async () => conn;
+  await assert.rejects(
+    implementacao.atualizarImplementacao({
+      operador: OPERADOR, tenantId: 5, implementacaoId: 40,
+      dados: { valorCentavos: 400000, formaPagamento: 'parcelado', numeroParcelas: 4 },
+    }),
+    (err) => err.deOperador && err.status === 409
+  );
+});
+
+test('atualizarImplementacao: status/data/responsável continuam editáveis mesmo com parcela já faturada', async () => {
+  const conn = conexao({ existente: EXISTENTE, parcelasFaturadas: 1 });
+  db.getConnection = async () => conn;
+  const r = await implementacao.atualizarImplementacao({
+    operador: OPERADOR, tenantId: 5, implementacaoId: 40, dados: { status: 'entregue', dataEntrega: '2026-08-20', responsavel: 'Carla' },
+  });
+  assert.equal(r.status, 'entregue');
+  assert.equal(r.responsavel, 'Carla');
+});
+
+test('atualizarImplementacao: sem parcela faturada ainda, valor/forma continuam editáveis livremente', async () => {
+  const conn = conexao({ existente: EXISTENTE, parcelasFaturadas: 0 });
+  db.getConnection = async () => conn;
+  const r = await implementacao.atualizarImplementacao({
+    operador: OPERADOR, tenantId: 5, implementacaoId: 40, dados: { valorCentavos: 450000 },
+  });
+  assert.equal(r.valorCentavos, 450000);
 });

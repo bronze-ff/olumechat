@@ -138,6 +138,40 @@ test('teto configurado mas AINDA não estourado: chama o provedor normalmente', 
   assert.equal(chamouModelo, true, 'abaixo do teto, o bot funciona normalmente');
 });
 
+test('FIL-76: teto estourado NO MEIO do tool-loop para de chamar o provedor (não gasta além do limite)', async () => {
+  // Tenant começa abaixo do teto (900/1000), mas a resposta com tool calls
+  // devolve uso suficiente para estourar (900+200=1100 >= 1000). Sem
+  // reconferir o teto ANTES da próxima chamada, o loop seguiria chamando o
+  // provedor pelas iterações restantes — exatamente o que o teto existe pra
+  // evitar.
+  const conn = connConversa();
+  let usados = 900;
+  const original = conn.execute.bind(conn);
+  conn.execute = async (sql, binds) => {
+    if (sql.includes('ia_teto_tokens_mes')) return { rows: [{ IA_TETO_TOKENS_MES: 1000 }] };
+    if (sql.includes('FROM ia_consumo_mensal')) return { rows: [{ TOKENS_USADOS: usados }] };
+    if (sql.startsWith('INSERT INTO ia_consumo_mensal')) { usados += binds.tokens; return { rows: [] }; }
+    return original(sql, binds);
+  };
+  db.getConnection = async () => conn;
+  auth.autorizado = async () => true;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  toolExec.executar = async () => ({ colunas: [], linhas: [] });
+  let chamadas = 0;
+  client.chamar = async () => {
+    chamadas++;
+    return { texto: '', toolCalls: [{ id: 't1', nome: 'consultar_vendas', args: {} }], uso: { tokensEntrada: 150, tokensSaida: 50 } };
+  };
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+
+  await runtime.processarEntrada(TENANT_A, 88, 'vendas de todos os meses do ano, uma consulta por mês');
+
+  assert.equal(chamadas, 1, 'estourou no meio do loop — não pode chamar o provedor de novo pelas iterações restantes');
+  assert.ok(enviados.some((e) => /limite de uso/i.test(e.text.body)), 'envia o recado de limite em vez de seguir o tool-loop');
+  assert.ok(!/custo|token|R\$/i.test(enviados[enviados.length - 1].text.body), 'a mensagem não pode expor custo/tokens');
+});
+
 test('SEGURANÇA: toda leitura/gravação da conversa leva o tenant_id do chamador', async () => {
   const conn = connConversa(); db.getConnection = async () => conn;
   store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });

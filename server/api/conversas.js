@@ -18,6 +18,7 @@ const iaConfigStore = require('../ia/iaConfigStore');
 const sugestaoResposta = require('../ia/sugestaoResposta');
 const limitePlano = require('../ia/limitePlano');
 const consumo = require('../consumo/registrar');
+const precos = require('../consumo/precos');
 const { limiterPorUsuario } = require('../utils/rateLimitPorUsuario');
 
 const router = express.Router();
@@ -294,12 +295,17 @@ router.post('/', naoAuditor, async (req, res, next) => {
         conversaId = insC.outBinds.id[0];
       }
       const conteudo = b.preview ? String(b.preview) : `[template: ${templateName}]`;
-      await conn.execute(
+      const ins = await conn.execute(
         `INSERT INTO mensagem
            (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())`,
-        { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo }
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())
+         RETURNING id INTO :id`,
+        { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo,
+          id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
       );
+      // Medição de consumo (FIL-76/FIL-77): achado de review — disparo manual
+      // de template (conversa ativa) não tinha produtor de mensagem_enviada.
+      await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: ins.outBinds.id[0] });
       return { id: conversaId, contatoId, telefone, departamentoId: departamentoId || null, wamid };
     });
 
@@ -525,11 +531,18 @@ router.post('/:id/sugestao-resposta', naoAuditor, sugestaoIaLimiter, async (req,
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
-    // Carrega config/contexto DENTRO da transação, mas devolve a conexão ao
-    // pool ANTES de chamar o provedor de IA (a chamada externa pode levar até
-    // 45s). Com pool de 10, dez sugestões simultâneas presas em comTenant()
-    // esgotariam o pool inteiro e derrubariam o webhook e o resto da API.
-    const { config, mensagens } = await db.comTenant(req.tenantId, async (conn) => {
+    // Carrega o CONTEXTO (conversa/gates/mensagens) DENTRO da transação, mas
+    // devolve a conexão ao pool ANTES de resolver a credencial e de chamar o
+    // provedor de IA (a chamada externa pode levar até 45s). Com pool de 10,
+    // dez sugestões simultâneas presas em comTenant() esgotariam o pool
+    // inteiro e derrubariam o webhook e o resto da API.
+    //
+    // FIL-78 (achado de review): iaConfigStore.carregar() NÃO pode rodar
+    // aqui dentro — na falta de chave própria do tenant ela abre sua própria
+    // transação de operador (ver ia/iaConfigStore.js), e duas conexões
+    // seguradas pela mesma requisição esgotam o pool sob concorrência. Por
+    // isso ela roda DEPOIS deste bloco, com a conexão de tenant já devolvida.
+    const { mensagens } = await db.comTenant(req.tenantId, async (conn) => {
       if (!(await conversaNoEscopo(conn, id, req.perfil))) {
         throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
       }
@@ -549,25 +562,32 @@ router.post('/:id/sugestao-resposta', naoAuditor, sugestaoIaLimiter, async (req,
       if ((cfgRow.rows[0] || {}).VALOR !== 'S') {
         throw new RespostaHttp(400, { error: 'Sugestão de resposta por IA está desativada. Ative em Administração → Agente de IA.' });
       }
-      const config = await iaConfigStore.carregar(conn, req.tenantId);
-      if (!config) {
-        throw new RespostaHttp(400, { error: 'Nenhum provedor de IA configurado. Configure em Administração → Agente de IA.' });
-      }
       const mensagens = await sugestaoResposta.carregarContexto(conn, id);
-      return { config, mensagens };
+      return { mensagens };
     });
 
-    // A conexão JÁ FOI DEVOLVIDA ao pool aqui — a chamada externa roda livre.
+    // A conexão de tenant JÁ FOI DEVOLVIDA ao pool aqui.
+    const config = await iaConfigStore.carregar(req.tenantId);
+    if (!config) {
+      return res.status(400).json({ error: 'Nenhum provedor de IA configurado. Configure em Administração → Agente de IA.' });
+    }
+    // Preço (FIL-77) resolvido AQUI — fora de qualquer comTenant() em
+    // andamento. Mesma regra do achado de review do FIL-78 (ver cabeçalho de
+    // ia/iaConfigStore.js): consumo/precos.js abre sua própria transação de
+    // operador; chamá-lo dentro de um comTenant() prenderia 2 conexões do
+    // pool ao mesmo tempo pela mesma requisição.
+    const preco = await precos.carregarPreco(config.provider, config.modelo);
     const { texto: sugestao, uso } = await sugestaoResposta.gerarComContexto(config, mensagens);
 
     // Mede o consumo desta chamada (FIL-77) — só abre uma conexão nova se o
     // provedor realmente devolveu uso; nunca atrasa nem quebra a resposta já
-    // gerada (best-effort, ver consumo/registrar.js).
+    // gerada (best-effort, ver consumo/registrar.js). registrarIaTokens só
+    // grava/soma na conexão de tenant já aberta aqui — não faz mais nenhuma
+    // consulta de preço por baixo dos panos (o `preco` já vem pronto).
     if (uso && (uso.tokensEntrada > 0 || uso.tokensSaida > 0)) {
       try {
         await db.comTenant(req.tenantId, (conn) => consumo.registrarIaTokens(conn, req.tenantId, {
-          tokensEntrada: uso.tokensEntrada, tokensSaida: uso.tokensSaida,
-          provider: config.provider, modelo: config.modelo, referencia: id,
+          tokensEntrada: uso.tokensEntrada, tokensSaida: uso.tokensSaida, preco, referencia: id,
         }));
       } catch (err) {
         console.error('[consumo] falha ao registrar consumo da sugestão (não afeta a resposta):', err.message);
@@ -1235,6 +1255,9 @@ router.post('/:id/encerrar', naoAuditor, async (req, res, next) => {
               txt: despedidaIdentificada,
             }
           );
+          // Mede o envio (FIL-77) — achado de review: a despedida opcional
+          // ficou de fora da instrumentação original.
+          await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: id });
         } catch (e) {
           console.error('[conversas] despedida falhou (encerrando mesmo assim):', e.message);
         }

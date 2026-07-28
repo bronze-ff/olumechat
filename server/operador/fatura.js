@@ -67,6 +67,25 @@ async function carregarFatura(conn, tenantId, faturaId) {
   return r.rows[0];
 }
 
+/**
+ * Mesma fatura, mas com `FOR UPDATE` (achado de review do PR #26): sem o
+ * lock, dois pagamentos concorrentes na MESMA fatura liam o mesmo saldo antes
+ * de qualquer um dos dois commitar — os dois passavam na validação "valor <=
+ * saldo" e a soma dos dois podia ultrapassar o total da fatura. `FOR UPDATE`
+ * serializa: a segunda requisição espera o commit/rollback da primeira antes
+ * de ler a linha, então vê o saldo já atualizado. Só usada onde o saldo é
+ * lido e gravado na MESMA transação (registrarPagamento) — leitura pura
+ * (obterFatura, listarFaturas) continua sem lock.
+ */
+async function carregarFaturaTravada(conn, tenantId, faturaId) {
+  const r = await conn.execute(
+    `SELECT * FROM fatura WHERE id = :id AND tenant_id = :tid FOR UPDATE`,
+    { id: faturaId, tid: tenantId }
+  );
+  if (!r.rows.length) throw new ErroOperador(404, 'Fatura não encontrada.');
+  return r.rows[0];
+}
+
 function exigirPrevista(fatura) {
   if (fatura.STATUS !== 'prevista') {
     throw new ErroOperador(409, 'Fatura já emitida — os itens são histórico congelado, não podem ser alterados.');
@@ -327,7 +346,7 @@ function validarPagamento(dados) {
 async function registrarPagamento({ operador, tenantId, faturaId, dados, ip }) {
   const v = validarPagamento(dados);
   return comOperador(async (conn) => {
-    const fatura = await carregarFatura(conn, tenantId, faturaId);
+    const fatura = await carregarFaturaTravada(conn, tenantId, faturaId);
     if (!['emitida', 'atrasada', 'em_negociacao'].includes(fatura.STATUS)) {
       throw new ErroOperador(409, `Fatura no status "${fatura.STATUS}" não aceita pagamento.`);
     }

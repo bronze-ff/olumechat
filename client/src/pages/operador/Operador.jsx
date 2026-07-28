@@ -466,6 +466,65 @@ function ClientList({ lista, tenants, renomeando, setRenomeando, renomear, setCo
   );
 }
 
+const STATUS_ETAPA = {
+  pendente: { label: 'Pendente', className: 'bg-stone-100 text-stone-700 border-stone-200', dot: 'bg-stone-400' },
+  em_andamento: { label: 'Em andamento', className: 'bg-blue-50 text-blue-800 border-blue-200', dot: 'bg-blue-500' },
+  bloqueada: { label: 'Bloqueada', className: 'bg-red-50 text-red-800 border-red-200', dot: 'bg-red-500' },
+};
+
+// "Quem está travado em qual etapa" (FIL-81): cross-tenant de propósito — é a
+// visão de carteira, não o acompanhamento de UM cliente (esse é feito dentro
+// da sessão de suporte, na aba "Onboarding Meta" do painel do cliente).
+function Onboarding({ progresso }) {
+  const lista = progresso.data || [];
+  return (
+    <section className="app-panel overflow-hidden">
+      <header className="px-5 py-4 border-b border-paper-300">
+        <h2 className="font-semibold text-ink-950">Onboarding assistido da Meta</h2>
+        <p className="mt-0.5 text-xs text-stone-500">Progresso por cliente — quem está parado e em qual etapa.</p>
+      </header>
+      {progresso.isLoading && <div className="p-12 flex justify-center"><Spinner /></div>}
+      {progresso.isError && <p className="p-5 text-sm text-red-700">Não foi possível carregar o onboarding.</p>}
+      <div className="divide-y divide-paper-300">
+        {lista.map((item) => (
+          <article key={item.tenantId} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="min-w-0 sm:w-56 shrink-0">
+              <p className="font-semibold text-sm text-ink-950 truncate">{item.tenantNome}</p>
+              <p className="mt-0.5 font-mono text-[11px] text-stone-500">{item.tenantSlug}</p>
+            </div>
+            <div className="flex-1 min-w-0">
+              {item.concluido ? (
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px] font-semibold bg-emerald-50 text-emerald-800 border-emerald-200">
+                  <Icon name="check" size={12} /> Onboarding concluído
+                </span>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  {item.travado && (
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-red-50 text-red-700 text-[10px] font-semibold" title="Precisa de atenção">
+                      <Icon name="alert" size={11} /> Travado
+                    </span>
+                  )}
+                  <span className="text-sm text-ink-950">{item.etapaAtual?.titulo}</span>
+                  {item.etapaAtual && (
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[11px] font-semibold ${(STATUS_ETAPA[item.etapaAtual.status] || STATUS_ETAPA.pendente).className}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${(STATUS_ETAPA[item.etapaAtual.status] || STATUS_ETAPA.pendente).dot}`} />
+                      {(STATUS_ETAPA[item.etapaAtual.status] || STATUS_ETAPA.pendente).label}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="text-xs text-stone-500 tabular shrink-0">{item.etapasConcluidas}/{item.etapasTotal} etapas</div>
+          </article>
+        ))}
+      </div>
+      {!progresso.isLoading && lista.length === 0 && (
+        <p className="p-8 text-sm text-stone-600 text-center">Nenhum cliente na carteira ainda.</p>
+      )}
+    </section>
+  );
+}
+
 function Audit({ auditoria, filtro, setFiltro, lista }) {
   return (
     <section className="app-panel overflow-hidden">
@@ -527,6 +586,11 @@ export default function Operador({ secao = 'clientes' }) {
     queryKey: ['operador', 'auditoria', filtroAuditoria],
     queryFn: () => apiOperador.get('/auditoria', { params: filtroAuditoria ? { tenantId: filtroAuditoria } : {} }).then((response) => response.data),
     enabled: secao === 'auditoria',
+  });
+  const onboarding = useQuery({
+    queryKey: ['operador', 'onboarding'],
+    queryFn: () => apiOperador.get('/onboarding').then((response) => response.data),
+    enabled: secao === 'onboarding',
   });
 
   const recarregar = () => {
@@ -592,11 +656,13 @@ export default function Operador({ secao = 'clientes' }) {
   const titulo = {
     clientes: 'Carteira de clientes',
     'novo-cliente': 'Cadastrar novo cliente',
+    onboarding: 'Onboarding assistido da Meta',
     auditoria: 'Auditoria',
   }[secao];
   const descricao = {
     clientes: 'Acompanhe a carteira, o uso e os acessos de suporte de cada empresa.',
     'novo-cliente': 'Crie a empresa e entregue ao administrador um acesso pronto para configuração.',
+    onboarding: 'Progresso do processo assistido de conexão com a Meta, por cliente.',
     auditoria: 'Consulte a trilha das ações realizadas pela equipe de operações.',
   }[secao];
   const acao = secao === 'clientes' ? (
@@ -674,6 +740,8 @@ export default function Operador({ secao = 'clientes' }) {
           </div>
         </div>
       )}
+
+      {secao === 'onboarding' && <Onboarding progresso={onboarding} />}
 
       {secao === 'auditoria' && (
         <Audit auditoria={auditoria} filtro={filtroAuditoria} setFiltro={setFiltroAuditoria} lista={lista} />

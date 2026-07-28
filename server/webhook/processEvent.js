@@ -27,6 +27,7 @@ const { foraDeHorario } = require('../utils/horario');
 const { descreverMensagem } = require('../utils/descreverMensagem');
 const { gerarProtocolo } = require('../fila/protocolo');
 const distribuidor = require('../fila/distribuidor');
+const consumo = require('../consumo/registrar');
 
 const PG_UNIQUE_VIOLATION = '23505';
 const MEDIA_TYPES = ['image', 'document', 'audio', 'video', 'sticker'];
@@ -332,6 +333,13 @@ async function confirmarEncerramento(evt) {
          VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', now())`,
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: texto }
       );
+      // Medição de consumo (FIL-76/FIL-77): achado de review — confirmação de
+      // encerramento não tinha produtor de mensagem_enviada nenhum. Só
+      // chegamos aqui com wamid preenchido quando o sendText acima teve
+      // sucesso; se falhou, wamid fica null mas o status ainda seria 'sent'
+      // hardcoded (comportamento pré-existente) — por isso a condição real
+      // de "saiu de verdade" é wamid, não o status gravado.
+      if (wamid) await consumo.registrar(conn, evt.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: evt.conversaId });
     });
   } catch (err) {
     console.error('[webhook] persistência da confirmação falhou:', err.message);
@@ -361,6 +369,11 @@ async function enviarAvisoForaHorario(evt) {
          VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', now())`,
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: evt.texto }
       );
+      // Medição de consumo (FIL-76/FIL-77): achado de review — aviso de fora
+      // de horário não tinha produtor de mensagem_enviada nenhum. Chegamos
+      // aqui só depois do sendText (acima) ter tido sucesso (senão a função
+      // já teria retornado no catch).
+      await consumo.registrar(conn, evt.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: evt.conversaId });
     });
     publish({ tipo: 'mensagem', direcao: 'out', conversaId: evt.conversaId, contatoId: evt.contatoId, tenantId: evt.tenantId });
   } catch (err) {
@@ -464,6 +477,11 @@ async function processChange(conn, numero, value) {
     });
     const conversa = await openOrRenewConversa(conn, contatoId, numero, ts);
     const conversaId = conversa.id;
+    // Medição de consumo (FIL-76/FIL-77): conversa NOVA é evento cobrável —
+    // achado de review, não tinha produtor nenhum antes.
+    if (conversa.criada) {
+      await consumo.registrar(conn, numero.tenantId, { tipo: 'conversa_iniciada', quantidade: 1, referencia: conversaId });
+    }
 
     // Mídia: baixa para o disco; metadados embutidos na mensagem.
     let media = null;
@@ -491,6 +509,14 @@ async function processChange(conn, numero, value) {
     // devolve false. NÃO reprocessa: senão a IA/bot responde de novo, há
     // dupla notificação SSE e opt-out/encerramento/rastro de campanha repetidos.
     if (!novoInbound) continue;
+    // Medição de consumo (FIL-76/FIL-77): mídia efetivamente baixada e
+    // gravada — achado de review, não tinha produtor nenhum antes. Só conta
+    // no inbound NOVO (dedup acima, um webhook reentregue não pode dobrar o
+    // storage) e só quando `media.size` é um valor real — `media` só existe
+    // quando safeDownload teve sucesso de verdade.
+    if (media && media.size) {
+      await consumo.registrar(conn, numero.tenantId, { tipo: 'midia_armazenada', quantidade: media.size, referencia: conversaId });
+    }
     // Conversa nova = possível resposta a um disparo de campanha → deixa o rastro.
     if (conversa.criada) {
       await anotarRespostaCampanha(conn, { conversaId, contatoId, telefone: msg.from });

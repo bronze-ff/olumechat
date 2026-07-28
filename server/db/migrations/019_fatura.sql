@@ -1,6 +1,7 @@
 -- ============================================================================
 -- 019_fatura.sql — FIL-79: faturamento mensal, pagamentos e inadimplência.
--- Fecha o ciclo financeiro com contrato (018/FIL-76) e consumo (016/FIL-77):
+-- Fecha o ciclo financeiro com contrato (018/FIL-76) e consumo (016/FIL-77,
+-- inclui custo_centavos NULLABLE para custo desconhecido — ver fecharMes()):
 -- gera a fatura do mês, acompanha pagamento, age sobre inadimplência.
 --
 -- TRÊS TABELAS:
