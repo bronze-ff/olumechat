@@ -45,7 +45,7 @@ test('POST cria usuário + atendente e devolve o link de definir senha (sem senh
     if (/SELECT slug FROM tenant/i.test(sql)) return { rows: [{ SLUG: 'multicanal' }] };
     return { rows: [] };
   }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} });
-  tokenSenha.gerarToken = async () => ({ token: 'tok-abc', expiraEm: new Date('2026-01-01T00:00:00Z') });
+  tokenSenha.gerarTokenComConn = async () => ({ token: 'tok-abc', expiraEm: new Date('2026-01-01T00:00:00Z') });
 
   const res = await req(servidor(), 'POST', '/api/atendentes', { email: 'Nova@Empresa.com.br', nome: 'Nova Pessoa', papel: 'ATENDENTE' });
   assert.equal(res.status, 201);
@@ -55,6 +55,30 @@ test('POST cria usuário + atendente e devolve o link de definir senha (sem senh
   const insUsuario = cap.find((c) => /INSERT INTO usuario /i.test(c.sql));
   assert.equal(insUsuario.binds.email, 'nova@empresa.com.br', 'e-mail normalizado pra minúsculas');
   assert.ok(cap.some((c) => /INSERT INTO auditoria/i.test(c.sql)), 'audita a criação');
+});
+
+test('POST: falha ao gerar o convite reverte usuário/atendente (mesma transação, sem órfão)', async () => {
+  const cap = [];
+  let commitCalls = 0;
+  let rollbackCalls = 0;
+  db.getConnection = async () => ({
+    async execute(sql, binds) {
+      cap.push({ sql, binds });
+      if (/INSERT INTO usuario /i.test(sql)) return { rows: [{ ID: 42 }] };
+      if (/INSERT INTO atendente /i.test(sql)) return { rows: [{ ID: 7 }] };
+      if (/SELECT slug FROM tenant/i.test(sql)) return { rows: [{ SLUG: 'multicanal' }] };
+      return { rows: [] };
+    },
+    commit: async () => { commitCalls++; },
+    rollback: async () => { rollbackCalls++; },
+    close: async () => {},
+  });
+  tokenSenha.gerarTokenComConn = async () => { throw new Error('falha ao gerar token'); };
+
+  const res = await req(servidor(), 'POST', '/api/atendentes', { email: 'orfao@empresa.com.br', papel: 'ATENDENTE' });
+  assert.equal(res.status, 500);
+  assert.equal(commitCalls, 0, 'não deve commitar quando o convite falha (senão sobra usuário sem convite)');
+  assert.equal(rollbackCalls, 1, 'reverte usuário/atendente criados na mesma transação');
 });
 
 test('POST rejeita e-mail inválido', async () => {

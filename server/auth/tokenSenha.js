@@ -44,26 +44,37 @@ function hashDoToken(token) {
  * @param {{ ttlMinutos?: number }} [opts]
  * @returns {Promise<{ token: string, expiraEm: Date }>}
  */
-async function gerarToken(tenantId, usuarioId, opts = {}) {
+/**
+ * Mesma coisa que `gerarToken`, mas rodando na conexão/transação JÁ ABERTA
+ * pelo chamador (ver auth/rbac.js e api/atendentes.js): permite que a criação
+ * do usuário/atendente e a emissão do convite sejam atômicas — se o token
+ * falhar depois do INSERT do usuário, a transação inteira dá ROLLBACK em vez
+ * de deixar um usuário órfão sem convite (que travaria numa retentativa por
+ * conflito de e-mail).
+ * @param {object} conn  conexão já dentro de db.comTenant()
+ */
+async function gerarTokenComConn(conn, tenantId, usuarioId, opts = {}) {
   const ttl = Number(opts.ttlMinutos) > 0 ? Number(opts.ttlMinutos) : TTL_MINUTOS_PADRAO;
   const token = crypto.randomBytes(32).toString('base64url'); // 256 bits
   const hash = hashDoToken(token);
   const expiraEm = new Date(Date.now() + ttl * 60_000);
 
-  await db.comTenant(tenantId, async (conn) => {
-    await conn.execute(
-      `UPDATE usuario_token_senha SET usado_em = now()
-        WHERE tenant_id = :tenantId AND usuario_id = :uid AND usado_em IS NULL`,
-      { tenantId, uid: usuarioId }
-    );
-    await conn.execute(
-      `INSERT INTO usuario_token_senha (tenant_id, usuario_id, token_hash, expira_em)
-       VALUES (:tenantId, :uid, :hash, :exp)`,
-      { tenantId, uid: usuarioId, hash, exp: expiraEm }
-    );
-  });
+  await conn.execute(
+    `UPDATE usuario_token_senha SET usado_em = now()
+      WHERE tenant_id = :tenantId AND usuario_id = :uid AND usado_em IS NULL`,
+    { tenantId, uid: usuarioId }
+  );
+  await conn.execute(
+    `INSERT INTO usuario_token_senha (tenant_id, usuario_id, token_hash, expira_em)
+     VALUES (:tenantId, :uid, :hash, :exp)`,
+    { tenantId, uid: usuarioId, hash, exp: expiraEm }
+  );
 
   return { token, expiraEm };
+}
+
+async function gerarToken(tenantId, usuarioId, opts = {}) {
+  return db.comTenant(tenantId, (conn) => gerarTokenComConn(conn, tenantId, usuarioId, opts));
 }
 
 /**
@@ -145,4 +156,4 @@ async function definirSenha(tenantId, token, senhaNova) {
   });
 }
 
-module.exports = { gerarToken, verificarToken, definirSenha, hashDoToken, TTL_MINUTOS_PADRAO };
+module.exports = { gerarToken, gerarTokenComConn, verificarToken, definirSenha, hashDoToken, TTL_MINUTOS_PADRAO };

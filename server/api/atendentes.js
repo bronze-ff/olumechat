@@ -104,19 +104,26 @@ router.post('/', exigirPapel('ADMIN'), async (req, res, next) => {
       // deixa este SELECT passar mesmo dentro de comTenant().
       const t = await conn.execute(`SELECT slug FROM tenant WHERE id = :id`, { id: req.tenantId });
 
+      // Convite gerado NA MESMA transação: se falhar, o INSERT do usuário/
+      // atendente acima dá ROLLBACK — não sobra usuário sem convite (o que
+      // travaria uma retentativa por conflito de e-mail).
+      const convite = await tokenSenha.gerarTokenComConn(conn, req.tenantId, usuarioId);
+
       await conn.execute(
         `INSERT INTO auditoria (matricula, acao, entidade, entidade_id, detalhe)
          VALUES (:m, 'atendente_criado', 'atendente', :id, :det)`,
         { m: req.user && req.user.matricula, id: atendenteId, det: JSON.stringify({ email, papel, deptoIds, numeroIds }) }
       );
 
-      return { usuarioId, atendenteId, slug: t.rows[0] && t.rows[0].SLUG };
+      return { usuarioId, atendenteId, slug: t.rows[0] && t.rows[0].SLUG, convite };
     });
 
-    const convite = await tokenSenha.gerarToken(req.tenantId, criado.usuarioId);
     res.status(201).json({
       id: criado.atendenteId,
-      convite: { link: linkDeConvite(criado.slug, convite.token), expiraEm: convite.expiraEm.toISOString() },
+      convite: {
+        link: linkDeConvite(criado.slug, criado.convite.token),
+        expiraEm: criado.convite.expiraEm.toISOString(),
+      },
     });
   } catch (err) {
     if (err instanceof ErroValidacao) return res.status(err.status).json({ error: err.message });
