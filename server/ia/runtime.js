@@ -21,6 +21,7 @@ const limitePlano = require('./limitePlano');
 const consumo = require('../consumo/registrar');
 const precos = require('../consumo/precos');
 const { partirTexto } = require('./chunk');
+const { publish } = require('../realtime/hub');
 
 const MAX_ITER = 4;
 const MSG_TETO_ESTOURADO = 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.';
@@ -51,7 +52,13 @@ async function carregarConversa(conn, tenantId, conversaId) {
   };
 }
 
+/**
+ * Envia e persiste as respostas da IA. Devolve QUANTOS pedaços saíram de
+ * verdade (status 'sent') — quem chama usa isso para decidir se publica no
+ * bus: um envio que falhou não pode virar "mensagem nova" na tela do atendente.
+ */
 async function responder(conn, tenantId, cv, textos) {
+  let enviadas = 0;
   for (const bruto of textos) {
     for (const pedaco of partirTexto(bruto, 4096)) {
       let wamid = null, status = 'sent';
@@ -66,10 +73,36 @@ async function responder(conn, tenantId, cv, textos) {
       // já existia; medir todo caminho de envio, não só as rotas manuais de
       // conversas.js). Só o que REALMENTE saiu é cobrável.
       if (status === 'sent') {
+        enviadas += 1;
         await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: cv.conversaId });
       }
     }
   }
+  return enviadas;
+}
+
+/**
+ * FIL-84 — a corrida do takeover. A IA processa em 3 fases e a chamada ao
+ * provedor pode levar até 45s (ia/client.js): nesse intervalo o atendente pode
+ * ter clicado em Assumir. Rechecar aqui, na MESMA transação que vai enviar, é
+ * o que faz "a IA cala na hora" ser verdade — sem isto o cliente recebe a fala
+ * da IA depois de o humano já estar no comando.
+ */
+async function aindaNaIa(conn, tenantId, conversaId) {
+  const r = await conn.execute(
+    `SELECT fila_status FROM conversa WHERE tenant_id = :tenantId AND id = :id`,
+    { tenantId, id: conversaId });
+  return Boolean(r.rows && r.rows.length) && r.rows[0].FILA_STATUS === 'ia';
+}
+
+/** Efeito pós-commit padrão de uma resposta da IA. A conversa da IA não tem
+ *  departamento (o estado 'ia' é o próprio lugar dela), então vai null. */
+function eventoMensagem(tenantId, cv) {
+  return () => publish({
+    tipo: 'mensagem', direcao: 'out',
+    conversaId: cv.conversaId, contatoId: cv.contatoId,
+    departamentoId: null, tenantId,
+  });
 }
 
 /**
@@ -86,6 +119,11 @@ async function responder(conn, tenantId, cv, textos) {
  *   3) comTenant (nova transação) — histórico, loop de tool-calls, resposta.
  */
 async function processarEntrada(tenantId, conversaId, texto) {
+  // Efeitos PÓS-COMMIT (publish/distribuidor). Coletados dentro das transações
+  // e disparados só no fim — mesmo contrato de bot/runtime.js::executar: antes
+  // do commit o estado novo não é visível para nenhuma outra conexão, e o SSE
+  // reagiria a algo que ainda pode sofrer rollback.
+  const posCommit = [];
   try {
     const cv = await db.comTenant(tenantId, async (conn) => {
       const cv = await carregarConversa(conn, tenantId, conversaId);
@@ -106,7 +144,7 @@ async function processarEntrada(tenantId, conversaId, texto) {
       // token no provedor. Mensagem genérica — nunca fala de custo/tokens
       // (ver ia/limitePlano.js).
       if (await limitePlano.estourouTeto(conn, tenantId)) {
-        await responder(conn, tenantId, cv, [MSG_TETO_ESTOURADO]);
+        if (await responder(conn, tenantId, cv, [MSG_TETO_ESTOURADO])) posCommit.push(eventoMensagem(tenantId, cv));
         return null;
       }
 
@@ -116,7 +154,7 @@ async function processarEntrada(tenantId, conversaId, texto) {
       // qualquer cliente do canal, e a mensagem de "canal restrito" nem existe.
       if (cv.iaModoTeste === 'S'
           && !(await auth.autorizado(conn, tenantId, cv.telefone, cv.numeroId))) {
-        await responder(conn, tenantId, cv, [MSG_NAO_AUTORIZADO]);
+        if (await responder(conn, tenantId, cv, [MSG_NAO_AUTORIZADO])) posCommit.push(eventoMensagem(tenantId, cv));
         return null;
       }
       return cv;
@@ -135,7 +173,9 @@ async function processarEntrada(tenantId, conversaId, texto) {
     // Fase 3 — nova transação de tenant, só para o que falta.
     await db.comTenant(tenantId, async (conn) => {
       if (!config) {
-        await responder(conn, tenantId, cv, ['O assistente está temporariamente indisponível (provedor de IA não configurado).']);
+        if (await responder(conn, tenantId, cv, ['O assistente está temporariamente indisponível (provedor de IA não configurado).'])) {
+          posCommit.push(eventoMensagem(tenantId, cv));
+        }
         return;
       }
 
@@ -206,10 +246,21 @@ async function processarEntrada(tenantId, conversaId, texto) {
           ? MSG_TETO_ESTOURADO
           : 'Não consegui responder agora — o assistente está indisponível no momento. Tente de novo em instantes.';
       }
-      await responder(conn, tenantId, cv, [respostaFinal]);
+      // Recheca ANTES de enviar: o atendente pode ter assumido durante a
+      // chamada ao provedor. Mudou ⇒ descarta a resposta sem enviar. O turno já
+      // está no histórico da IA (é o que ela pensou); nada chega ao cliente.
+      if (!(await aindaNaIa(conn, tenantId, conversaId))) {
+        console.log(`[ia] conversa ${conversaId}: atendente assumiu durante o turno — resposta descartada`);
+        return;
+      }
+      if (await responder(conn, tenantId, cv, [respostaFinal])) posCommit.push(eventoMensagem(tenantId, cv));
     });
   } catch (err) {
     console.error('[ia] runtime falhou:', err.message);
+  }
+  // Só notifica o SSE depois de a transação ter confirmado.
+  for (const efeito of posCommit) {
+    try { efeito(); } catch (e) { console.error(`[ia] efeito pós-commit falhou (conversa ${conversaId}):`, e.message); }
   }
 }
 
