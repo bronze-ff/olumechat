@@ -387,9 +387,62 @@ async function salvarIaConfig({ operador, tenantId, provider, modelo, baseUrl, a
   });
 }
 
+/**
+ * Aposenta a chave própria de UM tenant (FIL-78, achado de review P2): sem
+ * isto, a migração gradual anunciada no ticket — "tenants com chave própria
+ * continuam funcionando até o operador migrar manualmente" — não tinha
+ * caminho pela aplicação; `ia_config.ativo='S'` sempre vencia a credencial
+ * global e `salvarIaConfig` só sabe gravar `ativo='S'`, nunca desligar.
+ *
+ * Marca `ativo='N'` (NÃO apaga a linha nem a chave cifrada — histórico e
+ * reversibilidade, mesmo racional de definirIa) e invalida o cache do
+ * iaConfigStore na hora: a próxima chamada de IA deste tenant já cai no
+ * fallback da credencial global do operador.
+ */
+async function desativarIaConfig({ operador, tenantId, ip }) {
+  return comOperador(async (conn) => {
+    const antes = await carregarTenant(conn, tenantId);
+    const ex = await conn.execute(`SELECT ativo FROM ia_config WHERE tenant_id = :id AND id = 1`, { id: tenantId });
+    if (!ex.rows.length || ex.rows[0].ATIVO !== 'S') {
+      throw new ErroOperador(409, 'Este cliente não tem chave própria ativa para desativar.');
+    }
+    await entrarNoTenant(conn, tenantId);
+    await conn.execute(`UPDATE ia_config SET ativo = 'N', atualizado_em = now() WHERE tenant_id = :id AND id = 1`, { id: tenantId });
+    await sairDoTenant(conn);
+    await auditoria.registrar(conn, {
+      operador, tenantId, acao: 'ia_config_desativada_pelo_operador', entidade: 'ia_config', entidadeId: 1,
+      detalhe: { slug: antes.SLUG }, ip,
+    });
+    iaConfigStore.invalidar(tenantId);
+    return { id: tenantId, nome: antes.NOME, slug: antes.SLUG, chaveProprAtiva: false };
+  });
+}
+
+/**
+ * Define (ou remove, com `null`) o teto mensal de tokens do add-on de IA de
+ * UM tenant (FIL-78, achado de review P2): sem rota pra configurar o valor,
+ * o teto (ia/limitePlano.js) nunca dispara na prática — fica sempre NULL.
+ * O CONSUMO em si (o que é comparado contra este teto) é o FIL-77.
+ */
+async function definirTetoIa({ operador, tenantId, tetoTokensMes, ip }) {
+  const valor = tetoTokensMes === null || tetoTokensMes === undefined ? null : Number(tetoTokensMes);
+  if (valor !== null && (!Number.isFinite(valor) || !Number.isInteger(valor) || valor < 0)) {
+    throw new ErroOperador(400, 'Teto mensal de tokens deve ser um inteiro ≥ 0 (ou nulo, pra remover o teto).');
+  }
+  return comOperador(async (conn) => {
+    const antes = await carregarTenant(conn, tenantId);
+    await conn.execute(`UPDATE tenant SET ia_teto_tokens_mes = :v WHERE id = :id`, { v: valor, id: tenantId });
+    await auditoria.registrar(conn, {
+      operador, tenantId, acao: 'ia_teto_definido', entidade: 'tenant', entidadeId: tenantId,
+      detalhe: { slug: antes.SLUG, tetoTokensMes: valor }, ip,
+    });
+    return { id: tenantId, nome: antes.NOME, slug: antes.SLUG, tetoTokensMes: valor };
+  });
+}
+
 module.exports = {
   listarComUso, provisionar, renomear, alterarStatus, abrirAcessoSuporte,
-  listarAuditoria, definirIa, carregarIaConfig, salvarIaConfig,
-  validarSlug, normalizarSlug, ErroOperador, STATUS, idValido,
+  listarAuditoria, definirIa, carregarIaConfig, salvarIaConfig, desativarIaConfig,
+  definirTetoIa, validarSlug, normalizarSlug, ErroOperador, STATUS, idValido,
   IA_PROVEDORES, validarProviderModeloBaseUrl,
 };
