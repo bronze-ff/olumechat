@@ -158,3 +158,44 @@ test('IA chama transferir_para_humano: muda a fila, avisa o cliente e para de re
   assert.ok(eventos.some((e) => e.tipo === 'fila' && e.departamentoId === 5 && e.tenantId === TENANT),
     'a conversa tem que aparecer na fila do departamento na hora');
 });
+
+// ---------------------------------------------------------------------------
+// FIL-84 — nunca silêncio (obstáculo 7 do ticket).
+// ---------------------------------------------------------------------------
+test('vídeo: a IA responde pedindo texto, sem gastar token do provedor', async () => {
+  const conn = connComFila(['ia', 'ia']); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  let chamouModelo = false; client.chamar = async () => { chamouModelo = true; return { texto: '', toolCalls: [] }; };
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+
+  await runtime.processarEntrada(TENANT, 88, { tipo: 'nao_suportado', texto: '', tipoOriginal: 'video' });
+
+  assert.equal(chamouModelo, false, 'não pode gastar token para dizer "me manda por texto"');
+  assert.equal(enviados.length, 1, 'silêncio é o pior resultado possível');
+  assert.match(enviados[0].text.body, /texto/i);
+});
+
+test('entrada "ignorar" (reação, evento de sistema) não acorda a IA', async () => {
+  const conn = connComFila(['ia']); db.getConnection = async () => conn;
+  let abriuConexao = false;
+  const original = db.getConnection;
+  db.getConnection = async () => { abriuConexao = true; return original(); };
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+  await runtime.processarEntrada(TENANT, 88, { tipo: 'ignorar' });
+  assert.equal(enviados.length, 0);
+  assert.equal(abriuConexao, false, 'nem chega a abrir conexão do pool');
+});
+
+test('compatibilidade: string continua valendo como entrada de texto', async () => {
+  const conn = connComFila(['ia', 'ia']); db.getConnection = async () => conn;
+  prepararProvedor('ok');
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+  await runtime.processarEntrada(TENANT, 88, 'oi');
+  assert.equal(enviados.length, 1);
+  const turno = conn._ins.find((i) => /INSERT INTO ia_turno/i.test(i.sql) && i.binds.papel === 'user');
+  assert.equal(turno.binds.conteudo, 'oi');
+});

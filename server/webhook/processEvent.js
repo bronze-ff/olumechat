@@ -25,6 +25,7 @@ const { acharContato, variantes, normalizar: normTel } = require('../utils/telef
 const { acharClientePorTelefone } = require('../utils/clienteLookup');
 const { foraDeHorario } = require('../utils/horario');
 const { iaAtivaNoInstante } = require('../ia/ativacao');
+const entradaIa = require('../ia/entrada');
 const { descreverMensagem } = require('../utils/descreverMensagem');
 const { gerarProtocolo } = require('../fila/protocolo');
 const distribuidor = require('../fila/distribuidor');
@@ -609,9 +610,14 @@ async function processChange(conn, numero, value) {
       // Conversa em atendimento pelo bot de IA: runtime próprio. Diferente do
       // 'bot' (que na 1ª msg só saúda), a IA responde JÁ NA PRIMEIRA mensagem
       // (ela é a própria pergunta) — por isso NÃO exige !conversa.criada.
-      if (!optAcao && conversa.filaStatus === 'ia'
-          && msg.type === 'text' && msg.text) {
-        eventos.push({ tipo: 'ia_entrada', conversaId, texto: msg.text.body });
+      // FIL-84: deixou de ser só texto. Áudio, imagem, botão e localização
+      // chegam nela agora; o que ela ainda não compreende gera resposta
+      // educada, nunca silêncio (ver ia/entrada.js).
+      if (!optAcao && conversa.filaStatus === 'ia') {
+        const entrada = entradaIa.classificar(msg, conteudo, media);
+        if (entrada.tipo !== 'ignorar') {
+          eventos.push({ tipo: 'ia_entrada', conversaId, entrada });
+        }
       }
     }
 
@@ -675,7 +681,7 @@ async function processPayload(payload) {
   for (const evt of eventosGlobais) {
     if (evt.tipo === 'bot_iniciar') { runtime.iniciarFluxo(evt.tenantId, evt.conversaId); continue; }
     if (evt.tipo === 'bot_entrada') { runtime.processarEntrada(evt.tenantId, evt.conversaId, evt.texto); continue; }
-    if (evt.tipo === 'ia_entrada') { require('../ia/runtime').processarEntrada(evt.tenantId, evt.conversaId, evt.texto); continue; }
+    if (evt.tipo === 'ia_entrada') { require('../ia/runtime').processarEntrada(evt.tenantId, evt.conversaId, evt.entrada); continue; }
     if (evt.tipo === 'encerrar_cliente') {
       confirmarEncerramento(evt); // envia a confirmação fora da tx (isolado)
       publish({ tipo: 'conversa', conversaId: evt.conversaId, departamentoId: evt.departamentoId, tenantId: evt.tenantId });

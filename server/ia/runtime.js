@@ -33,6 +33,22 @@ const MSG_TETO_ESTOURADO = 'O assistente atingiu o limite de uso deste mês. Pe�
 const MSG_NAO_AUTORIZADO = 'Olá! Este canal é restrito e o seu número ainda não está liberado para falar com o assistente. '
   + 'Se precisar de atendimento, procure a empresa pelos canais habituais.';
 
+// FIL-84 — resposta educada por tipo que a IA ainda não compreende. Sai UMA VEZ
+// por tipo por conversa (ia/historico.jaAvisou): cinco vídeos seguidos não podem
+// virar cinco vezes o mesmo pedido. NUNCA silêncio — silêncio num canal de
+// atendimento é o pior resultado possível, e era o que acontecia antes deste
+// ticket com áudio, imagem e vídeo (obstáculo 7).
+const MSG_NAO_COMPREENDIDO = {
+  video: 'Ainda não consigo assistir a vídeos. Pode me contar por texto o que precisa? Se ajudar, mande uma foto.',
+  document: 'Ainda não consigo ler arquivos. Pode escrever aqui o que precisa, ou mandar uma foto do que quer mostrar?',
+  sticker: 'Não consegui entender essa figurinha 🙂 Pode me dizer em poucas palavras como posso ajudar?',
+  contacts: 'Recebi o contato, mas ainda não consigo ler cartões de contato. Pode me escrever o que precisa?',
+  image: 'Não consegui abrir essa imagem. Pode mandar de novo como foto (JPG, PNG ou WEBP, até 5 MB) ou descrever por texto?',
+  audio: 'Não consegui ouvir esse áudio. Pode me escrever o que precisa?',
+  audio_longo: 'Esse áudio ficou longo demais para eu ouvir. Pode resumir por texto, ou mandar um áudio mais curto?',
+};
+const MSG_NAO_COMPREENDIDO_PADRAO = 'Não consegui entender esse tipo de mensagem. Pode me escrever o que precisa?';
+
 async function carregarConversa(conn, tenantId, conversaId) {
   const r = await conn.execute(
     `SELECT c.ID, c.CONTATO_ID, c.NUMERO_ID, c.FILA_STATUS, ct.TELEFONE,
@@ -120,7 +136,15 @@ function eventoMensagem(tenantId, cv) {
  *   2) SEM conexão nenhuma aberta — resolve a credencial.
  *   3) comTenant (nova transação) — histórico, loop de tool-calls, resposta.
  */
-async function processarEntrada(tenantId, conversaId, texto) {
+async function processarEntrada(tenantId, conversaId, entrada) {
+  // Compatibilidade: o contrato antigo era (tenantId, conversaId, texto). Uma
+  // string continua valendo como entrada de texto — chamadores e testes antigos
+  // não precisam saber da estrutura nova (ver ia/entrada.js).
+  const ent = typeof entrada === 'string'
+    ? { tipo: 'texto', texto: entrada, midiaCaminho: null, mime: null, tamanho: null, tipoOriginal: 'text' }
+    : (entrada || { tipo: 'ignorar' });
+  if (ent.tipo === 'ignorar') return;
+  const texto = ent.texto;
   // Efeitos PÓS-COMMIT (publish/distribuidor). Coletados dentro das transações
   // e disparados só no fim — mesmo contrato de bot/runtime.js::executar: antes
   // do commit o estado novo não é visível para nenhuma outra conexão, e o SSE
@@ -181,7 +205,22 @@ async function processarEntrada(tenantId, conversaId, texto) {
         return;
       }
 
-      await historico.salvar(conn, tenantId, conversaId, 'user', { texto });
+      // Tipo que a IA ainda não compreende: resposta educada, uma vez por tipo
+      // por conversa. Não gasta token do provedor e não polui o histórico com
+      // um turno `user` vazio.
+      if (ent.tipo === 'nao_suportado') {
+        const chave = ent.tipoOriginal || 'desconhecido';
+        if (!(await historico.jaAvisou(conn, tenantId, conversaId, chave))) {
+          const aviso = MSG_NAO_COMPREENDIDO[chave] || MSG_NAO_COMPREENDIDO_PADRAO;
+          await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: aviso, aviso: chave });
+          if (await responder(conn, tenantId, cv, [aviso])) posCommit.push(eventoMensagem(tenantId, cv));
+        }
+        return;
+      }
+
+      await historico.salvar(conn, tenantId, conversaId, 'user', {
+        texto, midiaCaminho: ent.midiaCaminho, midiaMime: ent.mime,
+      });
       let mensagens = await historico.carregar(conn, tenantId, conversaId);
 
       let respostaFinal = '';
