@@ -10,15 +10,45 @@ const NOME_PROVEDOR = {
   groq: 'Groq', ollama: 'Ollama (local)', vllm: 'vLLM (self-hosted)',
 };
 
-function Secao({ titulo, children }) {
+// FIL-83: uma tela só, na ordem em que se configura pela primeira vez —
+// instruções → ficha → base → medidor → teste. Configurar isso é tarefa única,
+// feita uma vez por quem acabou de contratar; espalhar em abas separadas
+// pioraria exatamente o primeiro uso.
+const CAMPOS_FICHA = [
+  { chave: 'endereco', rotulo: 'Endereço', placeholder: 'Rua das Flores, 100 — Setor Central, Goiânia/GO' },
+  { chave: 'telefones', rotulo: 'Telefones', placeholder: '(62) 3333-0000 · WhatsApp (62) 99999-0000' },
+  { chave: 'horario', rotulo: 'Horário de atendimento', placeholder: 'Seg a sex 8h às 18h · Sáb 8h às 12h' },
+  { chave: 'pagamento', rotulo: 'Formas de pagamento', placeholder: 'Pix, cartão em até 3x, dinheiro' },
+  { chave: 'site', rotulo: 'Site', placeholder: 'www.suaempresa.com.br' },
+  { chave: 'observacoes', rotulo: 'Observações', placeholder: 'Estacionamento gratuito no local. Não trabalhamos com entrega aos domingos.' },
+];
+
+const EXEMPLOS_BLOCO = [
+  'Cardápio ou tabela de produtos',
+  'Política de troca e devolução',
+  'Perguntas frequentes',
+  'Área e prazo de entrega',
+];
+
+function Secao({ titulo, children, acao }) {
   return (
     <section className="bg-white rounded-2xl border border-black/[0.06]">
       <header className="flex items-center gap-2 px-4 pt-3.5 pb-2.5 border-b border-black/[0.05]">
         <span className="section-bar" />
         <h2 className="font-display font-bold text-sm text-stone-800 flex-1">{titulo}</h2>
+        {acao}
       </header>
       <div className="p-4 space-y-3">{children}</div>
     </section>
+  );
+}
+
+function Contador({ atual, limite }) {
+  const perto = atual > limite * 0.9;
+  return (
+    <span className={`font-mono text-[11px] ${atual > limite ? 'text-red-600' : perto ? 'text-amber-600' : 'text-stone-400'}`}>
+      {atual.toLocaleString('pt-BR')}/{limite.toLocaleString('pt-BR')}
+    </span>
   );
 }
 
@@ -44,10 +74,109 @@ function SemPlano() {
   );
 }
 
+const FAIXA = {
+  verde: { barra: 'bg-emerald-500', texto: 'text-emerald-700', fundo: 'bg-emerald-50 border-emerald-200', rotulo: 'Folgado' },
+  amarelo: { barra: 'bg-amber-500', texto: 'text-amber-700', fundo: 'bg-amber-50 border-amber-200', rotulo: 'Ficando grande' },
+  vermelho: { barra: 'bg-red-500', texto: 'text-red-700', fundo: 'bg-red-50 border-red-200', rotulo: 'Grande demais' },
+};
+
+/** Medidor de espaço. Não é enfeite: a base INTEIRA vai no prompt a cada
+ *  mensagem trocada e existe teto mensal de tokens por empresa — base inchada
+ *  não deixa só lento, queima o teto mais rápido. */
+function Medidor({ medidor }) {
+  const f = FAIXA[medidor.faixa] || FAIXA.verde;
+  const pct = Math.min(100, Math.round((medidor.caracteres / 25000) * 100));
+  return (
+    <Secao titulo="Espaço usado pelo agente">
+      <div className="flex items-baseline gap-2">
+        <span className={`font-display font-bold text-2xl ${f.texto}`}>{medidor.caracteres.toLocaleString('pt-BR')}</span>
+        <span className="text-xs text-stone-500">caracteres · ~{medidor.tokensEstimados.toLocaleString('pt-BR')} tokens por mensagem</span>
+        <span className={`ml-auto text-[11px] font-semibold px-2 py-0.5 rounded-full border ${f.fundo} ${f.texto}`}>{f.rotulo}</span>
+      </div>
+      <div className="h-2 rounded-full bg-paper-200 overflow-hidden">
+        <div className={`h-full ${f.barra} transition-all`} style={{ width: `${Math.max(2, pct)}%` }} />
+      </div>
+      <p className="text-xs leading-relaxed text-stone-500">
+        Tudo que você escreve aqui é enviado ao agente <b>a cada mensagem</b> trocada com um cliente.
+        Quanto maior a base, mais rápido o consumo mensal de IA da sua empresa é consumido — e mais lenta
+        fica a resposta. Prefira textos diretos e desligue blocos que não estão em uso.
+      </p>
+    </Secao>
+  );
+}
+
+function Bloco({ bloco, editavel, onSalvar, onRemover, salvando }) {
+  const [aberto, setAberto] = useState(false);
+  const [titulo, setTitulo] = useState(bloco.titulo);
+  const [conteudo, setConteudo] = useState(bloco.conteudo);
+  const sujo = titulo !== bloco.titulo || conteudo !== bloco.conteudo;
+
+  useEffect(() => { setTitulo(bloco.titulo); setConteudo(bloco.conteudo); }, [bloco.titulo, bloco.conteudo]);
+
+  return (
+    <div className={`rounded-xl border ${bloco.ativo ? 'border-black/[0.08]' : 'border-dashed border-black/[0.12] bg-paper-100'}`}>
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <button type="button" onClick={() => setAberto((a) => !a)}
+          className="flex-1 flex items-center gap-2 text-left min-w-0">
+          <span className={`font-mono text-[10px] w-5 text-stone-400 shrink-0`}>{bloco.ordem}</span>
+          <span className={`text-sm font-medium truncate ${bloco.ativo ? 'text-stone-800' : 'text-stone-400 line-through'}`}>
+            {bloco.titulo}
+          </span>
+          <span className="font-mono text-[10px] text-stone-400 shrink-0">{bloco.conteudo.length.toLocaleString('pt-BR')} car.</span>
+        </button>
+        {editavel && (
+          <>
+            <label className="flex items-center gap-1.5 cursor-pointer shrink-0" title={bloco.ativo ? 'Desativar (sai do prompt, texto preservado)' : 'Ativar'}>
+              <input type="checkbox" checked={bloco.ativo} disabled={salvando}
+                onChange={(e) => onSalvar({ ativo: e.target.checked })}
+                className="w-4 h-4 accent-brand-700" />
+              <span className="text-[11px] text-stone-500">{bloco.ativo ? 'no ar' : 'desligado'}</span>
+            </label>
+            <button type="button" onClick={() => onSalvar({ ordem: Math.max(0, bloco.ordem - 1) })}
+              disabled={salvando || bloco.ordem === 0} title="Subir no prompt"
+              className="w-6 h-6 rounded text-stone-400 hover:text-stone-700 hover:bg-paper-200 disabled:opacity-30">↑</button>
+            <button type="button" onClick={() => onSalvar({ ordem: bloco.ordem + 1 })} disabled={salvando} title="Descer no prompt"
+              className="w-6 h-6 rounded text-stone-400 hover:text-stone-700 hover:bg-paper-200 disabled:opacity-30">↓</button>
+            <button type="button" onClick={onRemover} disabled={salvando} title="Remover bloco"
+              className="w-6 h-6 rounded text-stone-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-30">×</button>
+          </>
+        )}
+      </div>
+      {aberto && (
+        <div className="px-3 pb-3 space-y-2 border-t border-black/[0.05] pt-3">
+          <input value={titulo} disabled={!editavel} maxLength={120}
+            onChange={(e) => setTitulo(e.target.value)} className="input-field disabled:opacity-60" />
+          <textarea rows={8} value={conteudo} disabled={!editavel}
+            onChange={(e) => setConteudo(e.target.value)}
+            className="input-field resize-y font-mono text-xs disabled:opacity-60" />
+          {editavel && (
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => onSalvar({ titulo, conteudo })} disabled={!sujo || salvando}
+                className="px-4 py-1.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold disabled:opacity-40">
+                Salvar bloco
+              </button>
+              <Contador atual={conteudo.length} limite={20000} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function IaConfig() {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [sugestaoAtiva, setSugestaoAtiva] = useState(false);
   const [salvoRecursos, setSalvoRecursos] = useState(false);
+  const [instrucoes, setInstrucoes] = useState('');
+  const [ficha, setFicha] = useState({});
+  const [salvoPerfil, setSalvoPerfil] = useState(false);
+  const [erroPerfil, setErroPerfil] = useState('');
+  const [novo, setNovo] = useState(null); // { titulo, conteudo } enquanto adiciona
+  const [erroBloco, setErroBloco] = useState('');
+  const [pergunta, setPergunta] = useState('');
+  const [resposta, setResposta] = useState('');
+  const [erroTeste, setErroTeste] = useState('');
   const qc = useQueryClient();
 
   const config = useQuery({
@@ -60,10 +189,19 @@ export default function IaConfig() {
     queryFn: () => api.get('/config').then((r) => r.data),
     enabled: !!user?.iaHabilitada,
   });
+  const perfil = useQuery({
+    queryKey: ['ia-perfil'],
+    queryFn: () => api.get('/ia-perfil').then((r) => r.data),
+    enabled: !!user?.iaHabilitada,
+  });
 
   useEffect(() => {
     if (geral.data) setSugestaoAtiva(geral.data.ia_sugestao_ativa === 'S');
   }, [geral.data]);
+
+  useEffect(() => {
+    if (perfil.data) { setInstrucoes(perfil.data.instrucoes || ''); setFicha(perfil.data.ficha || {}); }
+  }, [perfil.data]);
 
   const salvarRecursos = useMutation({
     mutationFn: (ativo) => api.put('/config', { ia_sugestao_ativa: ativo ? 'S' : 'N' }),
@@ -74,8 +212,44 @@ export default function IaConfig() {
     },
   });
 
+  const salvarPerfil = useMutation({
+    mutationFn: () => api.put('/ia-perfil', { instrucoes, ficha }),
+    onSuccess: () => {
+      setErroPerfil(''); setSalvoPerfil(true);
+      qc.invalidateQueries({ queryKey: ['ia-perfil'] });
+      setTimeout(() => setSalvoPerfil(false), 2500);
+    },
+    onError: (e) => setErroPerfil(e.response?.data?.error || 'Falha ao salvar.'),
+  });
+
+  const criarBloco = useMutation({
+    mutationFn: (b) => api.post('/ia-conhecimento', b),
+    onSuccess: () => { setNovo(null); setErroBloco(''); qc.invalidateQueries({ queryKey: ['ia-perfil'] }); },
+    onError: (e) => setErroBloco(e.response?.data?.error || 'Falha ao adicionar o bloco.'),
+  });
+  const editarBloco = useMutation({
+    mutationFn: ({ id, ...campos }) => api.put(`/ia-conhecimento/${id}`, campos),
+    onSuccess: () => { setErroBloco(''); qc.invalidateQueries({ queryKey: ['ia-perfil'] }); },
+    onError: (e) => setErroBloco(e.response?.data?.error || 'Falha ao salvar o bloco.'),
+  });
+  const removerBloco = useMutation({
+    mutationFn: (id) => api.delete(`/ia-conhecimento/${id}`),
+    onSuccess: () => { setErroBloco(''); qc.invalidateQueries({ queryKey: ['ia-perfil'] }); },
+    onError: (e) => setErroBloco(e.response?.data?.error || 'Falha ao remover o bloco.'),
+  });
+  const testar = useMutation({
+    mutationFn: () => api.post('/ia-perfil/testar', { pergunta }).then((r) => r.data),
+    onSuccess: (d) => { setErroTeste(''); setResposta(d.resposta); },
+    onError: (e) => { setResposta(''); setErroTeste(e.response?.data?.error || 'Falha ao testar.'); },
+  });
+
   if (!user?.iaHabilitada) return <SemPlano />;
-  if (config.isLoading) return <div className="p-10 flex justify-center"><Spinner /></div>;
+  if (config.isLoading || perfil.isLoading) return <div className="p-10 flex justify-center"><Spinner /></div>;
+
+  const dados = perfil.data || { blocos: [], medidor: { caracteres: 0, tokensEstimados: 0, faixa: 'verde' }, limites: {} };
+  const limites = dados.limites || { instrucoes: 8000, blocoConteudo: 20000, blocos: 50 };
+  const blocos = dados.blocos || [];
+  const salvandoBloco = criarBloco.isPending || editarBloco.isPending || removerBloco.isPending;
 
   return (
     <div className="max-w-screen-md mx-auto space-y-4">
@@ -101,8 +275,8 @@ export default function IaConfig() {
               ) : (
                 // Credencial GLOBAL do operador (FIL-78): nenhum detalhe de
                 // provedor/modelo é exposto por rota de tenant — só que está
-                // ativa (a conta é da Multicanal, não do cliente).
-                <p className="text-sm font-medium text-stone-800">Configurado pela Multicanal</p>
+                // ativa (a conta é do Falatta, não do cliente).
+                <p className="text-sm font-medium text-stone-800">Configurado pelo time Falatta</p>
               )}
             </div>
           </div>
@@ -113,9 +287,154 @@ export default function IaConfig() {
         )}
       </Secao>
 
+      {/* 2 — Instruções ---------------------------------------------------- */}
+      <Secao titulo="Instruções do agente">
+        <p className="text-xs leading-relaxed text-stone-500">
+          Quem é o agente, como ele fala e o que ele pode ou não prometer. Escreva como você explicaria
+          a um funcionário novo no primeiro dia. Regras de segurança (não inventar informação, não pedir
+          senha ou dado de cartão) já são aplicadas automaticamente e não podem ser desligadas.
+        </p>
+        <textarea rows={8} value={instrucoes} disabled={!isAdmin}
+          onChange={(e) => setInstrucoes(e.target.value)}
+          className="input-field resize-y disabled:opacity-60"
+          placeholder={'Ex.: Você é a Ana, atendente da Pizzaria do Zé. Trate o cliente pelo nome, seja breve e '
+            + 'simpática. Tire dúvidas sobre cardápio, entrega e formas de pagamento. Não dê desconto nem '
+            + 'prometa prazo de entrega — nesses casos, diga que vai confirmar com a equipe.'} />
+        <div className="flex items-center gap-3">
+          <Contador atual={instrucoes.length} limite={limites.instrucoes} />
+        </div>
+      </Secao>
+
+      {/* 3 — Ficha --------------------------------------------------------- */}
+      <Secao titulo="Dados da empresa">
+        <p className="text-xs text-stone-500">
+          Informações fixas que o agente pode responder na hora. Deixe em branco o que não se aplica.
+        </p>
+        <div className="space-y-2.5">
+          {CAMPOS_FICHA.map((c) => (
+            <div key={c.chave}>
+              <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1">{c.rotulo}</label>
+              <input value={ficha[c.chave] || ''} disabled={!isAdmin} placeholder={c.placeholder}
+                onChange={(e) => setFicha((f) => ({ ...f, [c.chave]: e.target.value }))}
+                className="input-field disabled:opacity-60" />
+            </div>
+          ))}
+        </div>
+        {erroPerfil && <p className="text-xs text-red-600">{erroPerfil}</p>}
+        {isAdmin ? (
+          <div className="flex items-center gap-3">
+            <button onClick={() => salvarPerfil.mutate()} disabled={salvarPerfil.isPending}
+              className="px-6 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-40">
+              {salvarPerfil.isPending ? 'Salvando…' : 'Salvar instruções e dados'}
+            </button>
+            {salvoPerfil && <span className="text-xs text-emerald-600 font-medium">✓ Salvo — vale na hora</span>}
+          </div>
+        ) : (
+          <p className="font-mono text-[10px] text-stone-400">somente ADMIN edita</p>
+        )}
+      </Secao>
+
+      {/* 4 — Base de conhecimento ------------------------------------------ */}
+      <Secao
+        titulo="Base de conhecimento"
+        acao={isAdmin && !novo && blocos.length < limites.blocos && (
+          <button type="button" onClick={() => setNovo({ titulo: '', conteudo: '' })}
+            className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-800">
+            <Icon name="plus" size={14} /> Adicionar bloco
+          </button>
+        )}
+      >
+        <p className="text-xs leading-relaxed text-stone-500">
+          Textos que o agente consulta para responder: cardápio, políticas, perguntas frequentes.
+          Um assunto por bloco — assim dá para desligar o que sai de época sem perder o texto.
+        </p>
+
+        {blocos.length === 0 && !novo && (
+          // Estado vazio que ENSINA o que escrever — é a primeira tela de quem
+          // acabou de contratar.
+          <div className="rounded-xl border border-dashed border-black/[0.12] p-4 text-center">
+            <p className="text-sm font-medium text-stone-700">Nenhum bloco ainda</p>
+            <p className="mt-1 text-xs text-stone-500">Comece por um destes:</p>
+            <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+              {EXEMPLOS_BLOCO.map((e) => (
+                <button key={e} type="button" disabled={!isAdmin}
+                  onClick={() => setNovo({ titulo: e, conteudo: '' })}
+                  className="px-2.5 py-1 rounded-full border border-black/[0.08] text-[11px] text-stone-600 hover:border-brand-700 hover:text-brand-700 disabled:opacity-50">
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {blocos.map((b) => (
+            <Bloco key={b.id} bloco={b} editavel={isAdmin} salvando={salvandoBloco}
+              onSalvar={(campos) => editarBloco.mutate({ id: b.id, ...campos })}
+              onRemover={() => removerBloco.mutate(b.id)} />
+          ))}
+        </div>
+
+        {novo && (
+          <div className="rounded-xl border border-brand-700/30 bg-brand-700/[0.03] p-3 space-y-2">
+            <input autoFocus value={novo.titulo} maxLength={120} placeholder="Título do bloco (ex.: Cardápio)"
+              onChange={(e) => setNovo((n) => ({ ...n, titulo: e.target.value }))} className="input-field" />
+            <textarea rows={6} value={novo.conteudo} placeholder="Cole aqui o conteúdo. Texto simples, direto ao ponto."
+              onChange={(e) => setNovo((n) => ({ ...n, conteudo: e.target.value }))}
+              className="input-field resize-y font-mono text-xs" />
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={() => criarBloco.mutate(novo)}
+                disabled={!novo.titulo.trim() || !novo.conteudo.trim() || criarBloco.isPending}
+                className="px-4 py-1.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold disabled:opacity-40">
+                {criarBloco.isPending ? 'Adicionando…' : 'Adicionar'}
+              </button>
+              <button type="button" onClick={() => { setNovo(null); setErroBloco(''); }}
+                className="text-xs text-stone-500 hover:text-stone-800">Cancelar</button>
+              <Contador atual={novo.conteudo.length} limite={limites.blocoConteudo} />
+            </div>
+          </div>
+        )}
+
+        {erroBloco && <p className="text-xs text-red-600">{erroBloco}</p>}
+        <p className="font-mono text-[10px] text-stone-400">
+          {blocos.length}/{limites.blocos} blocos
+        </p>
+      </Secao>
+
+      {/* 5 — Medidor -------------------------------------------------------- */}
+      <Medidor medidor={dados.medidor} />
+
+      {/* 6 — Testar --------------------------------------------------------- */}
+      {isAdmin && (
+        <Secao titulo="Testar o agente">
+          <p className="text-xs text-stone-500">
+            Faça uma pergunta como um cliente faria. A resposta usa exatamente a configuração salva acima —
+            e consome tokens do seu plano, igual a um atendimento real.
+          </p>
+          <div className="flex gap-2">
+            <input value={pergunta} placeholder="Ex.: vocês entregam no Setor Bueno?"
+              onChange={(e) => setPergunta(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && pergunta.trim()) testar.mutate(); }}
+              className="input-field flex-1" />
+            <button type="button" onClick={() => testar.mutate()} disabled={!pergunta.trim() || testar.isPending}
+              className="px-5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-40 shrink-0">
+              {testar.isPending ? '…' : 'Testar'}
+            </button>
+          </div>
+          {erroTeste && <p className="text-xs text-red-600">{erroTeste}</p>}
+          {resposta && (
+            <div className="rounded-xl border border-black/[0.07] bg-paper-100 px-3.5 py-3">
+              <p className="text-[10px] font-mono uppercase tracking-wide text-stone-400 mb-1">Resposta do agente</p>
+              <p className="text-sm text-stone-800 whitespace-pre-wrap">{resposta}</p>
+            </div>
+          )}
+        </Secao>
+      )}
+
+      {/* 7 — Recursos ------------------------------------------------------- */}
       <Secao titulo="Recursos para o atendente">
         <label className="flex items-start gap-3 cursor-pointer">
-          <input type="checkbox" checked={sugestaoAtiva} disabled={!config.data?.ativo}
+          <input type="checkbox" checked={sugestaoAtiva} disabled={!config.data?.ativo || !isAdmin}
             onChange={(e) => { setSugestaoAtiva(e.target.checked); salvarRecursos.mutate(e.target.checked); }}
             className="w-4 h-4 mt-0.5 accent-brand-700 disabled:opacity-60" />
           <span>
@@ -127,9 +446,6 @@ export default function IaConfig() {
         </label>
         {salvoRecursos && <span className="text-xs text-emerald-600 font-medium">✓ Salvo — vale na hora</span>}
       </Secao>
-
-      {/* TODO(falatta): base de conhecimento editável por tenant entra aqui.
-          A seção antiga puxava .sql de um repo GitHub do cliente original. */}
     </div>
   );
 }
