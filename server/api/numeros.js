@@ -9,6 +9,7 @@ const db = require('../db/pool');
 const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
 const { graphGet, graphPost } = require('../graph/client');
+const handoff = require('../ia/handoff');
 
 const router = express.Router();
 
@@ -211,17 +212,10 @@ router.put('/:id', exigirSuporteOperador, async (req, res, next) => {
       // do número a cada mensagem — ver webhook/processEvent.js). Sem este
       // cascade, quem testou a IA e depois voltou o número pro padrão continua
       // preso na resposta "canal restrito" para sempre nessas conversas antigas.
+      // FIL-84: a cascata virou ia/handoff.resolverDestino — a MESMA usada pela
+      // ferramenta transferir_para_humano e pelo botão Assumir.
       if (b.modo === 'padrao') {
-        const fx = await conn.execute(
-          `SELECT n.departamento_padrao_id AS dep, f.id AS fluxo_id
-             FROM numero n
-             LEFT JOIN fluxo f ON f.numero_id = n.id AND f.ativo = 'S'
-            WHERE n.id = :id`,
-          { id }
-        );
-        const dep = (fx.rows[0] && fx.rows[0].DEP) || null;
-        const fluxoId = (fx.rows[0] && fx.rows[0].FLUXO_ID) || null;
-        const novoStatus = fluxoId ? 'bot' : (dep ? 'aguardando' : 'em_atendimento');
+        const destino = await handoff.resolverDestino(conn, req.tenantId, id, { permitirFluxo: true });
         await conn.execute(
           `UPDATE conversa
               SET fila_status = :st,
@@ -229,8 +223,9 @@ router.put('/:id', exigirSuporteOperador, async (req, res, next) => {
                   departamento_id = :dep,
                   fila_entrou_em = CASE WHEN :dep IS NOT NULL THEN now() ELSE fila_entrou_em END,
                   bot_ultima_interacao = CASE WHEN :flx IS NOT NULL THEN now() ELSE bot_ultima_interacao END
-            WHERE numero_id = :id AND fila_status = 'ia' AND status = 'aberta'`,
-          { st: novoStatus, flx: numOuNull(fluxoId), dep: numOuNull(dep), id }
+            WHERE tenant_id = :tenantId AND numero_id = :id AND fila_status = 'ia' AND status = 'aberta'`,
+          { tenantId: req.tenantId, st: destino.filaStatus,
+            flx: numOuNull(destino.fluxoId), dep: numOuNull(destino.departamentoId), id }
         );
       }
       return true;
