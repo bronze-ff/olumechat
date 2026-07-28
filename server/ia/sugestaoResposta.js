@@ -32,13 +32,15 @@ async function carregarContexto(conn, conversaId) {
  *  pode levar até 45s; quem chama já deve ter devolvido a conexão ao pool antes
  *  de rodar isto, senão dez sugestões simultâneas travam o pool inteiro, ver
  *  api/conversas.js). Lança com mensagem amigável em vez de propagar o erro cru
- *  do provedor — quem chama (rota HTTP) só precisa exibir err.message. */
+ *  do provedor — quem chama (rota HTTP) só precisa exibir err.message.
+ *  Devolve `uso` (tokens reais do provedor, FIL-77) para quem chama registrar
+ *  o consumo — este módulo não conhece tenant/banco de propósito. */
 async function gerarComContexto(config, mensagens) {
   if (!mensagens.length) throw new Error('Sem mensagens nesta conversa ainda para basear uma sugestão.');
   const out = await client.chamar({ config, sistema: SISTEMA, mensagens, semFerramentas: true });
   const texto = (out.texto || '').trim();
   if (!texto) throw new Error('O provedor não retornou uma sugestão.');
-  return texto;
+  return { texto, uso: out.uso || null };
 }
 
 /** Atalho que carrega o contexto E chama o provedor numa tacada só — use só

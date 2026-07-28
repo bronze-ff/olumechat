@@ -32,6 +32,8 @@ const contas = require('./contas');
 const auditoria = require('./auditoria');
 const tenants = require('./tenants');
 const credencialIa = require('./credencialIa');
+const consumo = require('./consumo');
+const precos = require('../consumo/precos');
 const iaConfigStore = require('../ia/iaConfigStore');
 const { trocarCodigo } = require('../api/meta');
 const { guardar } = require('../meta/connection');
@@ -436,6 +438,57 @@ router.put(
       // Sem isto, o runtime (ia/iaConfigStore.js) seguiria servindo a
       // credencial antiga do cache até o TTL de 60s expirar sozinho.
       iaConfigStore.invalidarGlobal();
+      res.json(r);
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/operador/tenants/:id/consumo?de=&ate= — série de consumo por tipo
+// (FIL-77), com custo e quantidade. NUNCA existe equivalente em rota de
+// tenant (ver docs/SEGURANCA.md) — só o operador vê custo/tokens/preço.
+// ---------------------------------------------------------------------------
+router.get('/tenants/:id/consumo', async (req, res, next) => {
+  const id = idDaRota(req, res);
+  if (!id) return;
+  try {
+    res.json(await consumo.consumoDoTenant({ tenantId: id, de: req.query.de, ate: req.query.ate }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/operador/precos — tabela de preço por provider/modelo (FIL-77).
+// PUT /api/operador/precos { provider, modelo, precoEntradaCentavos1k, precoSaidaCentavos1k }
+// Editável pelo operador — nunca hardcoded no runtime (ver consumo/precos.js).
+// ---------------------------------------------------------------------------
+router.get('/precos', async (req, res, next) => {
+  try {
+    res.json(await precos.listarPrecos());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.put(
+  '/precos',
+  body('provider').isString(),
+  body('modelo').isString(),
+  body('precoEntradaCentavos1k').isFloat({ min: 0 }),
+  body('precoSaidaCentavos1k').isFloat({ min: 0 }),
+  async (req, res, next) => {
+    if (checarValidacao(req, res)) return;
+    try {
+      const r = await precos.salvarPreco({
+        operador: req.operador,
+        provider: req.body.provider, modelo: req.body.modelo,
+        precoEntradaCentavos1k: req.body.precoEntradaCentavos1k,
+        precoSaidaCentavos1k: req.body.precoSaidaCentavos1k,
+        ip: auditoria.ipDaRequisicao(req),
+      });
       res.json(r);
     } catch (err) {
       tratar(err, res, next);

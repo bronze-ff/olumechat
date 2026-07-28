@@ -17,6 +17,7 @@ const { exigirPapel } = require('../auth/rbac');
 const iaConfigStore = require('../ia/iaConfigStore');
 const sugestaoResposta = require('../ia/sugestaoResposta');
 const limitePlano = require('../ia/limitePlano');
+const consumo = require('../consumo/registrar');
 const { limiterPorUsuario } = require('../utils/rateLimitPorUsuario');
 
 const router = express.Router();
@@ -557,7 +558,21 @@ router.post('/:id/sugestao-resposta', naoAuditor, sugestaoIaLimiter, async (req,
     });
 
     // A conexão JÁ FOI DEVOLVIDA ao pool aqui — a chamada externa roda livre.
-    const sugestao = await sugestaoResposta.gerarComContexto(config, mensagens);
+    const { texto: sugestao, uso } = await sugestaoResposta.gerarComContexto(config, mensagens);
+
+    // Mede o consumo desta chamada (FIL-77) — só abre uma conexão nova se o
+    // provedor realmente devolveu uso; nunca atrasa nem quebra a resposta já
+    // gerada (best-effort, ver consumo/registrar.js).
+    if (uso && (uso.tokensEntrada > 0 || uso.tokensSaida > 0)) {
+      try {
+        await db.comTenant(req.tenantId, (conn) => consumo.registrarIaTokens(conn, req.tenantId, {
+          tokensEntrada: uso.tokensEntrada, tokensSaida: uso.tokensSaida,
+          provider: config.provider, modelo: config.modelo, referencia: id,
+        }));
+      } catch (err) {
+        console.error('[consumo] falha ao registrar consumo da sugestão (não afeta a resposta):', err.message);
+      }
+    }
     res.json({ sugestao });
   } catch (err) {
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
@@ -642,6 +657,12 @@ router.post('/:id/mensagens', naoAuditor, envioLimiter, async (req, res, next) =
           WHERE id = :id`,
         { id: cv.ID }
       );
+
+      // Mede o envio (FIL-77) — best-effort, ver consumo/registrar.js.
+      await consumo.registrar(conn, req.tenantId, {
+        tipo: 'mensagem_enviada', quantidade: 1, referencia: ins.outBinds.id[0],
+      });
+
       return {
         msgId: ins.outBinds.id[0], wamid, conversaId: cv.ID, contatoId: cv.CONTATO_ID,
         departamentoId: cv.DEPARTAMENTO_ID || null, textoEnviado,
@@ -772,6 +793,15 @@ router.post('/:id/arquivos', naoAuditor, envioLimiter, (req, res, next) => {
           WHERE id = :id`,
         { id: cv.ID }
       );
+
+      // Mede o envio E o armazenamento da mídia (FIL-77) — best-effort.
+      await consumo.registrar(conn, req.tenantId, {
+        tipo: 'mensagem_enviada', quantidade: 1, referencia: ins.outBinds.id[0],
+      });
+      await consumo.registrar(conn, req.tenantId, {
+        tipo: 'midia_armazenada', quantidade: req.file.size, referencia: ins.outBinds.id[0],
+      });
+
       return {
         id: ins.outBinds.id[0], tipo, nomeArquivo: nomeOriginal, wamid,
         conversaId: cv.ID, contatoId: cv.CONTATO_ID, departamentoId: cv.DEPARTAMENTO_ID || null,

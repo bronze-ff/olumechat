@@ -2,7 +2,7 @@
 
 // pg_try_advisory_xact_lock nunca espera: perder o lock e um caminho normal
 // quando ha mais de uma instancia do worker.
-const BASE = Object.freeze({ fila: 7301000000n, bot: 7302000000n, campanha: 7303000000n });
+const BASE = Object.freeze({ fila: 7301000000n, bot: 7302000000n, campanha: 7303000000n, consumo: 7304000000n });
 
 function chave(worker, tenantId) {
   const tenant = BigInt(Number(tenantId));
@@ -21,4 +21,18 @@ async function tentar(conn, worker, tenantId) {
   return Boolean(r.rows[0].ADQUIRIDO ?? r.rows[0].adquirido);
 }
 
-module.exports = { tentar, chave };
+// Variante SEM tenant, para tick cross-tenant de propósito (ex.: fechamento
+// mensal de consumo, que agrega TODOS os tenants numa passada só — ver
+// consumo/fechamento.js). Mesma chave fixa por worker, sem o deslocamento
+// por tenantId de chave()/tentar().
+async function tentarGlobal(conn, worker) {
+  if (!BASE[worker]) throw new Error(`leaderLock: worker invalido (${worker})`);
+  const r = await conn.execute(
+    'SELECT pg_try_advisory_xact_lock(CAST(:chave AS bigint)) AS adquirido',
+    { chave: BASE[worker].toString() }
+  );
+  if (!r.rows || !r.rows.length) return true;
+  return Boolean(r.rows[0].ADQUIRIDO ?? r.rows[0].adquirido);
+}
+
+module.exports = { tentar, tentarGlobal, chave };

@@ -80,7 +80,7 @@ async function chamar({ config, sistema, mensagens, semFerramentas = false }) {
     const json = await res.json();
     const texto = (json.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     const toolCalls = (json.content || []).filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id, nome: b.name, args: b.input || {} }));
-    return { texto, toolCalls };
+    return { texto, toolCalls, uso: extrairUso(json.usage, 'input_tokens', 'output_tokens') };
   }
   // OpenAI-compatível
   const base = (config.baseUrl || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
@@ -95,9 +95,21 @@ async function chamar({ config, sistema, mensagens, semFerramentas = false }) {
   const json = await res.json();
   const msg = ((json.choices || [])[0] || {}).message || {};
   const toolCalls = (msg.tool_calls || []).map((c) => ({ id: c.id, nome: c.function.name, args: safeJson(c.function.arguments) }));
-  return { texto: msg.content || '', toolCalls };
+  return { texto: msg.content || '', toolCalls, uso: extrairUso(json.usage, 'prompt_tokens', 'completion_tokens') };
 }
 
 function safeJson(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
+
+// Uso real de tokens que o PROVEDOR devolveu na resposta (nunca estimado por
+// caractere — ver consumo/registrar.js, FIL-77). `null` quando o provedor não
+// devolveu `usage` (alguns proxies OpenAI-compatíveis omitem) — quem chama
+// trata como "nada a medir nesta chamada", nunca inventa um número.
+function extrairUso(usage, campoEntrada, campoSaida) {
+  if (!usage) return null;
+  return {
+    tokensEntrada: Number(usage[campoEntrada]) || 0,
+    tokensSaida: Number(usage[campoSaida]) || 0,
+  };
+}
 
 module.exports = { chamar };

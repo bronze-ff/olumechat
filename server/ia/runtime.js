@@ -17,6 +17,7 @@ const toolExec = require('./toolExecutor');
 const auth = require('./autorizacao');
 const historico = require('./historico');
 const limitePlano = require('./limitePlano');
+const consumo = require('../consumo/registrar');
 const { partirTexto } = require('./chunk');
 
 const SISTEMA_FALLBACK = 'Você é o assistente da Multicanal Atacado no WhatsApp. Responda de forma objetiva '
@@ -112,6 +113,13 @@ async function processarEntrada(tenantId, conversaId, texto) {
       try {
         for (let i = 0; i < MAX_ITER; i++) {
           const out = await client.chamar({ config, sistema, mensagens });
+          // Mede a CADA chamada ao provedor (FIL-77): tokens reais que ele
+          // devolveu, nunca estimados. Best-effort — nunca derruba o turno.
+          await consumo.registrarIaTokens(conn, tenantId, {
+            tokensEntrada: out.uso && out.uso.tokensEntrada,
+            tokensSaida: out.uso && out.uso.tokensSaida,
+            provider: config.provider, modelo: config.modelo, referencia: conversaId,
+          });
           if (out.toolCalls && out.toolCalls.length) {
             for (const tc of out.toolCalls) {
               await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: out.texto, toolCallId: tc.id, nome: tc.nome, args: tc.args });
