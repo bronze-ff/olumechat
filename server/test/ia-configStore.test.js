@@ -161,3 +161,29 @@ test('invalidarGlobal() força nova leitura da credencial do operador', async ()
   await store.carregar(TENANT_Z); // tenant novo, cache global agora vazio
   assert.equal(consultasAoGlobal, 2, 'invalidarGlobal() força nova leitura da credencial do operador');
 });
+
+test('ACHADO DE REVIEW (P2): invalidarGlobal() também limpa tenants JÁ CACHEADOS que caíram no fallback global — não só a chave global em si', async () => {
+  store.invalidar(); store.invalidarGlobal();
+  const TENANT_W = 94;
+  let apiKeyAtual = 'sk-antiga';
+  // db.getConnection é chamado DE NOVO a cada carregar() — reconstrói o fake
+  // com a chave ATUAL do closure, então a troca de apiKeyAtual abaixo só
+  // aparece se o cache realmente foi invalidado (senão nem chega a chamar).
+  db.getConnection = async () => conexao({
+    global: { PROVIDER: 'anthropic', MODELO_PADRAO: 'm', BASE_URL: null, API_KEY_CRIPTOGRAFADA: cifrar(apiKeyAtual) },
+  });
+
+  const antes = await store.carregar(TENANT_W);
+  assert.equal(antes.apiKey, 'sk-antiga');
+
+  // Operador troca a credencial global (rotação) — a chave ANTIGA pode já
+  // estar revogada no provedor.
+  apiKeyAtual = 'sk-nova';
+  store.invalidarGlobal();
+
+  // Achado de review: sem isto, TENANT_W continuaria servindo 'sk-antiga' do
+  // próprio cache de tenant por até 60s (ou até revogação de vez), mesmo com
+  // invalidarGlobal() já tendo sido chamado.
+  const depois = await store.carregar(TENANT_W);
+  assert.equal(depois.apiKey, 'sk-nova', 'tenant que já tinha resolvido pro fallback global deveria reconsultar depois da rotação');
+});

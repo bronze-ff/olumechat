@@ -61,6 +61,11 @@ async function responder(conn, tenantId, cv, textos) {
         `INSERT INTO mensagem (tenant_id, CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
          VALUES (:tenantId, :cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, now())`,
         { tenantId, cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt: pedaco, st: status });
+      // Mede o envio (FIL-77) — só o que REALMENTE saiu (achado de review:
+      // medir todo caminho de envio, não só as rotas manuais de conversas.js).
+      if (status === 'sent') {
+        await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: cv.conversaId });
+      }
     }
   }
 }
@@ -138,8 +143,19 @@ async function processarEntrada(tenantId, conversaId, texto) {
       // virar silêncio: capturamos, logamos com detalhe e caímos no fallback
       // amigável abaixo — que é SEMPRE enviado. (Erros de tool já são tratados no
       // try interno e voltam como resultado para o modelo.)
+      let tetoEstourouNoMeio = false;
       try {
         for (let i = 0; i < MAX_ITER; i++) {
+          // Rechecagem do teto (achado de review, P2): a 1ª iteração já foi
+          // gated na fase 1, mas se ELA MESMA (registrarIaTokens acima acaba
+          // de incrementar ia_consumo_mensal) estourar o teto, as iterações
+          // seguintes do loop de tool-calls não podem seguir gastando token
+          // pago do provedor — sem isto, até MAX_ITER-1 chamadas extras
+          // passavam do limite.
+          if (i > 0 && await limitePlano.estourouTeto(conn, tenantId)) {
+            tetoEstourouNoMeio = true;
+            break;
+          }
           const out = await client.chamar({ config, sistema, mensagens });
           // Mede a CADA chamada ao provedor (FIL-77): tokens reais que ele
           // devolveu, nunca estimados. Best-effort — nunca derruba o turno.
@@ -171,7 +187,13 @@ async function processarEntrada(tenantId, conversaId, texto) {
         console.error('[ia] provedor falhou:', (err && err.message) || err);
         respostaFinal = '';
       }
-      if (!respostaFinal) respostaFinal = 'Não consegui responder agora — o assistente está indisponível no momento. Tente de novo em instantes.';
+      if (!respostaFinal) {
+        // Mesma mensagem genérica da fase 1 (nunca fala de custo/tokens) —
+        // consistente para o cliente, não importa em qual ponto o teto bateu.
+        respostaFinal = tetoEstourouNoMeio
+          ? 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.'
+          : 'Não consegui responder agora — o assistente está indisponível no momento. Tente de novo em instantes.';
+      }
       await responder(conn, tenantId, cv, [respostaFinal]);
     });
   } catch (err) {

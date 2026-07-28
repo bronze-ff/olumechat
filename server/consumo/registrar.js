@@ -16,14 +16,26 @@
 // `registrarIaTokens` por isso recebe o PREÇO JÁ RESOLVIDO (`preco`) — quem
 // chama resolve consumo/precos.js::carregarPreco() numa fase própria, fora
 // de qualquer db.comTenant() em andamento (ver ia/runtime.js e
-// api/conversas.js::/sugestao-resposta).
+// api/conversas.js::/sugestao-resposta). db.comSavepoint() abaixo NÃO abre
+// conexão nova — roda SAVEPOINT/ROLLBACK TO SAVEPOINT na MESMA `conn`.
 'use strict';
 
+const db = require('../db/pool');
 const limitePlano = require('../ia/limitePlano');
 
 const TIPOS = Object.freeze(['ia_tokens', 'mensagem_enviada', 'conversa_iniciada', 'midia_armazenada']);
 
-/** Grava 1 evento de consumo. NUNCA lança. */
+/**
+ * Grava 1 evento de consumo. NUNCA lança.
+ *
+ * ⚠️ Achado de review (P1): sem SAVEPOINT, um INSERT que falha (constraint,
+ * RLS, tabela ausente) marca a transação Postgres INTEIRA como abortada —
+ * capturar a exceção em JS não desfaz isso. Sem isolamento, a mensagem já
+ * enviada pelo WhatsApp (e o resto do trabalho da mesma transação) sofreria
+ * ROLLBACK silencioso no COMMIT final: cliente recebe, sistema esquece. Por
+ * isso todo INSERT deste módulo roda dentro de db.comSavepoint() — só o
+ * evento de consumo é descartado, a transação do chamador segue saudável.
+ */
 async function registrar(conn, tenantId, { tipo, quantidade, custoCentavos = null, referencia = null }) {
   if (!TIPOS.includes(tipo)) {
     console.error(`[consumo] tipo de evento inválido, evento descartado: ${tipo}`);
@@ -31,11 +43,11 @@ async function registrar(conn, tenantId, { tipo, quantidade, custoCentavos = nul
   }
   const qtd = Math.max(0, Math.round(Number(quantidade) || 0));
   try {
-    await conn.execute(
+    await db.comSavepoint(conn, () => conn.execute(
       `INSERT INTO consumo_evento (tenant_id, tipo, quantidade, custo_centavos, referencia, criado_em)
        VALUES (:tenantId, :tipo, :qtd, :custo, :ref, now())`,
       { tenantId, tipo, qtd, custo: custoCentavos, ref: referencia }
-    );
+    ));
   } catch (err) {
     console.error('[consumo] falha ao gravar evento (não afeta o atendimento):', err.message);
   }
@@ -68,13 +80,13 @@ async function registrarIaTokens(conn, tenantId, { tokensEntrada = 0, tokensSaid
   await registrar(conn, tenantId, { tipo: 'ia_tokens', quantidade: total, custoCentavos, referencia });
 
   try {
-    await conn.execute(
+    await db.comSavepoint(conn, () => conn.execute(
       `INSERT INTO ia_consumo_mensal (tenant_id, ano_mes, tokens_usados, atualizado_em)
        VALUES (:tenantId, :anoMes, :tokens, now())
        ON CONFLICT (tenant_id, ano_mes) DO UPDATE SET
          tokens_usados = ia_consumo_mensal.tokens_usados + EXCLUDED.tokens_usados, atualizado_em = now()`,
       { tenantId, anoMes: limitePlano.anoMesAtual(), tokens: total }
-    );
+    ));
   } catch (err) {
     console.error('[consumo] falha ao atualizar teto mensal de IA (não afeta o atendimento):', err.message);
   }
