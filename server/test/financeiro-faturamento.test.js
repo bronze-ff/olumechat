@@ -358,20 +358,40 @@ test('gerarFaturas: excedente do consumo medido vira item de fatura', async () =
   assert.equal(item.VALOR_TOTAL_CENTAVOS, 1250);
 });
 
-test('CUSTO DESCONHECIDO NUNCA ASSUME ZERO: sinaliza custo_incerto quando consumo_mensal.custo_incompleto vem true (migração 019)', async () => {
+test('CUSTO DESCONHECIDO NUNCA ASSUME ZERO: consumo_mensal.custo_centavos NULL (FIL-77, migração 016) sinaliza custo_incerto, sem virar item de R$0', async () => {
   const conn = conexao({
     tenants: [5],
     contratosPorTenant: { 5: CONTRATO_5 },
     consumoPorTenant: {
-      [`5:${COMPETENCIA_FECHADA}`]: [{ TIPO: 'ia_tokens', QUANTIDADE: 5000, CUSTO_CENTAVOS: 800, CUSTO_INCOMPLETO: true }],
+      [`5:${COMPETENCIA_FECHADA}`]: [
+        { TIPO: 'ia_tokens', QUANTIDADE: 5000, CUSTO_CENTAVOS: null }, // algum evento do grupo tinha preço desconhecido
+        { TIPO: 'mensagem_enviada', QUANTIDADE: 40, CUSTO_CENTAVOS: 400 }, // esse tipo tem custo 100% conhecido
+      ],
     },
   });
   const [fatura] = await faturamento.gerarFaturas(conn, COMPETENCIA_FECHADA);
   assert.equal(fatura.custoIncerto, true, 'a fatura tem que ficar sinalizada para revisão');
-  // O valor gerado é a soma do que É CONHECIDO — nunca inventado como zero.
-  assert.equal(fatura.valorTotalCentavos, 100000 + 800);
+  // NENHUM item de R$0 para o tipo incerto — só o tipo com custo conhecido vira item.
+  assert.equal(fatura.valorTotalCentavos, 100000 + 400, 'ia_tokens (custo NULL) não pode virar "excedente de R$0"');
+  const itensExcedente = conn.faturaItens.filter((it) => it.TIPO === 'excedente');
+  assert.equal(itensExcedente.length, 1);
+  assert.match(itensExcedente[0].DESCRICAO, /mensagem_enviada/);
   const faturaRow = conn.faturas.get(`5:${COMPETENCIA_FECHADA}`);
   assert.match(String(faturaRow.OBSERVACOES), /custo desconhecido/i);
+  assert.match(String(faturaRow.OBSERVACOES), /ia_tokens/, 'a observação precisa dizer QUAL tipo ficou incerto');
+});
+
+test('CUSTO DESCONHECIDO SEM MAIS NADA A COBRAR: ainda gera fatura (valor 0, sinalizada) — senão o consumo fica invisível pro operador', async () => {
+  const contrato = { ...contratoMensal({ inicioCobranca: `${competenciaRelativa(6)}-01` }), CICLO: 'anual' };
+  const conn = conexao({
+    tenants: [5],
+    contratosPorTenant: { 5: contrato }, // ciclo anual: recorrência não vira nesta competência
+    consumoPorTenant: { [`5:${competenciaRelativa(3)}`]: [{ TIPO: 'ia_tokens', QUANTIDADE: 900, CUSTO_CENTAVOS: null }] },
+  });
+  const r = await faturamento.gerarFaturaDoTenant(conn, 5, competenciaRelativa(3));
+  assert.ok(r, 'não pode ficar null — senão o consumo com preço desconhecido nunca chega ao operador');
+  assert.equal(r.valorTotalCentavos, 0);
+  assert.equal(r.custoIncerto, true);
 });
 
 test('sem consumo no período: não cria item de excedente e custo_incerto fica false', async () => {

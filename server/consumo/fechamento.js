@@ -7,6 +7,11 @@
 // TODOS os tenants numa passada só; cada query nomeia tenant_id explicitamente
 // (ver operador/db.js). Lock de liderança via advisory lock (workers/leaderLock)
 // contra disparo duplicado com mais de uma instância do processo.
+//
+// ⚠️ RETENÇÃO É POR COMPETÊNCIA INTEIRA, NUNCA POR LINHA (achado de review):
+// limparEventosAntigos() só apaga um `ano_mes` de uma vez, nunca parte dele —
+// ver o cabeçalho daquela função para o porquê (purga parcial reescrevia o
+// total permanente já fechado com uma soma cada vez menor).
 'use strict';
 
 const { comOperador } = require('../operador/db');
@@ -28,6 +33,15 @@ function mesAnteriorDe(data) {
  * todos os tenants e tipos numa passada. IDEMPOTENTE: o UPSERT (chave
  * tenant_id+ano_mes+tipo) reescreve o mesmo agregado — rodar duas vezes não
  * duplica linha nem soma em dobro (critério de aceite do ticket).
+ *
+ * ⚠️ Achado de review (P1): `SUM(custo_centavos)` ignora linhas com custo
+ * desconhecido (NULL — preço ainda não cadastrado, ver ia/client.js) em vez
+ * de propagar a incerteza. Um `COALESCE(...,0)` transformaria "não sabemos"
+ * em "grátis" — e como o bruto é apagado depois (limparEventosAntigos), essa
+ * incerteza se perderia PARA SEMPRE. Por isso: se QUALQUER evento do grupo
+ * tem custo desconhecido, o agregado inteiro fica NULL (custo indisponível/
+ * parcial), nunca um número que pareça completo mas não é (ver migração 016:
+ * `consumo_mensal.custo_centavos` é NULLABLE de propósito).
  * @param {object} conn conexão de operador (comOperador) já aberta
  * @param {string} anoMes 'YYYY-MM'
  * @returns {Promise<number>} quantas linhas (tenant_id+tipo) foram fechadas
@@ -35,45 +49,54 @@ function mesAnteriorDe(data) {
 async function fecharMes(conn, anoMes) {
   const r = await conn.execute(
     `SELECT tenant_id, tipo,
-            COALESCE(SUM(quantidade), 0)      AS quantidade,
-            COALESCE(SUM(custo_centavos), 0)  AS custo_centavos,
-            bool_or(custo_centavos IS NULL)   AS custo_incompleto
+            COALESCE(SUM(quantidade), 0) AS quantidade,
+            CASE WHEN bool_or(custo_centavos IS NULL) THEN NULL ELSE SUM(custo_centavos) END AS custo_centavos
        FROM consumo_evento
       WHERE to_char(criado_em, 'YYYY-MM') = :anoMes
       GROUP BY tenant_id, tipo`,
     { anoMes }
   );
   for (const row of r.rows) {
-    // Achado de review (FIL-76): SUM ignora NULL e COALESCE(...,0) transforma
-    // "não sei quanto custou" num zero exato e PERMANENTE (consumo_mensal
-    // nunca é reescrito depois que o bruto é apagado pela retenção). Marca o
-    // agregado como incompleto sem inventar um valor — ver migração 019.
     await conn.execute(
-      `INSERT INTO consumo_mensal (tenant_id, ano_mes, tipo, quantidade, custo_centavos, custo_incompleto, fechado_em)
-       VALUES (:tenantId, :anoMes, :tipo, :qtd, :custo, :custoIncompleto, now())
+      `INSERT INTO consumo_mensal (tenant_id, ano_mes, tipo, quantidade, custo_centavos, fechado_em)
+       VALUES (:tenantId, :anoMes, :tipo, :qtd, :custo, now())
        ON CONFLICT (tenant_id, ano_mes, tipo) DO UPDATE SET
-         quantidade = EXCLUDED.quantidade, custo_centavos = EXCLUDED.custo_centavos,
-         custo_incompleto = EXCLUDED.custo_incompleto, fechado_em = now()`,
-      {
-        tenantId: row.TENANT_ID, anoMes, tipo: row.TIPO, qtd: row.QUANTIDADE, custo: row.CUSTO_CENTAVOS,
-        custoIncompleto: row.CUSTO_INCOMPLETO === true,
-      }
+         quantidade = EXCLUDED.quantidade, custo_centavos = EXCLUDED.custo_centavos, fechado_em = now()`,
+      { tenantId: row.TENANT_ID, anoMes, tipo: row.TIPO, qtd: row.QUANTIDADE, custo: row.CUSTO_CENTAVOS }
     );
   }
   return r.rows.length;
 }
 
 /**
- * Apaga eventos brutos com mais de `diasRetencao` dias — SÓ os que já têm um
- * fechamento correspondente em consumo_mensal (mesmo tenant_id + a
- * competência do evento). Nunca perde dado que ainda não virou agregado,
- * mesmo que o tick de fechamento tenha falhado ou atrasado.
+ * Apaga eventos brutos de competências (`ano_mes`) inteiras já fora da janela
+ * de retenção — SÓ as que já têm um fechamento correspondente em
+ * consumo_mensal. Nunca perde dado que ainda não virou agregado, mesmo que o
+ * tick de fechamento tenha falhado ou atrasado.
+ *
+ * ⚠️ Achado de review (P1, o mais grave desta rodada): a versão anterior
+ * apagava POR LINHA (`criado_em < now() - N dias`), então o corte de retenção
+ * entrava NO MEIO de um mês — alguns dias já purgados, outros ainda não. O
+ * tick seguinte via esse mês em mesesComEventoBruto() (ainda tinha ALGUM
+ * evento bruto), reagregava com o subconjunto PARCIAL sobrevivente e o UPSERT
+ * SUBSTITUÍA o total permanente já fechado por essa soma menor. Isso se
+ * repetia a cada tick, encolhendo o agregado de faturamento sozinho até
+ * sobrar só os últimos dias — silenciosamente, sem erro nenhum.
+ *
+ * Correção: purga por COMPETÊNCIA INTEIRA, atomicamente — uma linha de um mês
+ * só é elegível quando o MÊS INTEIRO já passou da retenção (nenhum evento
+ * daquele mês pode ainda estar "parcialmente dentro"). Efeito colateral
+ * aceito: a retenção efetiva de um evento varia entre `diasRetencao` (para um
+ * evento no fim do mês) e quase o dobro (para um evento no início do mês) —
+ * o ticket já falava em "~90 dias", não um corte exato por segundo; a troca
+ * é: nunca mais um mês fica PARCIALMENTE purgado, então nunca mais o
+ * agregado permanente é reescrito com menos do que já tinha.
  * @returns {Promise<number>} linhas apagadas
  */
 async function limparEventosAntigos(conn, diasRetencao = DIAS_RETENCAO_PADRAO) {
   const r = await conn.execute(
     `DELETE FROM consumo_evento e
-      WHERE e.criado_em < now() - make_interval(days => :dias)
+      WHERE to_char(e.criado_em, 'YYYY-MM') < to_char(now() - make_interval(days => :dias), 'YYYY-MM')
         AND EXISTS (
           SELECT 1 FROM consumo_mensal m
            WHERE m.tenant_id = e.tenant_id AND m.ano_mes = to_char(e.criado_em, 'YYYY-MM')
@@ -83,18 +106,11 @@ async function limparEventosAntigos(conn, diasRetencao = DIAS_RETENCAO_PADRAO) {
   return r.rowsAffected || 0;
 }
 
-/**
- * Todas as competências ('YYYY-MM') que ainda têm evento bruto. Achado de
- * review (FIL-76): fechar só o mês corrente + o anterior deixa PARA SEMPRE
- * sem agregado qualquer competência mais antiga que ficou pendente (worker
- * fora do ar por >1 mês, deploy atrasado etc.) — o bruto dela nunca é limpo
- * pela retenção (limparEventosAntigos só apaga o que JÁ tem fechamento) mas
- * também nunca vira consumo_mensal, que é a fonte permanente do faturamento.
- * DISTINCT sobre a tabela bruta é sempre pequeno na prática: assim que um mês
- * fecha, a retenção o limpa em ~90 dias — poucas competências ficam abertas
- * ao mesmo tempo.
- */
-async function mesesComEventosPendentes(conn) {
+/** Toda competência com pelo menos 1 evento bruto ainda presente — é o
+ *  universo do que PRECISA de fechamento agora (naturalmente limitado a
+ *  poucos meses: uma vez fechada e purgada pela retenção, a competência some
+ *  desta lista sozinha). */
+async function mesesComEventoBruto(conn) {
   const r = await conn.execute(
     `SELECT DISTINCT to_char(criado_em, 'YYYY-MM') AS ano_mes FROM consumo_evento ORDER BY 1`
   );
@@ -102,26 +118,26 @@ async function mesesComEventosPendentes(conn) {
 }
 
 /**
- * Fecha TODAS as competências com evento pendente (não só as 2 mais
- * recentes) e aplica a retenção. Recebe `conn` já aberto — separado de
- * tick() para ser testável sem banco nem lock (mesmo padrão de fecharMes/
- * limparEventosAntigos).
+ * Um tick: fecha TODA competência que ainda tem evento bruto pendente — não
+ * só o mês corrente e o anterior.
+ *
+ * ⚠️ Achado de review (P2): fechar só "atual + anterior" deixa órfã qualquer
+ * competência mais antiga se o processo ficou fora do ar por mais de uma
+ * virada de mês — nenhum tick posterior voltaria a fechá-la, e a retenção
+ * NUNCA apagaria aqueles eventos brutos (limparEventosAntigos só remove o que
+ * já tem fechamento correspondente). Descobrir as competências a partir do
+ * que EXISTE em consumo_evento (em vez de assumir "no máximo 1 mês atrás")
+ * fecha qualquer lacuna de downtime sozinho, sem lista fixa.
  */
-async function fecharPendentes(conn) {
-  for (const anoMes of await mesesComEventosPendentes(conn)) {
-    await fecharMes(conn, anoMes);
-  }
-  await limparEventosAntigos(conn);
-}
-
-/** Um tick: fecha TODAS as competências com evento pendente (garante o
- *  fechamento mesmo se o processo ficou fora do ar por mais de um mês),
- *  depois aplica a retenção. */
 async function tick() {
   try {
     await comOperador(async (conn) => {
       if (!(await tentarGlobal(conn, 'consumo'))) return; // outra instância já está rodando o tick
-      await fecharPendentes(conn);
+      const meses = await mesesComEventoBruto(conn);
+      const atual = anoMesDe(new Date());
+      if (!meses.includes(atual)) meses.push(atual); // fecha o mês corrente mesmo sem evento ainda
+      for (const anoMes of meses) await fecharMes(conn, anoMes);
+      await limparEventosAntigos(conn);
     });
   } catch (err) {
     console.error('[consumo] fechamento/retenção falhou:', err.message);
@@ -140,6 +156,6 @@ function parar() {
 }
 
 module.exports = {
-  fecharMes, limparEventosAntigos, fecharPendentes, mesesComEventosPendentes,
-  tick, iniciar, parar, anoMesDe, mesAnteriorDe,
+  fecharMes, limparEventosAntigos, tick, iniciar, parar,
+  anoMesDe, mesAnteriorDe, mesesComEventoBruto,
 };

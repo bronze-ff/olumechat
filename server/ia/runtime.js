@@ -64,7 +64,8 @@ async function responder(conn, tenantId, cv, textos) {
         { tenantId, cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt: pedaco, st: status });
       // Medição de consumo (FIL-76/FIL-77): achado de review — resposta do
       // bot de IA não tinha produtor de mensagem_enviada nenhum (só ia_tokens
-      // já existia). Só o que REALMENTE saiu é cobrável.
+      // já existia; medir todo caminho de envio, não só as rotas manuais de
+      // conversas.js). Só o que REALMENTE saiu é cobrável.
       if (status === 'sent') {
         await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: cv.conversaId });
       }
@@ -145,8 +146,19 @@ async function processarEntrada(tenantId, conversaId, texto) {
       // virar silêncio: capturamos, logamos com detalhe e caímos no fallback
       // amigável abaixo — que é SEMPRE enviado. (Erros de tool já são tratados no
       // try interno e voltam como resultado para o modelo.)
+      let tetoEstourouNoMeio = false;
       try {
         for (let i = 0; i < MAX_ITER; i++) {
+          // Rechecagem do teto (achado de review, P2): a 1ª iteração já foi
+          // gated na fase 1, mas se ELA MESMA (registrarIaTokens acima acaba
+          // de incrementar ia_consumo_mensal) estourar o teto, as iterações
+          // seguintes do loop de tool-calls não podem seguir gastando token
+          // pago do provedor — sem isto, até MAX_ITER-1 chamadas extras
+          // passavam do limite.
+          if (i > 0 && await limitePlano.estourouTeto(conn, tenantId)) {
+            tetoEstourouNoMeio = true;
+            break;
+          }
           const out = await client.chamar({ config, sistema, mensagens });
           // Mede a CADA chamada ao provedor (FIL-77): tokens reais que ele
           // devolveu, nunca estimados. Best-effort — nunca derruba o turno.
@@ -158,15 +170,6 @@ async function processarEntrada(tenantId, conversaId, texto) {
             preco, referencia: conversaId,
           });
           if (out.toolCalls && out.toolCalls.length) {
-            // Achado de review (FIL-76): o teto pode estourar NESTA chamada (a
-            // que acabou de ser medida acima) e o provedor ainda pedir tool
-            // calls — sem reconferir aqui, as iterações restantes do loop
-            // continuariam chamando o provedor e gastando além do limite
-            // configurado. Reconfere ANTES de cada chamada subsequente.
-            if (await limitePlano.estourouTeto(conn, tenantId)) {
-              respostaFinal = MSG_TETO_ESTOURADO;
-              break;
-            }
             for (const tc of out.toolCalls) {
               await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: out.texto, toolCallId: tc.id, nome: tc.nome, args: tc.args });
               let resultado;
@@ -187,7 +190,13 @@ async function processarEntrada(tenantId, conversaId, texto) {
         console.error('[ia] provedor falhou:', (err && err.message) || err);
         respostaFinal = '';
       }
-      if (!respostaFinal) respostaFinal = 'Não consegui responder agora — o assistente está indisponível no momento. Tente de novo em instantes.';
+      if (!respostaFinal) {
+        // Mesma mensagem genérica da fase 1 (nunca fala de custo/tokens) —
+        // consistente para o cliente, não importa em qual ponto o teto bateu.
+        respostaFinal = tetoEstourouNoMeio
+          ? MSG_TETO_ESTOURADO
+          : 'Não consegui responder agora — o assistente está indisponível no momento. Tente de novo em instantes.';
+      }
       await responder(conn, tenantId, cv, [respostaFinal]);
     });
   } catch (err) {

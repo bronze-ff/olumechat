@@ -100,6 +100,7 @@ app.use('/api/campanhas', authMiddleware, anexarPerfil, require('./api/campanhas
 app.use('/api/atalhos', authMiddleware, anexarPerfil, require('./api/atalhos'));
 app.use('/api/ia-config', authMiddleware, anexarPerfil, require('./api/iaConfig'));
 app.use('/api/ia-autorizados', authMiddleware, anexarPerfil, require('./api/iaAutorizados'));
+app.use('/api/onboarding-meta', authMiddleware, anexarPerfil, require('./api/onboardingMeta'));
 
 // --- SPA (frontend) em produção, se o build do client existir ---
 if (cfg.nodeEnv === 'production') {

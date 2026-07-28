@@ -16,39 +16,26 @@
 // `registrarIaTokens` por isso recebe o PREÇO JÁ RESOLVIDO (`preco`) — quem
 // chama resolve consumo/precos.js::carregarPreco() numa fase própria, fora
 // de qualquer db.comTenant() em andamento (ver ia/runtime.js e
-// api/conversas.js::/sugestao-resposta).
-//
-// ⚠️ SAVEPOINT NO BEST-EFFORT (achado de review do PR #26): capturar a
-// exceção em JS NÃO recupera a transação do Postgres — um INSERT que falha
-// deixa a transação em estado "aborted" até um ROLLBACK (ou ROLLBACK TO
-// SAVEPOINT). Sem isolar em SAVEPOINT, o try/catch escondia o erro só do lado
-// do JS: o PRÓXIMO comando do chamador (salvar a mensagem, dar commit) também
-// falhava, e o "best-effort" de medição acabava derrubando o atendimento de
-// verdade — o oposto do que o comentário acima promete. Mesmo padrão de
-// bot/runtime.js::comSavepoint e api/conversas.js::comSavepoint.
+// api/conversas.js::/sugestao-resposta). db.comSavepoint() abaixo NÃO abre
+// conexão nova — roda SAVEPOINT/ROLLBACK TO SAVEPOINT na MESMA `conn`.
 'use strict';
 
+const db = require('../db/pool');
 const limitePlano = require('../ia/limitePlano');
 
 const TIPOS = Object.freeze(['ia_tokens', 'mensagem_enviada', 'conversa_iniciada', 'midia_armazenada']);
 
-let spSeq = 0;
-async function comSavepoint(conn, fn) {
-  const nome = `consumo_sp_${spSeq++}`;
-  await conn.execute(`SAVEPOINT ${nome}`);
-  try {
-    await fn();
-    await conn.execute(`RELEASE SAVEPOINT ${nome}`);
-  } catch (err) {
-    try {
-      await conn.execute(`ROLLBACK TO SAVEPOINT ${nome}`);
-      await conn.execute(`RELEASE SAVEPOINT ${nome}`);
-    } catch { /* pior caso: a transação segue abortada — o erro original já explica por quê */ }
-    throw err;
-  }
-}
-
-/** Grava 1 evento de consumo. NUNCA lança — isolado em SAVEPOINT (ver cabeçalho). */
+/**
+ * Grava 1 evento de consumo. NUNCA lança.
+ *
+ * ⚠️ Achado de review (P1): sem SAVEPOINT, um INSERT que falha (constraint,
+ * RLS, tabela ausente) marca a transação Postgres INTEIRA como abortada —
+ * capturar a exceção em JS não desfaz isso. Sem isolamento, a mensagem já
+ * enviada pelo WhatsApp (e o resto do trabalho da mesma transação) sofreria
+ * ROLLBACK silencioso no COMMIT final: cliente recebe, sistema esquece. Por
+ * isso todo INSERT deste módulo roda dentro de db.comSavepoint() — só o
+ * evento de consumo é descartado, a transação do chamador segue saudável.
+ */
 async function registrar(conn, tenantId, { tipo, quantidade, custoCentavos = null, referencia = null }) {
   if (!TIPOS.includes(tipo)) {
     console.error(`[consumo] tipo de evento inválido, evento descartado: ${tipo}`);
@@ -56,7 +43,7 @@ async function registrar(conn, tenantId, { tipo, quantidade, custoCentavos = nul
   }
   const qtd = Math.max(0, Math.round(Number(quantidade) || 0));
   try {
-    await comSavepoint(conn, () => conn.execute(
+    await db.comSavepoint(conn, () => conn.execute(
       `INSERT INTO consumo_evento (tenant_id, tipo, quantidade, custo_centavos, referencia, criado_em)
        VALUES (:tenantId, :tipo, :qtd, :custo, :ref, now())`,
       { tenantId, tipo, qtd, custo: custoCentavos, ref: referencia }
@@ -93,7 +80,7 @@ async function registrarIaTokens(conn, tenantId, { tokensEntrada = 0, tokensSaid
   await registrar(conn, tenantId, { tipo: 'ia_tokens', quantidade: total, custoCentavos, referencia });
 
   try {
-    await comSavepoint(conn, () => conn.execute(
+    await db.comSavepoint(conn, () => conn.execute(
       `INSERT INTO ia_consumo_mensal (tenant_id, ano_mes, tokens_usados, atualizado_em)
        VALUES (:tenantId, :anoMes, :tokens, now())
        ON CONFLICT (tenant_id, ano_mes) DO UPDATE SET

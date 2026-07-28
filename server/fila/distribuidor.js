@@ -277,6 +277,8 @@ async function rodada(departamentoId, tentativa = 0) {
         );
         // Medição de consumo (FIL-76/FIL-77): achado de review — aviso de
         // indisponibilidade não tinha produtor de mensagem_enviada nenhum.
+        // Este aviso REALMENTE saiu pelo WhatsApp (chegamos aqui só depois
+        // do sendText ter sucesso, ver try acima).
         await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: resultado.conversaId });
       });
       publish({

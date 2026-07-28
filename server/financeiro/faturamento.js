@@ -42,16 +42,20 @@
 // "inicio_cobranca no futuro não gera fatura" (nenhum contrato bate o filtro).
 //
 // ── CUSTO DESCONHECIDO NUNCA VIRA ZERO ──────────────────────────────────────
-// consumo_mensal.custo_centavos (FIL-77) é COALESCE(SUM(...), 0) — se algum
-// evento de um tipo tiver custo NULL (preço ainda não cadastrado em
-// preco_provedor), o agregado por si só mostraria "0", indistinguível de "não
-// teve uso". A migração 019 (fix de review do FIL-77) já resolve isso na
-// origem: consumo_mensal.custo_incompleto = bool_or(custo_centavos IS NULL)
-// por tenant+competência+tipo, calculado no próprio fechamento mensal. Esta
-// rotina só LÊ essa flag (temCustoDesconhecido) e marca fatura.custo_incerto
-// — o valor gerado é a soma do que É conhecido (nunca inventado), mas a
-// fatura fica sinalizada para o operador revisar ANTES de emitir (ver
-// operador/fatura.js::emitirFatura, que não bloqueia, só expõe a flag).
+// consumo_mensal.custo_centavos (FIL-77, migração 016) é NULLABLE de
+// propósito: fecharMes() grava NULL para um tenant+competência+tipo se
+// QUALQUER evento daquele grupo tinha custo desconhecido (preço ainda não
+// cadastrado em preco_provedor) — nunca um COALESCE(...,0) que apagaria a
+// diferença entre "grátis" e "não sabemos" pra sempre. Esta rotina não cria
+// item de excedente para um tipo com custo NULL (um item de R$0 pareceria
+// "sem custo") — em vez disso marca fatura.custo_incerto e lista os tipos
+// afetados na observação, para o operador lançar o valor manualmente (item
+// avulso) depois de descobrir o preço. Uma competência SEM NENHUM item
+// cobrável ainda gera fatura (valor 0, mas sinalizada) se houve consumo com
+// custo desconhecido — senão esse consumo ficaria invisível pro operador
+// (ver o guard de "nada a cobrar" em gerarFaturaDoTenant). Emitir não é
+// bloqueado por custo_incerto — só sinalizado (ver operador/fatura.js
+// ::emitirFatura).
 //
 // ── PARCELA DE IMPLEMENTAÇÃO ────────────────────────────────────────────────
 // `implementacao` (FIL-76) não guarda quantas parcelas já foram cobradas — a
@@ -178,7 +182,7 @@ async function itensDoContrato(conn, contratoId) {
 
 async function excedentesDoPeriodo(conn, tenantId, competencia) {
   const r = await conn.execute(
-    `SELECT tipo, quantidade, custo_centavos, custo_incompleto
+    `SELECT tipo, quantidade, custo_centavos
        FROM consumo_mensal
       WHERE tenant_id = :tenantId AND ano_mes = :competencia`,
     { tenantId, competencia }
@@ -186,14 +190,15 @@ async function excedentesDoPeriodo(conn, tenantId, competencia) {
   return r.rows;
 }
 
-/** true se ALGUM tipo do período veio com custo_incompleto=true (migração 019,
- *  FIL-77: bool_or(custo_centavos IS NULL) calculado no fechamento mensal —
- *  ver cabeçalho). Ler a flag já agregada em vez de reconsultar consumo_evento
- *  aqui é o ponto de extensão que aquela migração deixou pronto: sobrevive à
- *  retenção de 90 dias do bruto e já vem por tipo, não "algum evento do mês
- *  inteiro". */
-function temCustoDesconhecido(excedentes) {
-  return excedentes.some((row) => row.CUSTO_INCOMPLETO === true);
+/** Tipos do período cujo custo_centavos veio NULL — consumo_mensal.custo_centavos
+ *  (FIL-77, migração 016) é NULLABLE de propósito: fecharMes() grava NULL
+ *  quando QUALQUER evento do grupo tem custo desconhecido (preço ainda não
+ *  cadastrado em preco_provedor), em vez de um COALESCE(...,0) que apagaria
+ *  a diferença entre "grátis" e "não sabemos" para sempre. Ler o NULL direto
+ *  do agregado (em vez de reconsultar consumo_evento) sobrevive à retenção de
+ *  90 dias do bruto e já vem por tipo. */
+function tiposComCustoDesconhecido(excedentes) {
+  return excedentes.filter((row) => row.CUSTO_CENTAVOS === null).map((row) => row.TIPO);
 }
 
 async function implementacaoDoTenant(conn, tenantId) {
@@ -272,12 +277,16 @@ function itensDeContrato(rows) {
   });
 }
 
-/** Uma linha por tipo de consumo com quantidade ou custo no período. Quantidade
- *  sempre 1 (o total já congela o custo agregado) — evita resto de divisão ao
- *  tentar expressar "preço por unidade" de um tipo com milhares de unidades. */
+/** Uma linha por tipo de consumo com quantidade ou custo CONHECIDO no período
+ *  (custo_centavos NULL fica de fora — ver tiposComCustoDesconhecido: um item
+ *  de fatura com valor 0 pareceria "sem custo", quando na verdade é "não
+ *  sabemos"; o operador vê o tipo na observação da fatura e lança o valor
+ *  manualmente como item avulso quando tiver o preço). Quantidade sempre 1
+ *  (o total já congela o custo agregado) — evita resto de divisão ao tentar
+ *  expressar "preço por unidade" de um tipo com milhares de unidades. */
 function itensDeExcedente(rows, competencia) {
   return rows
-    .filter((row) => Number(row.QUANTIDADE) > 0 || Number(row.CUSTO_CENTAVOS) !== 0)
+    .filter((row) => row.CUSTO_CENTAVOS !== null && (Number(row.QUANTIDADE) > 0 || Number(row.CUSTO_CENTAVOS) !== 0))
     .map((row) => {
       const valorTotalCentavos = Math.round(Number(row.CUSTO_CENTAVOS));
       return {
@@ -336,17 +345,22 @@ async function gerarFaturaDoTenant(conn, tenantId, competencia, operador = null)
 
   const excedentes = await excedentesDoPeriodo(conn, tenantId, competencia);
   itens.push(...itensDeExcedente(excedentes, competencia));
-  const custoIncerto = temCustoDesconhecido(excedentes);
+  const tiposIncertos = tiposComCustoDesconhecido(excedentes);
+  const custoIncerto = tiposIncertos.length > 0;
 
   const itemImplementacao = await itemDeImplementacao(conn, await implementacaoDoTenant(conn, tenantId));
   if (itemImplementacao) itens.push(itemImplementacao);
 
-  if (!itens.length) return null; // nada a cobrar nesta competência — não gera fatura de R$0
+  // Nada a cobrar E nenhuma incerteza a sinalizar — não gera fatura de R$0.
+  // custoIncerto sozinho JUSTIFICA a fatura mesmo com itens=[]: senão o
+  // consumo sem preço cadastrado deste tenant fica invisível pro operador
+  // (é exatamente o "nunca assumir zero em silêncio" do ticket).
+  if (!itens.length && !custoIncerto) return null;
 
   const valorTotalCentavos = itens.reduce((acc, it) => acc + it.valorTotalCentavos, 0);
   const vencimento = vencimentoDe(competencia, Number(contrato.DIA_VENCIMENTO));
   const observacoes = custoIncerto
-    ? 'Consumo do período tem evento(s) com custo desconhecido (preço ainda não cadastrado em preco_provedor) — revise o valor do excedente antes de emitir.'
+    ? `Consumo do período tem custo desconhecido (preço ainda não cadastrado em preco_provedor) para: ${tiposIncertos.join(', ')} — lance o valor manualmente (item avulso) e revise antes de emitir.`
     : null;
 
   const ins = await conn.execute(

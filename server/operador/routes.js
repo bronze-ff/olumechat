@@ -38,6 +38,7 @@ const implementacao = require('./implementacao');
 const fatura = require('./fatura');
 const precos = require('../consumo/precos');
 const iaConfigStore = require('../ia/iaConfigStore');
+const onboarding = require('./onboarding');
 const { trocarCodigo } = require('../api/meta');
 const { guardar } = require('../meta/connection');
 const { linkDeConvite } = require('../utils/conviteLink');
@@ -705,6 +706,18 @@ router.post(
 router.get('/inadimplencia', async (req, res, next) => {
   try {
     res.json(await fatura.listarInadimplencia());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/operador/onboarding — progresso do onboarding assistido da Meta
+// por cliente, com a etapa em que cada um está parado (FIL-81).
+// ---------------------------------------------------------------------------
+router.get('/onboarding', async (req, res, next) => {
+  try {
+    res.json(await onboarding.listarProgresso());
   } catch (err) {
     tratar(err, res, next);
   }

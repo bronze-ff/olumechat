@@ -117,7 +117,13 @@ CREATE TABLE IF NOT EXISTS consumo_mensal (
   ano_mes        varchar(7) NOT NULL, -- 'YYYY-MM'
   tipo           varchar(30) NOT NULL,
   quantidade     bigint NOT NULL DEFAULT 0 CHECK (quantidade >= 0),
-  custo_centavos numeric(14,6) NOT NULL DEFAULT 0,
+  -- NULLABLE de propósito (achado de review): custo desconhecido em QUALQUER
+  -- evento do grupo (preço ainda não cadastrado) tem que virar NULL aqui, não
+  -- zero — SUM() ignora NULL e um COALESCE(...,0) apagaria a diferença entre
+  -- "grátis" e "não sabemos" para sempre (o bruto é purgado depois, ver
+  -- server/consumo/fechamento.js). server/consumo/fechamento.js::fecharMes()
+  -- é quem decide NULL vs. valor — nunca DEFAULT 0 aqui.
+  custo_centavos numeric(14,6),
   fechado_em     timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT pk_consmensal      PRIMARY KEY (tenant_id, ano_mes, tipo),
   CONSTRAINT ck_consmensal_tipo CHECK (tipo IN ('ia_tokens','mensagem_enviada','conversa_iniciada','midia_armazenada'))
