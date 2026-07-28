@@ -1193,6 +1193,17 @@ router.post('/:id/devolver-ia', naoAuditor, async (req, res, next) => {
       if (atual.MODO !== 'ia') {
         throw new RespostaHttp(400, { error: 'O agente de IA não está ligado neste canal.' });
       }
+      // Achado de review (P1, PR #32): o canal pode estar em modo='ia' com o
+      // ADD-ON do tenant desligado pelo operador. Nesse caso o runtime da IA
+      // desiste logo na fase 1 (gate de `ia_habilitada`): devolver tiraria o
+      // dono humano e a próxima mensagem do cliente morreria em silêncio.
+      const addon = await conn.execute(
+        `SELECT ia_habilitada FROM tenant WHERE id = :tenantId`, { tenantId: req.tenantId });
+      if ((addon.rows[0] || {}).IA_HABILITADA !== 'S') {
+        throw new RespostaHttp(400, {
+          error: 'O recurso de IA não está ativo para esta empresa — a conversa ficaria sem ninguém para responder.',
+        });
+      }
       if (!(await handoff.devolverParaIa(conn, req.tenantId, id))) {
         throw new RespostaHttp(409, { error: 'Só é possível devolver uma conversa que está em atendimento humano.' });
       }

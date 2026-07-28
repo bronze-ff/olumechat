@@ -180,7 +180,23 @@ router.post('/', exigirSuporteOperador, async (req, res, next) => {
 // de suporte auditada — abrir o PUT inteiro para o ADMIN entregaria isso junto.
 // O que muda aqui é decisão de NEGÓCIO do cliente: ligar a IA no canal, escolher
 // se ela cobre 24/7 ou só fora do expediente, e abrir ou fechar o modo teste.
-router.put('/:id/ia', exigirPapel('ADMIN'), exigirIaHabilitada, async (req, res, next) => {
+//
+// Achado de review (P1, PR #32): DESLIGAR não pode ficar atrás do gate do
+// add-on. Se o operador desliga `tenant.ia_habilitada`, o runtime para de
+// responder (fase 1) MAS as conversas continuam presas em `fila_status='ia'`;
+// com o gate na frente, o admin também não conseguiria desligar o canal para
+// liberá-las — o cliente ficaria sem atendimento nenhum, sem saída pela UI.
+// Por isso: desligar (e SÓ desligar) passa sem o gate; ligar ou reconfigurar
+// continua exigindo o add-on.
+function gateIaDoCanal(req, res, next) {
+  const b = req.body || {};
+  const desligando = b.ativo === false || b.ativo === 'N';
+  const soDesligando = desligando && b.regra === undefined && b.modoTeste === undefined;
+  if (soDesligando) return next();
+  return exigirIaHabilitada(req, res, next);
+}
+
+router.put('/:id/ia', exigirPapel('ADMIN'), gateIaDoCanal, async (req, res, next) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
   const b = req.body || {};
@@ -203,7 +219,7 @@ router.put('/:id/ia', exigirPapel('ADMIN'), exigirIaHabilitada, async (req, res,
   }
 
   try {
-    const encontrado = await db.comTenant(req.tenantId, async (conn) => {
+    const { encontrado, deptoParaDistribuir } = await db.comTenant(req.tenantId, async (conn) => {
       const upd = await conn.execute(
         `UPDATE numero
             SET modo          = COALESCE(:modo, modo),
@@ -212,16 +228,17 @@ router.put('/:id/ia', exigirPapel('ADMIN'), exigirIaHabilitada, async (req, res,
           WHERE tenant_id = :tenantId AND id = :id`,
         { tenantId: req.tenantId, modo, regra, teste, id }
       );
-      if (!upd.rowsAffected) return false;
+      if (!upd.rowsAffected) return { encontrado: false, deptoParaDistribuir: null };
 
       // Desligar a IA precisa liberar as conversas que já estavam em
       // fila_status='ia' — é a MESMA cascata do PUT /:id (ia/handoff.js). Sem
       // ela, quem testou a IA e desligou fica preso no "canal restrito" para
       // sempre nessas conversas antigas.
+      let deptoParaDistribuir = null;
       if (modo === 'padrao') {
         const destino = await handoff.resolverDestino(conn, req.tenantId, id, { permitirFluxo: true });
         const numOuNull = (v) => ({ type: db.tipos.NUMBER, val: v });
-        await conn.execute(
+        const cascata = await conn.execute(
           `UPDATE conversa
               SET fila_status = :st,
                   bot_fluxo_id = :flx,
@@ -232,6 +249,13 @@ router.put('/:id/ia', exigirPapel('ADMIN'), exigirIaHabilitada, async (req, res,
           { tenantId: req.tenantId, st: destino.filaStatus,
             flx: numOuNull(destino.fluxoId), dep: numOuNull(destino.departamentoId), id }
         );
+        // Achado de review (P1, PR #32): a cascata joga conversas em
+        // 'aguardando' e ninguém acordava o distribuidor — elas ficavam na fila
+        // sem dono até o próximo boot (varrerPendentes). Mesmo padrão dos
+        // outros produtores de fila: atribuir DEPOIS do commit.
+        if (destino.filaStatus === 'aguardando' && destino.departamentoId && cascata.rowsAffected) {
+          deptoParaDistribuir = destino.departamentoId;
+        }
       }
 
       await conn.execute(
@@ -241,9 +265,12 @@ router.put('/:id/ia', exigirPapel('ADMIN'), exigirIaHabilitada, async (req, res,
           mat: req.user && req.user.matricula, id,
           det: JSON.stringify({ modo, regra, modoTeste: teste }) }
       );
-      return true;
+      return { encontrado: true, deptoParaDistribuir };
     });
     if (!encontrado) return res.status(404).json({ error: 'Número não encontrado' });
+    // Pós-commit: antes disso as conversas movidas ainda não são visíveis para
+    // a conexão do distribuidor.
+    if (deptoParaDistribuir) require('../fila/distribuidor').atribuir(deptoParaDistribuir);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -257,7 +284,7 @@ router.put('/:id', exigirSuporteOperador, async (req, res, next) => {
   const b = req.body || {};
 
   try {
-    const encontrado = await db.comTenant(req.tenantId, async (conn) => {
+    const { encontrado, deptoParaDistribuir } = await db.comTenant(req.tenantId, async (conn) => {
       // departamentoPadraoId: null explícito limpa o roteamento (volta ao inbox geral).
       const limparDep = b.departamentoPadraoId === null;
       const numOuNull = (v) => ({ type: db.tipos.NUMBER, val: v });
@@ -282,7 +309,7 @@ router.put('/:id', exigirSuporteOperador, async (req, res, next) => {
           id,
         }
       );
-      if (!upd.rowsAffected) return false;
+      if (!upd.rowsAffected) return { encontrado: false, deptoParaDistribuir: null };
 
       // Sair do modo IA não migra sozinho as conversas que já estavam abertas
       // nesse status (fila_status é gravado por conversa na criação, não é lido
@@ -291,9 +318,10 @@ router.put('/:id', exigirSuporteOperador, async (req, res, next) => {
       // preso na resposta "canal restrito" para sempre nessas conversas antigas.
       // FIL-84: a cascata virou ia/handoff.resolverDestino — a MESMA usada pela
       // ferramenta transferir_para_humano e pelo botão Assumir.
+      let deptoParaDistribuir = null;
       if (b.modo === 'padrao') {
         const destino = await handoff.resolverDestino(conn, req.tenantId, id, { permitirFluxo: true });
-        await conn.execute(
+        const cascata = await conn.execute(
           `UPDATE conversa
               SET fila_status = :st,
                   bot_fluxo_id = :flx,
@@ -304,10 +332,17 @@ router.put('/:id', exigirSuporteOperador, async (req, res, next) => {
           { tenantId: req.tenantId, st: destino.filaStatus,
             flx: numOuNull(destino.fluxoId), dep: numOuNull(destino.departamentoId), id }
         );
+        // Achado de review (P1, PR #32): ver o comentário equivalente no
+        // PUT /:id/ia — sem acordar o distribuidor, a conversa liberada fica na
+        // fila sem dono até o próximo boot.
+        if (destino.filaStatus === 'aguardando' && destino.departamentoId && cascata.rowsAffected) {
+          deptoParaDistribuir = destino.departamentoId;
+        }
       }
-      return true;
+      return { encontrado: true, deptoParaDistribuir };
     });
     if (!encontrado) return res.status(404).json({ error: 'Número não encontrado' });
+    if (deptoParaDistribuir) require('../fila/distribuidor').atribuir(deptoParaDistribuir);
     res.json({ ok: true });
   } catch (err) {
     if (err.code === '23503') return res.status(400).json({ error: 'Departamento inexistente' });

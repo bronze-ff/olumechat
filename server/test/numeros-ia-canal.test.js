@@ -180,3 +180,82 @@ test('GET /api/numeros devolve iaRegra e iaModoTeste (a tela precisa deles)', as
     assert.equal(r.body[0].iaModoTeste, 'S');
   } finally { server.close(); }
 });
+
+// ---------------------------------------------------------------------------
+// Fixes da review cruzada do PR #32.
+// ---------------------------------------------------------------------------
+
+test('P1: desligar a IA ACORDA o distribuidor do departamento afetado', async () => {
+  // Sem isto, a cascata move as conversas para 'aguardando' e elas ficam sem
+  // dono até o próximo boot (fila/distribuidor.varrerPendentes).
+  const distribuidor = require('../fila/distribuidor');
+  const original = distribuidor.atribuir;
+  const acordados = [];
+  distribuidor.atribuir = (dep) => { acordados.push(dep); return Promise.resolve(); };
+
+  const conn = fakeConn([
+    IA_LIGADA,
+    [/^UPDATE numero/i, { rowsAffected: 1 }],
+    [/FROM numero n/i, { rows: [{ DEP: 9, FLUXO_ID: null }] }],
+    [/^UPDATE conversa/i, { rowsAffected: 3 }],
+  ]);
+  const { server, port } = await startApp(conn, ADMIN);
+  try {
+    assert.equal((await req(port, 'PUT', '/api/numeros/2/ia', { ativo: false })).status, 200);
+  } finally { server.close(); distribuidor.atribuir = original; }
+
+  assert.deepEqual(acordados, [9], 'o departamento que recebeu as conversas tem que ser acordado');
+});
+
+test('P1: cascata que não moveu ninguém NÃO acorda o distribuidor à toa', async () => {
+  const distribuidor = require('../fila/distribuidor');
+  const original = distribuidor.atribuir;
+  const acordados = [];
+  distribuidor.atribuir = (dep) => { acordados.push(dep); return Promise.resolve(); };
+
+  const conn = fakeConn([
+    IA_LIGADA,
+    [/^UPDATE numero/i, { rowsAffected: 1 }],
+    [/FROM numero n/i, { rows: [{ DEP: 9, FLUXO_ID: null }] }],
+    [/^UPDATE conversa/i, { rowsAffected: 0 }],
+  ]);
+  const { server, port } = await startApp(conn, ADMIN);
+  try {
+    await req(port, 'PUT', '/api/numeros/2/ia', { ativo: false });
+  } finally { server.close(); distribuidor.atribuir = original; }
+
+  assert.deepEqual(acordados, []);
+});
+
+test('P1: add-on desligado ainda permite DESLIGAR o canal (senão a conversa fica trancada)', async () => {
+  // Operador desliga o add-on → o runtime para de responder na fase 1, mas as
+  // conversas seguem em fila_status='ia'. Se o gate barrasse o desligamento, o
+  // admin não teria como liberá-las por lugar nenhum.
+  const capturas = [];
+  const conn = fakeConn([
+    [/SELECT ia_habilitada FROM tenant/i, { rows: [{ IA_HABILITADA: 'N' }] }],
+    [/^UPDATE numero/i, { rowsAffected: 1 }],
+    [/FROM numero n/i, { rows: [{ DEP: null, FLUXO_ID: null }] }],
+    [/^UPDATE conversa/i, { rowsAffected: 2 }],
+  ], capturas);
+  const { server, port } = await startApp(conn, ADMIN);
+  try {
+    assert.equal((await req(port, 'PUT', '/api/numeros/2/ia', { ativo: false })).status, 200);
+  } finally { server.close(); }
+
+  const upd = capturas.find((c) => /^UPDATE numero/i.test(c.sql));
+  assert.equal(upd.binds.modo, 'padrao');
+  assert.ok(capturas.some((c) => /^UPDATE conversa/i.test(c.sql)), 'a cascata precisa rodar e liberar as conversas');
+});
+
+test('P1: add-on desligado continua barrando LIGAR e RECONFIGURAR', async () => {
+  const conn = fakeConn([[/SELECT ia_habilitada FROM tenant/i, { rows: [{ IA_HABILITADA: 'N' }] }]]);
+  const { server, port } = await startApp(conn, ADMIN);
+  try {
+    assert.equal((await req(port, 'PUT', '/api/numeros/2/ia', { ativo: true })).status, 400);
+    assert.equal((await req(port, 'PUT', '/api/numeros/2/ia', { regra: 'sempre' })).status, 400);
+    assert.equal((await req(port, 'PUT', '/api/numeros/2/ia', { modoTeste: true })).status, 400);
+    // "desligar E reconfigurar" na mesma chamada NÃO é só desligar: passa pelo gate.
+    assert.equal((await req(port, 'PUT', '/api/numeros/2/ia', { ativo: false, regra: 'sempre' })).status, 400);
+  } finally { server.close(); }
+});

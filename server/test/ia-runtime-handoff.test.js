@@ -81,9 +81,11 @@ test('a resposta da IA publica evento de tempo real (senão só aparece no polli
   assert.equal(msg.tenantId, TENANT, 'o evento tem que carregar o tenantId — o SSE assina por tenant');
 });
 
-test('CORRIDA: atendente assume entre a fase 1 e o envio → resposta DESCARTADA', async () => {
-  // fila_status: 'ia' na fase 1 … e 'em_atendimento' na recheca da fase 3.
-  const conn = connComFila(['ia', 'em_atendimento']); db.getConnection = async () => conn;
+test('CORRIDA: atendente assume DURANTE a chamada ao provedor → resposta DESCARTADA', async () => {
+  // fila_status: 'ia' na fase 1, 'ia' na entrada da fase 3 … e 'em_atendimento'
+  // na recheca imediatamente anterior ao envio (a chamada ao provedor leva até
+  // 45s — é a janela que sobra depois do fix P1 da review).
+  const conn = connComFila(['ia', 'ia', 'em_atendimento']); db.getConnection = async () => conn;
   prepararProvedor();
   const enviados = [];
   global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) }; };
@@ -95,6 +97,83 @@ test('CORRIDA: atendente assume entre a fase 1 e o envio → resposta DESCARTADA
   // O turno FICA no histórico da IA (é o que ela pensou); só não vira mensagem.
   assert.ok(conn._ins.some((i) => /INSERT INTO ia_turno/i.test(i.sql)), 'o turno tem que ficar no histórico');
   assert.ok(!conn._ins.some((i) => /INSERT INTO mensagem/i.test(i.sql)), 'nada pode ser gravado como mensagem');
+});
+
+// Achado de review (P1, PR #32): a recheca só antes do envio final deixava
+// passar as respostas ENLATADAS da fase 3 (provedor não configurado, tipo não
+// suportado, áudio sem transcrição). Entre a fase 1 e a fase 3 correm a
+// resolução da credencial e o STT — segundos de rede em que o atendente pode
+// assumir. Agora a fase 3 recheca logo na entrada.
+test('CORRIDA: atendente assume durante o STT → nem a resposta enlatada sai', async () => {
+  const conn = connComFila(['ia', 'em_atendimento']); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  let chamouModelo = false; client.chamar = async () => { chamouModelo = true; return { texto: 'x', toolCalls: [] }; };
+
+  const sttMod = require('../ia/stt');
+  const original = sttMod.transcreverEntrada;
+  sttMod.transcreverEntrada = async () => ({ ok: false, motivo: 'sem_credencial' });
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) }; };
+
+  try {
+    await runtime.processarEntrada(TENANT, 88, {
+      tipo: 'audio', texto: '', midiaCaminho: '1/88/a.ogg', mime: 'audio/ogg', tamanho: 2000, tipoOriginal: 'audio',
+    });
+  } finally { sttMod.transcreverEntrada = original; }
+
+  assert.equal(enviados.length, 0, 'o "me manda por texto" saiu por cima do atendente que já assumiu');
+  assert.equal(chamouModelo, false);
+  assert.ok(!conn._ins.some((i) => /INSERT INTO ia_turno/i.test(i.sql)),
+    'sem turno: o modelo nem chegou a ser consultado');
+});
+
+test('a resposta gated da fase 1 (canal restrito) TAMBÉM publica no tempo real', async () => {
+  // Achado de review (P2): esses ramos respondem e saem com `return null`, e o
+  // dreno de efeitos ficava depois do `if (!cv) return` — a mensagem saía pelo
+  // WhatsApp e não aparecia na tela do atendente até o polling de 60s.
+  const conn = connComFila(['ia']);
+  conn.execute = (function (base) {
+    return async function (sql, binds) {
+      if (sql.includes('FROM conversa') && !/SELECT fila_status/i.test(sql)) {
+        return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000',
+          PHONE_NUMBER_ID: '111', FILA_STATUS: 'ia', IA_MODO_TESTE: 'S' }] };
+      }
+      return base.call(this, sql, binds);
+    };
+  })(conn.execute);
+  db.getConnection = async () => conn;
+  auth.autorizado = async () => false;
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) }; };
+
+  const eventos = [];
+  const cancelar = subscribe((e) => eventos.push(e));
+  try {
+    await runtime.processarEntrada(TENANT, 88, 'oi');
+  } finally { cancelar(); }
+
+  assert.equal(enviados.length, 1, 'o recado de canal restrito sai');
+  assert.ok(eventos.some((e) => e.tipo === 'mensagem' && e.conversaId === 88),
+    'e tem que aparecer ao vivo, como qualquer outra mensagem enviada');
+});
+
+test('commit que FALHA não publica efeito nenhum (SSE de estado inexistente)', async () => {
+  // Achado de review (P2): o dreno rodava depois do catch, então os efeitos de
+  // uma transação que sofreu ROLLBACK eram publicados mesmo assim.
+  const conn = connComFila(['ia', 'ia', 'ia']);
+  conn.commit = async () => { throw new Error('commit falhou'); };
+  db.getConnection = async () => conn;
+  prepararProvedor();
+  global.fetch = async () => ({ ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) });
+
+  const eventos = [];
+  const cancelar = subscribe((e) => eventos.push(e));
+  try {
+    await runtime.processarEntrada(TENANT, 88, 'oi');
+  } finally { cancelar(); }
+
+  assert.equal(eventos.length, 0, 'publicou um estado que sofreu rollback');
 });
 
 test('o publish só sai DEPOIS do commit (nunca de dentro da transação)', async () => {
@@ -298,4 +377,37 @@ test('imagem: o turno guarda o caminho e o provedor recebe os bytes', async () =
   const comImagem = (recebidas || []).filter((m) => m.imagem);
   assert.equal(comImagem.length, 1, 'a imagem tem que chegar ao provedor');
   assert.equal(comImagem[0].imagem.base64, Buffer.from('ABC').toString('base64'));
+});
+
+// Achado de review (P2, PR #32): o marcador `jaAvisou` era gravado ANTES do
+// envio. Uma falha transitória no envio (Meta fora do ar, 500 momentâneo)
+// deixava o marcador true e TODAS as mensagens seguintes daquele tipo passavam
+// em silêncio — o oposto do "nunca silêncio" que o aviso existe para garantir.
+test('aviso de tipo não suportado: envio que FALHA não grava o marcador (tenta de novo depois)', async () => {
+  const conn = connComFila(['ia', 'ia']); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  // sendText lança → responder() grava status 'falha' e devolve 0.
+  global.fetch = async () => { throw new Error('Meta fora do ar'); };
+
+  await runtime.processarEntrada(TENANT, 88, { tipo: 'nao_suportado', texto: '', tipoOriginal: 'video' });
+
+  const marcador = conn._ins.find((i) => /INSERT INTO ia_turno/i.test(i.sql)
+    && i.binds.tj && i.binds.tj.includes('"aviso"'));
+  assert.equal(marcador, undefined,
+    'sem envio confirmado, o marcador não pode existir — senão o cliente nunca mais é avisado');
+});
+
+test('aviso de tipo não suportado: envio OK grava o marcador (não repete a cada vídeo)', async () => {
+  const conn = connComFila(['ia', 'ia']); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  global.fetch = async () => ({ ok: true, json: async () => ({ messages: [{ id: 'w1' }] }) });
+
+  await runtime.processarEntrada(TENANT, 88, { tipo: 'nao_suportado', texto: '', tipoOriginal: 'video' });
+
+  const marcador = conn._ins.find((i) => /INSERT INTO ia_turno/i.test(i.sql)
+    && i.binds.tj && i.binds.tj.includes('"aviso"'));
+  assert.ok(marcador, 'com envio confirmado, o marcador tem que ficar');
+  assert.match(marcador.binds.tj, /video/);
 });

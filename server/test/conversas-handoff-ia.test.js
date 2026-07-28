@@ -136,6 +136,7 @@ test('devolver-ia: limpa o estado de fila e deixa nota de sistema', async () => 
     ESCOPO_MINHA, ATENDENTE,
     [/SELECT c\.fila_status, c\.contato_id, c\.departamento_id, n\.modo/i,
       { rows: [{ FILA_STATUS: 'em_atendimento', CONTATO_ID: 3, DEPARTAMENTO_ID: 9, MODO: 'ia' }] }],
+    [/SELECT ia_habilitada FROM tenant/i, { rows: [{ IA_HABILITADA: 'S' }] }],
     [/^UPDATE conversa/i, { rowsAffected: 1 }],
   ], capturas);
   const { server, port } = await startApp(conn, PERFIL_ATD);
@@ -173,6 +174,7 @@ test('devolver-ia numa conversa que não está com humano é 409', async () => {
     ESCOPO_MINHA, ATENDENTE,
     [/SELECT c\.fila_status, c\.contato_id, c\.departamento_id, n\.modo/i,
       { rows: [{ FILA_STATUS: 'resolvida', CONTATO_ID: 3, DEPARTAMENTO_ID: 9, MODO: 'ia' }] }],
+    [/SELECT ia_habilitada FROM tenant/i, { rows: [{ IA_HABILITADA: 'S' }] }],
     [/^UPDATE conversa/i, { rowsAffected: 0 }],
   ]);
   const { server, port } = await startApp(conn, PERFIL_ATD);
@@ -209,4 +211,42 @@ test('a listagem devolve numeroModo (a UI só oferece "Devolver" em canal com IA
   const fonte = fs.readFileSync(path.join(__dirname, '..', 'api', 'conversas.js'), 'utf8');
   assert.match(fonte, /n\.modo AS numero_modo/,
     'sem isto o front não sabe se o canal tem IA e o botão Devolver some ou aparece errado');
+});
+
+// Fix da review cruzada do PR #32 (P1): o canal pode estar em modo='ia' com o
+// ADD-ON do tenant desligado pelo operador. Nesse caso o runtime desiste na
+// fase 1 — devolver tiraria o dono humano e a próxima mensagem do cliente
+// morreria em silêncio.
+test('devolver-ia com o add-on de IA DESLIGADO no plano é 400 (não silencia a conversa)', async () => {
+  const capturas = [];
+  const conn = fakeConn([
+    ESCOPO_MINHA, ATENDENTE,
+    [/SELECT c\.fila_status, c\.contato_id, c\.departamento_id, n\.modo/i,
+      { rows: [{ FILA_STATUS: 'em_atendimento', CONTATO_ID: 3, DEPARTAMENTO_ID: 9, MODO: 'ia' }] }],
+    [/SELECT ia_habilitada FROM tenant/i, { rows: [{ IA_HABILITADA: 'N' }] }],
+  ], capturas);
+  const { server, port } = await startApp(conn, PERFIL_ATD);
+  try {
+    const r = await req(port, 'POST', '/api/conversas/88/devolver-ia');
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /IA/i);
+  } finally { server.close(); }
+  assert.ok(!capturas.some((c) => /^UPDATE conversa/i.test(c.sql)),
+    'não pode tirar o dono humano de uma conversa que ninguém vai responder');
+});
+
+test('devolver-ia com o add-on LIGADO segue funcionando', async () => {
+  const capturas = [];
+  const conn = fakeConn([
+    ESCOPO_MINHA, ATENDENTE,
+    [/SELECT c\.fila_status, c\.contato_id, c\.departamento_id, n\.modo/i,
+      { rows: [{ FILA_STATUS: 'em_atendimento', CONTATO_ID: 3, DEPARTAMENTO_ID: 9, MODO: 'ia' }] }],
+    [/SELECT ia_habilitada FROM tenant/i, { rows: [{ IA_HABILITADA: 'S' }] }],
+    [/^UPDATE conversa/i, { rowsAffected: 1 }],
+  ], capturas);
+  const { server, port } = await startApp(conn, PERFIL_ATD);
+  try {
+    assert.equal((await req(port, 'POST', '/api/conversas/88/devolver-ia')).status, 200);
+  } finally { server.close(); }
+  assert.ok(capturas.some((c) => /^UPDATE conversa/i.test(c.sql)));
 });

@@ -126,6 +126,57 @@ function eventoMensagem(tenantId, cv) {
 }
 
 /**
+ * Roda UMA fase dentro de db.comTenant() colecionando efeitos pós-commit numa
+ * lista própria, e só devolve essa lista se a transação CONFIRMOU.
+ *
+ * Achado de review (P2, PR #32): antes existia uma única lista global, drenada
+ * no fim da função, e isso errava nos dois sentidos —
+ *   (a) os ramos que respondem e saem cedo (`return null` na fase 1: teto
+ *       estourado, canal restrito) pulavam o dreno inteiro: a mensagem saía
+ *       pelo WhatsApp e ficava invisível no tempo real do atendente;
+ *   (b) se o COMMIT de uma fase falhasse, os efeitos daquela fase eram
+ *       publicados mesmo assim — SSE de um estado que sofreu rollback, e até
+ *       distribuição de um handoff que não aconteceu.
+ * Amarrar os efeitos à transação que os produziu resolve os dois: se
+ * `comTenant` lança, a linha do `return` nunca é alcançada e a lista morre com
+ * o rollback.
+ */
+async function faseComEfeitos(tenantId, fn) {
+  const efeitos = [];
+  const valor = await db.comTenant(tenantId, (conn) => fn(conn, efeitos));
+  return { valor, efeitos };
+}
+
+/** Dispara os efeitos de uma fase JÁ COMITADA. Nunca lança. */
+function dispararEfeitos(efeitos, conversaId) {
+  for (const efeito of efeitos) {
+    try { efeito(); } catch (e) {
+      console.error(`[ia] efeito pós-commit falhou (conversa ${conversaId}):`, e.message);
+    }
+  }
+}
+
+/**
+ * Resposta enlatada que só pode sair UMA VEZ por tipo por conversa (tipo de
+ * mídia que a IA não compreende, áudio que não deu para transcrever).
+ *
+ * Achado de review (P2, PR #32): o marcador `jaAvisou` era gravado ANTES do
+ * envio. Uma falha transitória no envio deixava o marcador `true` e TODAS as
+ * mensagens seguintes daquele tipo passavam em silêncio — exatamente o que o
+ * "nunca silêncio" existe para impedir. Agora o marcador (e o turno no
+ * histórico) só é persistido depois de o envio confirmar; se falhou, a próxima
+ * mensagem do mesmo tipo tenta de novo.
+ */
+async function avisarUmaVez(conn, tenantId, cv, chave, efeitos) {
+  if (await historico.jaAvisou(conn, tenantId, cv.conversaId, chave)) return;
+  const aviso = MSG_NAO_COMPREENDIDO[chave] || MSG_NAO_COMPREENDIDO_PADRAO;
+  if (await responder(conn, tenantId, cv, [aviso])) {
+    await historico.salvar(conn, tenantId, cv.conversaId, 'assistant', { texto: aviso, aviso: chave });
+    efeitos.push(eventoMensagem(tenantId, cv));
+  }
+}
+
+/**
  * FIL-78 (achado de review): resolver a credencial (store.carregar) exige
  * NÃO segurar a conexão de tenant ao mesmo tempo — na falta de chave própria
  * ela abre sua própria transação de operador (ver ia/iaConfigStore.js), e
@@ -147,13 +198,10 @@ async function processarEntrada(tenantId, conversaId, entrada) {
     : (entrada || { tipo: 'ignorar' });
   if (ent.tipo === 'ignorar') return;
   const texto = ent.texto;
-  // Efeitos PÓS-COMMIT (publish/distribuidor). Coletados dentro das transações
-  // e disparados só no fim — mesmo contrato de bot/runtime.js::executar: antes
-  // do commit o estado novo não é visível para nenhuma outra conexão, e o SSE
-  // reagiria a algo que ainda pode sofrer rollback.
-  const posCommit = [];
+  // Efeitos PÓS-COMMIT (publish/distribuidor) ficam POR FASE e são drenados
+  // logo depois de a transação daquela fase confirmar — ver faseComEfeitos().
   try {
-    const cv = await db.comTenant(tenantId, async (conn) => {
+    const { valor: cv, efeitos: efeitosFase1 } = await faseComEfeitos(tenantId, async (conn, posCommit) => {
       const cv = await carregarConversa(conn, tenantId, conversaId);
       if (!cv) return null;
 
@@ -187,6 +235,9 @@ async function processarEntrada(tenantId, conversaId, entrada) {
       }
       return cv;
     });
+    // Drena JÁ: os ramos acima que responderam e saíram com `return null`
+    // (teto estourado, canal restrito) também precisam aparecer ao vivo.
+    dispararEfeitos(efeitosFase1, conversaId);
     if (!cv) return;
 
     // Fase 2 — nenhuma conexão do pool aberta aqui.
@@ -204,7 +255,18 @@ async function processarEntrada(tenantId, conversaId, entrada) {
     const audio = ent.tipo === 'audio' ? await stt.transcreverEntrada(config, ent) : null;
 
     // Fase 3 — nova transação de tenant, só para o que falta.
-    await db.comTenant(tenantId, async (conn) => {
+    const { efeitos: efeitosFase3 } = await faseComEfeitos(tenantId, async (conn, posCommit) => {
+      // Achado de review (P1, PR #32): a recheca do takeover não pode ficar só
+      // antes do envio da resposta do modelo. Entre a fase 1 e AQUI já correram
+      // a resolução da credencial e o STT (segundos de rede) — o atendente pode
+      // ter assumido nesse meio-tempo, e as respostas ENLATADAS abaixo
+      // (provedor não configurado, tipo não suportado, áudio sem transcrição)
+      // sairiam por cima do humano que já está no comando.
+      if (!(await aindaNaIa(conn, tenantId, conversaId))) {
+        console.log(`[ia] conversa ${conversaId}: atendente assumiu antes da fase 3 — turno descartado`);
+        return;
+      }
+
       if (!config) {
         if (await responder(conn, tenantId, cv, ['O assistente está temporariamente indisponível (provedor de IA não configurado).'])) {
           posCommit.push(eventoMensagem(tenantId, cv));
@@ -216,12 +278,7 @@ async function processarEntrada(tenantId, conversaId, entrada) {
       // por conversa. Não gasta token do provedor e não polui o histórico com
       // um turno `user` vazio.
       if (ent.tipo === 'nao_suportado') {
-        const chave = ent.tipoOriginal || 'desconhecido';
-        if (!(await historico.jaAvisou(conn, tenantId, conversaId, chave))) {
-          const aviso = MSG_NAO_COMPREENDIDO[chave] || MSG_NAO_COMPREENDIDO_PADRAO;
-          await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: aviso, aviso: chave });
-          if (await responder(conn, tenantId, cv, [aviso])) posCommit.push(eventoMensagem(tenantId, cv));
-        }
+        await avisarUmaVez(conn, tenantId, cv, ent.tipoOriginal || 'desconhecido', posCommit);
         return;
       }
 
@@ -229,11 +286,7 @@ async function processarEntrada(tenantId, conversaId, entrada) {
       // recusado, provedor fora do ar): pede texto, uma vez por conversa.
       // Nunca silêncio.
       if (ent.tipo === 'audio' && (!audio || !audio.ok)) {
-        if (!(await historico.jaAvisou(conn, tenantId, conversaId, 'audio'))) {
-          const aviso = MSG_NAO_COMPREENDIDO.audio;
-          await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: aviso, aviso: 'audio' });
-          if (await responder(conn, tenantId, cv, [aviso])) posCommit.push(eventoMensagem(tenantId, cv));
-        }
+        await avisarUmaVez(conn, tenantId, cv, 'audio', posCommit);
         return;
       }
 
@@ -357,21 +410,21 @@ async function processarEntrada(tenantId, conversaId, entrada) {
           ? MSG_TETO_ESTOURADO
           : 'Não consegui responder agora — o assistente está indisponível no momento. Tente de novo em instantes.';
       }
-      // Recheca ANTES de enviar: o atendente pode ter assumido durante a
-      // chamada ao provedor. Mudou ⇒ descarta a resposta sem enviar. O turno já
-      // está no histórico da IA (é o que ela pensou); nada chega ao cliente.
+      // Recheca DE NOVO antes de enviar: a chamada ao provedor pode levar até
+      // 45s (ia/client.js) e o atendente pode ter assumido nesse intervalo.
+      // Mudou ⇒ descarta a resposta sem enviar. O turno já está no histórico da
+      // IA (é o que ela pensou); nada chega ao cliente.
       if (!(await aindaNaIa(conn, tenantId, conversaId))) {
         console.log(`[ia] conversa ${conversaId}: atendente assumiu durante o turno — resposta descartada`);
         return;
       }
       if (await responder(conn, tenantId, cv, [respostaFinal])) posCommit.push(eventoMensagem(tenantId, cv));
     });
+    dispararEfeitos(efeitosFase3, conversaId);
   } catch (err) {
+    // Transação que lançou já sofreu ROLLBACK: os efeitos daquela fase morrem
+    // com ela (ficaram na lista local do faseComEfeitos e nunca voltaram).
     console.error('[ia] runtime falhou:', err.message);
-  }
-  // Só notifica o SSE depois de a transação ter confirmado.
-  for (const efeito of posCommit) {
-    try { efeito(); } catch (e) { console.error(`[ia] efeito pós-commit falhou (conversa ${conversaId}):`, e.message); }
   }
 }
 
