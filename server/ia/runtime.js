@@ -12,6 +12,7 @@
 const db = require('../db/pool');
 const { sendText } = require('../graph/sendText');
 const store = require('./iaConfigStore');
+const perfilStore = require('./perfilStore');
 const client = require('./client');
 const toolExec = require('./toolExecutor');
 const auth = require('./autorizacao');
@@ -21,24 +22,13 @@ const consumo = require('../consumo/registrar');
 const precos = require('../consumo/precos');
 const { partirTexto } = require('./chunk');
 
-const SISTEMA_FALLBACK = 'Você é o assistente da Multicanal Atacado no WhatsApp. Responda de forma objetiva '
-  + 'e em português. Use SOMENTE as ferramentas disponíveis para obter números; nunca invente dados. '
-  + 'Formate valores em R$ e datas em DD/MM/AAAA.';
 const MAX_ITER = 4;
 const MSG_TETO_ESTOURADO = 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.';
-
-/** System prompt curado vem do mc-OS (sync) em CONHECIMENTO_DIR/system-prompt.md;
-    o fallback embutido só cobre instalação sem o arquivo. */
-function carregarSistema() {
-  try {
-    const fs = require('node:fs');
-    const path = require('node:path');
-    const { loadConfig } = require('../config');
-    const p = path.join(loadConfig({ requireDb: false }).conhecimentoDir, 'system-prompt.md');
-    const txt = fs.readFileSync(p, 'utf8').trim();
-    return txt || SISTEMA_FALLBACK;
-  } catch { return SISTEMA_FALLBACK; }
-}
+// FIL-83: mensagem de canal restrito. NÃO pode citar empresa nenhuma — ela
+// chega ao cliente final de QUALQUER empresa da plataforma (o texto anterior
+// mandava falar com "a TI" da empresa do fork original).
+const MSG_NAO_AUTORIZADO = 'Olá! Este canal é restrito e o seu número ainda não está liberado para falar com o assistente. '
+  + 'Se precisar de atendimento, procure a empresa pelos canais habituais.';
 
 async function carregarConversa(conn, tenantId, conversaId) {
   const r = await conn.execute(
@@ -108,7 +98,7 @@ async function processarEntrada(tenantId, conversaId, texto) {
       }
 
       if (!(await auth.autorizado(conn, tenantId, cv.telefone, cv.numeroId))) {
-        await responder(conn, tenantId, cv, ['Olá! Este canal é restrito. Fale com a TI da Multicanal para liberar seu acesso.']);
+        await responder(conn, tenantId, cv, [MSG_NAO_AUTORIZADO]);
         return null;
       }
       return cv;
@@ -135,12 +125,13 @@ async function processarEntrada(tenantId, conversaId, texto) {
       let mensagens = await historico.carregar(conn, tenantId, conversaId);
 
       let respostaFinal = '';
-      // Injeta a data/hora atual (Brasília) no system prompt — sem isso o modelo
-      // não tem como interpretar "ontem", "este mês", "mês passado" corretamente.
-      let hoje;
-      try { hoje = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'full', timeStyle: 'short' }); }
-      catch { hoje = new Date().toISOString(); }
-      const sistema = `${carregarSistema()}\n\n---\nContexto do sistema: hoje é ${hoje} (horário de Brasília). Use esta data para resolver períodos relativos ("ontem", "este mês", "mês passado") e informe sempre o intervalo usado na resposta.`;
+      // FIL-83: o system prompt vem do BANCO, por empresa (instruções + ficha +
+      // blocos ativos), montado em camadas com a base anti-alucinação por cima
+      // — ver ia/perfilStore.js. Antes era uma leitura de arquivo a cada
+      // mensagem, global ao processo e ausente do repositório. Roda com o
+      // `conn` DESTA fase de propósito: o conteúdo é 100% do tenant e não pode
+      // custar uma segunda conexão do pool (ver o comentário das 3 fases acima).
+      const sistema = perfilStore.montarSistema(await perfilStore.carregar(conn, tenantId));
       // A chamada ao provedor (client.chamar) é o ponto mais provável de falhar
       // (chave, cota, modelo inexistente, rede, timeout). Um throw aqui NÃO pode
       // virar silêncio: capturamos, logamos com detalhe e caímos no fallback

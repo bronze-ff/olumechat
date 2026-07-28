@@ -28,7 +28,12 @@ const ABAS = [
   { id: 'historico', rotulo: 'Histórico', descricao: 'Consulte atendimentos, mensagens e registros anteriores.', icon: 'history', grupo: 'Operação', el: Historico },
   { id: 'campanhas', rotulo: 'Campanhas', descricao: 'Planeje e acompanhe comunicações ativas pelo WhatsApp.', icon: 'campaign', grupo: 'Automação', el: Campanhas, adminOnly: true },
   { id: 'fluxos', rotulo: 'Fluxos de atendimento', descricao: 'Organize triagens, respostas e transferências automáticas.', icon: 'flow', grupo: 'Automação', el: Fluxos },
-  { id: 'ia', rotulo: 'Agente de IA', descricao: 'Configure o provedor, as instruções e o comportamento da IA.', icon: 'bot', grupo: 'Automação', el: IaConfig, adminOnly: true },
+  // FIL-83: SUPERVISOR e AUDITOR VEEM a tela (a edição continua só de ADMIN —
+  // a própria tela desabilita os campos e o backend exige ADMIN em toda escrita,
+  // ver server/api/iaPerfil.js). A sessão de suporte entra como AUDITOR nas
+  // rotas: quando o cliente reclama "a IA respondeu errado", o suporte precisa
+  // ler as instruções que causaram aquilo. Por isso `papeis` em vez de adminOnly.
+  { id: 'ia', rotulo: 'Agente de IA', descricao: 'Configure o provedor, as instruções e o comportamento da IA.', icon: 'bot', grupo: 'Automação', el: IaConfig, papeis: ['ADMIN', 'SUPERVISOR', 'AUDITOR'] },
   { id: 'ia-acesso', rotulo: 'Permissões da IA', descricao: 'Defina quais contatos podem interagir com o agente de IA.', icon: 'shield', grupo: 'Automação', el: IaAutorizados, adminOnly: true },
   { id: 'clientes', rotulo: 'Clientes', descricao: 'Centralize contatos, dados cadastrais e atendentes de referência.', icon: 'contact', grupo: 'Relacionamento', el: Clientes },
   { id: 'departamentos', rotulo: 'Departamentos', descricao: 'Estruture filas e responsabilidades por área.', icon: 'building', grupo: 'Equipe e canais', el: Departamentos },
@@ -78,7 +83,13 @@ export default function Admin() {
   if (loading) return null;
   if (!podeVerAdmin) return <Navigate to="/conversas" replace />;
 
-  const abas = ABAS.filter((item) => (!item.adminOnly || isAdmin) && (!item.suporteOnly || user?.suporte));
+  // `papeis` (allowlist explícita) tem precedência sobre `adminOnly`; sem
+  // nenhum dos dois, a aba vale para todo mundo que já passou pelo
+  // `podeVerAdmin` acima.
+  const abas = ABAS.filter((item) => (
+    (item.papeis ? item.papeis.includes(user?.papel) : (!item.adminOnly || isAdmin))
+    && (!item.suporteOnly || user?.suporte)
+  ));
   const atual = abas.find((item) => item.id === aba) || abas[0];
   const Conteudo = atual.el;
   const empresa = localStorage.getItem('empresa') || 'sua empresa';

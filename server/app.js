@@ -100,6 +100,11 @@ app.use('/api/campanhas', authMiddleware, anexarPerfil, require('./api/campanhas
 app.use('/api/atalhos', authMiddleware, anexarPerfil, require('./api/atalhos'));
 app.use('/api/ia-config', authMiddleware, anexarPerfil, require('./api/iaConfig'));
 app.use('/api/ia-autorizados', authMiddleware, anexarPerfil, require('./api/iaAutorizados'));
+// FIL-83: instruções, ficha e base de conhecimento da IA por empresa — o
+// system prompt do bot passa a sair daqui (ver ia/perfilStore.js), não mais de
+// um arquivo em disco global para o processo.
+app.use('/api/ia-perfil', authMiddleware, anexarPerfil, require('./api/iaPerfil').perfil);
+app.use('/api/ia-conhecimento', authMiddleware, anexarPerfil, require('./api/iaPerfil').conhecimento);
 app.use('/api/onboarding-meta', authMiddleware, anexarPerfil, require('./api/onboardingMeta'));
 
 // --- SPA (frontend) em produção, se o build do client existir ---
