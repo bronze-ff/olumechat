@@ -37,6 +37,7 @@ const contrato = require('./contrato');
 const implementacao = require('./implementacao');
 const precos = require('../consumo/precos');
 const iaConfigStore = require('../ia/iaConfigStore');
+const onboarding = require('./onboarding');
 const { trocarCodigo } = require('../api/meta');
 const { guardar } = require('../meta/connection');
 const { linkDeConvite } = require('../utils/conviteLink');
@@ -667,6 +668,18 @@ router.patch('/tenants/:id/implementacao/:implementacaoId', async (req, res, nex
       operador: req.operador, tenantId: id, implementacaoId, dados: req.body || {},
       ip: auditoria.ipDaRequisicao(req),
     }));
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/operador/onboarding — progresso do onboarding assistido da Meta
+// por cliente, com a etapa em que cada um está parado (FIL-81).
+// ---------------------------------------------------------------------------
+router.get('/onboarding', async (req, res, next) => {
+  try {
+    res.json(await onboarding.listarProgresso());
   } catch (err) {
     tratar(err, res, next);
   }

@@ -295,15 +295,17 @@ router.post('/', naoAuditor, async (req, res, next) => {
         conversaId = insC.outBinds.id[0];
       }
       const conteudo = b.preview ? String(b.preview) : `[template: ${templateName}]`;
-      await conn.execute(
+      const ins = await conn.execute(
         `INSERT INTO mensagem
            (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())`,
-        { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo }
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())
+         RETURNING id INTO :id`,
+        { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo,
+          id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
       );
       // Medição de consumo (FIL-76/FIL-77): achado de review — disparo manual
       // de template (conversa ativa) não tinha produtor de mensagem_enviada.
-      await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: conversaId });
+      await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: ins.outBinds.id[0] });
       return { id: conversaId, contatoId, telefone, departamentoId: departamentoId || null, wamid };
     });
 
@@ -1253,6 +1255,9 @@ router.post('/:id/encerrar', naoAuditor, async (req, res, next) => {
               txt: despedidaIdentificada,
             }
           );
+          // Mede o envio (FIL-77) — achado de review: a despedida opcional
+          // ficou de fora da instrumentação original.
+          await consumo.registrar(conn, req.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: id });
         } catch (e) {
           console.error('[conversas] despedida falhou (encerrando mesmo assim):', e.message);
         }

@@ -144,7 +144,8 @@ async function processarItem(tenantId, campanhaId, item, deps) {
         `UPDATE campanha SET ENVIADOS = ENVIADOS + 1, ATUALIZADO_EM = now() WHERE ID = :id`,
         { id: campanhaId });
       // Medição de consumo (FIL-76/FIL-77): achado de review — disparo de
-      // campanha não tinha produtor de mensagem_enviada nenhum.
+      // campanha não tinha produtor de mensagem_enviada nenhum. O template
+      // REALMENTE saiu (chegamos aqui só depois do sendTemplate ter sucesso).
       await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: item.ID });
       return 'enviado';
     } catch (err) {

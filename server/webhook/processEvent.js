@@ -334,8 +334,12 @@ async function confirmarEncerramento(evt) {
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: texto }
       );
       // Medição de consumo (FIL-76/FIL-77): achado de review — confirmação de
-      // encerramento não tinha produtor de mensagem_enviada nenhum.
-      await consumo.registrar(conn, evt.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: evt.conversaId });
+      // encerramento não tinha produtor de mensagem_enviada nenhum. Só
+      // chegamos aqui com wamid preenchido quando o sendText acima teve
+      // sucesso; se falhou, wamid fica null mas o status ainda seria 'sent'
+      // hardcoded (comportamento pré-existente) — por isso a condição real
+      // de "saiu de verdade" é wamid, não o status gravado.
+      if (wamid) await consumo.registrar(conn, evt.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: evt.conversaId });
     });
   } catch (err) {
     console.error('[webhook] persistência da confirmação falhou:', err.message);
@@ -366,7 +370,9 @@ async function enviarAvisoForaHorario(evt) {
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: evt.texto }
       );
       // Medição de consumo (FIL-76/FIL-77): achado de review — aviso de fora
-      // de horário não tinha produtor de mensagem_enviada nenhum.
+      // de horário não tinha produtor de mensagem_enviada nenhum. Chegamos
+      // aqui só depois do sendText (acima) ter tido sucesso (senão a função
+      // já teria retornado no catch).
       await consumo.registrar(conn, evt.tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: evt.conversaId });
     });
     publish({ tipo: 'mensagem', direcao: 'out', conversaId: evt.conversaId, contatoId: evt.contatoId, tenantId: evt.tenantId });
@@ -505,9 +511,11 @@ async function processChange(conn, numero, value) {
     if (!novoInbound) continue;
     // Medição de consumo (FIL-76/FIL-77): mídia efetivamente baixada e
     // gravada — achado de review, não tinha produtor nenhum antes. Só conta
-    // no inbound NOVO (dedup acima) — reentrega não pode dobrar o storage.
-    if (media) {
-      await consumo.registrar(conn, numero.tenantId, { tipo: 'midia_armazenada', quantidade: media.size || 0, referencia: conversaId });
+    // no inbound NOVO (dedup acima, um webhook reentregue não pode dobrar o
+    // storage) e só quando `media.size` é um valor real — `media` só existe
+    // quando safeDownload teve sucesso de verdade.
+    if (media && media.size) {
+      await consumo.registrar(conn, numero.tenantId, { tipo: 'midia_armazenada', quantidade: media.size, referencia: conversaId });
     }
     // Conversa nova = possível resposta a um disparo de campanha → deixa o rastro.
     if (conversa.criada) {

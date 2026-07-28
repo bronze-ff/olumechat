@@ -12,7 +12,7 @@ const assert = require('node:assert');
 const db = require('../db/pool');
 const consumo = require('../operador/consumo');
 
-function conexao({ tenantExiste = true, linhas = [], retidoLinhas = [] } = {}) {
+function conexao({ tenantExiste = true, linhas = [], linhasMensal = [] } = {}) {
   const cap = [];
   return {
     cap,
@@ -21,7 +21,7 @@ function conexao({ tenantExiste = true, linhas = [], retidoLinhas = [] } = {}) {
       if (/SELECT id FROM tenant WHERE id = :id/i.test(sql)) {
         return { rows: tenantExiste ? [{ ID: binds.id }] : [] };
       }
-      if (/FROM consumo_mensal/i.test(sql)) return { rows: retidoLinhas };
+      if (/FROM consumo_mensal/i.test(sql)) return { rows: linhasMensal };
       if (/FROM consumo_evento/i.test(sql)) return { rows: linhas };
       return { rows: [] };
     },
@@ -37,82 +37,23 @@ test('consumoDoTenant: 404 se o tenant não existe', async () => {
   );
 });
 
-test('consumoDoTenant: devolve série por tipo com custo e quantidade', async () => {
+test('consumoDoTenant: devolve série por tipo com custo e quantidade (mês corrente, do bruto)', async () => {
   const conn = conexao({
     linhas: [
-      { ANO_MES: '2026-07', TIPO: 'ia_tokens', QUANTIDADE: 15000, CUSTO_CENTAVOS: 340.5, CUSTO_INCOMPLETO: false, EVENTOS: 12 },
-      { ANO_MES: '2026-07', TIPO: 'mensagem_enviada', QUANTIDADE: 87, CUSTO_CENTAVOS: 0, CUSTO_INCOMPLETO: false, EVENTOS: 87 },
+      { TIPO: 'ia_tokens', QUANTIDADE: 15000, CUSTO_CENTAVOS: 340.5, EVENTOS: 12 },
+      { TIPO: 'mensagem_enviada', QUANTIDADE: 87, CUSTO_CENTAVOS: 0, EVENTOS: 87 },
     ],
   });
   db.getConnection = async () => conn;
-  const r = await consumo.consumoDoTenant({ tenantId: 5, de: '2026-07-01', ate: '2026-07-31' });
+  const anoMesAtual = new Date().toISOString().slice(0, 7);
+  const r = await consumo.consumoDoTenant({ tenantId: 5, de: `${anoMesAtual}-01`, ate: `${anoMesAtual}-28` });
   assert.equal(r.tenantId, 5);
   assert.equal(r.serie.length, 2);
-  assert.equal(r.serie[0].tipo, 'ia_tokens');
-  assert.equal(r.serie[0].custoCentavos, 340.5);
-  assert.equal(r.serie[0].quantidade, 15000);
-  assert.equal(r.retidoParcial, false, 'período todo coberto pelo bruto, nada veio do agregado retido');
+  const iaTokens = r.serie.find((s) => s.tipo === 'ia_tokens');
+  assert.equal(iaTokens.custoCentavos, 340.5);
+  assert.equal(iaTokens.quantidade, 15000);
   const consulta = conn.cap.find((c) => /FROM consumo_evento/i.test(c.sql));
   assert.equal(consulta.binds.tenantId, 5, 'filtra explicitamente pelo tenant pedido (cross-tenant de propósito, ver operador/db.js)');
-});
-
-// ===========================================================================
-// Achado de review (FIL-76): range fora da janela de retenção do bruto (~90
-// dias) tem que cair pro agregado mensal PERMANENTE, não voltar vazio.
-// ===========================================================================
-test('consumoDoTenant: mês já limpo pela retenção (sem bruto) cai pro agregado mensal retido', async () => {
-  const conn = conexao({
-    linhas: [], // bruto já foi apagado pela retenção
-    retidoLinhas: [
-      { ANO_MES: '2026-01', TIPO: 'ia_tokens', QUANTIDADE: 5000, CUSTO_CENTAVOS: 120, CUSTO_INCOMPLETO: false },
-    ],
-  });
-  db.getConnection = async () => conn;
-  const r = await consumo.consumoDoTenant({ tenantId: 5, de: '2026-01-01', ate: '2026-01-31' });
-  assert.equal(r.serie.length, 1);
-  assert.equal(r.serie[0].tipo, 'ia_tokens');
-  assert.equal(r.serie[0].quantidade, 5000);
-  assert.equal(r.serie[0].custoCentavos, 120);
-  assert.equal(r.retidoParcial, true, 'avisa que este mês veio do agregado, sem precisão de dia');
-});
-
-test('consumoDoTenant: mês coberto pelo bruto NUNCA soma o agregado mensal do mesmo mês (evita dobrar a contagem)', async () => {
-  const conn = conexao({
-    linhas: [{ ANO_MES: '2026-07', TIPO: 'ia_tokens', QUANTIDADE: 1000, CUSTO_CENTAVOS: 50, CUSTO_INCOMPLETO: false, EVENTOS: 4 }],
-    // Linha "fantasma" no agregado mensal do MESMO mês+tipo — não pode ser
-    // somada, senão o total dobraria (o fechamento roda todo dia e reescreve
-    // consumo_mensal mesmo pra meses cujo bruto ainda não foi limpo).
-    retidoLinhas: [{ ANO_MES: '2026-07', TIPO: 'ia_tokens', QUANTIDADE: 1000, CUSTO_CENTAVOS: 50, CUSTO_INCOMPLETO: false }],
-  });
-  db.getConnection = async () => conn;
-  const r = await consumo.consumoDoTenant({ tenantId: 5, de: '2026-07-01', ate: '2026-07-31' });
-  assert.equal(r.serie.length, 1);
-  assert.equal(r.serie[0].quantidade, 1000, 'não pode dobrar — o bruto já cobre este mês');
-  assert.equal(r.serie[0].custoCentavos, 50);
-  assert.equal(r.retidoParcial, false, 'este mês veio do bruto, não do agregado');
-});
-
-test('consumoDoTenant: range parcial — um mês do bruto, outro retido — mescla os dois sem duplicar', async () => {
-  const conn = conexao({
-    linhas: [{ ANO_MES: '2026-02', TIPO: 'ia_tokens', QUANTIDADE: 300, CUSTO_CENTAVOS: 10, CUSTO_INCOMPLETO: false, EVENTOS: 2 }],
-    retidoLinhas: [{ ANO_MES: '2026-01', TIPO: 'ia_tokens', QUANTIDADE: 700, CUSTO_CENTAVOS: 25, CUSTO_INCOMPLETO: false }],
-  });
-  db.getConnection = async () => conn;
-  const r = await consumo.consumoDoTenant({ tenantId: 5, de: '2026-01-01', ate: '2026-02-28' });
-  assert.equal(r.serie.length, 1);
-  assert.equal(r.serie[0].quantidade, 1000, 'soma os dois meses (janeiro do agregado + fevereiro do bruto)');
-  assert.equal(r.serie[0].custoCentavos, 35);
-  assert.equal(r.retidoParcial, true);
-});
-
-test('consumoDoTenant: custo_incompleto do agregado retido propaga pra série', async () => {
-  const conn = conexao({
-    linhas: [],
-    retidoLinhas: [{ ANO_MES: '2026-01', TIPO: 'ia_tokens', QUANTIDADE: 100, CUSTO_CENTAVOS: 5, CUSTO_INCOMPLETO: true }],
-  });
-  db.getConnection = async () => conn;
-  const r = await consumo.consumoDoTenant({ tenantId: 5, de: '2026-01-01', ate: '2026-01-31' });
-  assert.equal(r.serie[0].custoIncompleto, true, 'o operador precisa saber que este número não é o custo total real');
 });
 
 test('consumoDoTenant: sem de/ate, usa o mês corrente como padrão', async () => {
@@ -132,10 +73,14 @@ test('consumoDoTenant: rejeita data mal formatada', async () => {
   );
 });
 
-test('consumoDoTenant: rejeita data de calendário impossível (2026-02-31)', async () => {
+test('ACHADO DE REVIEW (P2): rejeita data de calendário IMPOSSÍVEL (regex sozinha aceitaria) — 400, não 500 do banco', async () => {
   db.getConnection = async () => conexao();
   await assert.rejects(
-    consumo.consumoDoTenant({ tenantId: 5, de: '2026-02-31' }),
+    consumo.consumoDoTenant({ tenantId: 5, de: '2026-02-31' }), // fevereiro não tem 31 dias
+    (err) => err.deOperador && err.status === 400
+  );
+  await assert.rejects(
+    consumo.consumoDoTenant({ tenantId: 5, ate: '2026-99-99' }),
     (err) => err.deOperador && err.status === 400
   );
 });
@@ -146,4 +91,34 @@ test('consumoDoTenant: rejeita "de" depois de "ate"', async () => {
     consumo.consumoDoTenant({ tenantId: 5, de: '2026-08-01', ate: '2026-07-01' }),
     (err) => err.deOperador && err.status === 400
   );
+});
+
+test('ACHADO DE REVIEW (P2): mês PASSADO vem de consumo_mensal (agregado permanente), mesmo com consumo_evento vazio (já purgado pela retenção)', async () => {
+  const conn = conexao({
+    linhas: [], // bruto já foi purgado pela retenção (consumo/fechamento.js)
+    linhasMensal: [{ TIPO: 'ia_tokens', QUANTIDADE: 9000, CUSTO_CENTAVOS: 210 }],
+  });
+  db.getConnection = async () => conn;
+  // Período totalmente no passado (bem antes do mês corrente).
+  const r = await consumo.consumoDoTenant({ tenantId: 5, de: '2025-01-01', ate: '2025-01-31' });
+  assert.equal(r.serie.length, 1);
+  assert.equal(r.serie[0].tipo, 'ia_tokens');
+  assert.equal(r.serie[0].quantidade, 9000, 'histórico não pode voltar vazio só porque o bruto já foi apagado');
+  assert.equal(r.serie[0].custoCentavos, 210);
+});
+
+test('ACHADO DE REVIEW (P1): custo desconhecido (NULL) em QUALQUER uma das fontes contamina o total combinado — nunca vira número que pareça completo', async () => {
+  const conn = conexao({
+    linhas: [{ TIPO: 'ia_tokens', QUANTIDADE: 100, CUSTO_CENTAVOS: 50, EVENTOS: 3 }], // mês corrente, custo conhecido
+    linhasMensal: [{ TIPO: 'ia_tokens', QUANTIDADE: 900, CUSTO_CENTAVOS: null }],      // mês passado, custo desconhecido
+  });
+  db.getConnection = async () => conn;
+  const r = await consumo.consumoDoTenant({
+    tenantId: 5,
+    de: '2025-01-01',
+    ate: `${new Date().toISOString().slice(0, 10)}`,
+  });
+  const linha = r.serie.find((s) => s.tipo === 'ia_tokens');
+  assert.equal(linha.quantidade, 1000, 'quantidade sempre soma (nunca é incerta)');
+  assert.equal(linha.custoCentavos, null, 'custo combinado tem que ficar NULO — não pode aparentar estar completo');
 });
