@@ -12,19 +12,25 @@ const { tentarGlobal } = require('../workers/leaderLock');
 /** Simula consumo_evento (linhas fixas) + consumo_mensal (mapa mutável, para
  *  provar a idempotência de verdade: rodar fecharMes duas vezes não deveria
  *  mudar o estado final nem duplicar linha). */
-function conexao({ eventosAgrupados = [] } = {}) {
+function conexao({ eventosAgrupados = [], mesesPendentes = [] } = {}) {
   const mensal = new Map(); // `${tenantId}:${anoMes}:${tipo}` -> linha
   const cap = [];
   return {
     cap, mensal,
     async execute(sql, binds = {}) {
       cap.push({ sql, binds });
+      if (/SELECT DISTINCT to_char\(criado_em, 'YYYY-MM'\) AS ano_mes FROM consumo_evento/i.test(sql)) {
+        return { rows: mesesPendentes.map((anoMes) => ({ ANO_MES: anoMes })) };
+      }
       if (/SELECT tenant_id, tipo,[\s\S]*FROM consumo_evento/i.test(sql)) {
         return { rows: eventosAgrupados };
       }
       if (/INSERT INTO consumo_mensal/i.test(sql)) {
         const chave = `${binds.tenantId}:${binds.anoMes}:${binds.tipo}`;
-        mensal.set(chave, { TENANT_ID: binds.tenantId, ANO_MES: binds.anoMes, TIPO: binds.tipo, QUANTIDADE: binds.qtd, CUSTO_CENTAVOS: binds.custo });
+        mensal.set(chave, {
+          TENANT_ID: binds.tenantId, ANO_MES: binds.anoMes, TIPO: binds.tipo,
+          QUANTIDADE: binds.qtd, CUSTO_CENTAVOS: binds.custo, CUSTO_INCOMPLETO: binds.custoIncompleto,
+        });
         return { rows: [] };
       }
       if (/DELETE FROM consumo_evento/i.test(sql)) {
@@ -82,6 +88,49 @@ test('limparEventosAntigos: usa o teto de retenção padrão de 90 dias quando n
   await fechamento.limparEventosAntigos(conn);
   const del = conn.cap.find((c) => /DELETE FROM consumo_evento/i.test(c.sql));
   assert.equal(del.binds.dias, 90);
+});
+
+// ===========================================================================
+// Achado de review (FIL-76): custo NULL (preço ainda não cadastrado) não pode
+// virar zero PERMANENTE no agregado — precisa ficar marcado como incompleto.
+// ===========================================================================
+test('fecharMes: evento com custo desconhecido (NULL) marca o agregado como custo_incompleto, sem inventar valor', async () => {
+  const conn = conexao({
+    eventosAgrupados: [
+      { TENANT_ID: 1, TIPO: 'ia_tokens', QUANTIDADE: 500, CUSTO_CENTAVOS: 20, CUSTO_INCOMPLETO: true },
+    ],
+  });
+  await fechamento.fecharMes(conn, '2026-07');
+  const linha = conn.mensal.get('1:2026-07:ia_tokens');
+  assert.equal(linha.CUSTO_CENTAVOS, 20, 'soma só o que é conhecido — não inventa nem zera o que se sabe');
+  assert.equal(linha.CUSTO_INCOMPLETO, true, 'marca que este agregado NÃO reflete o custo total real');
+});
+
+test('fecharMes: quando todos os eventos têm custo conhecido, custo_incompleto fica false', async () => {
+  const conn = conexao({
+    eventosAgrupados: [{ TENANT_ID: 1, TIPO: 'ia_tokens', QUANTIDADE: 300, CUSTO_CENTAVOS: 12.5, CUSTO_INCOMPLETO: false }],
+  });
+  await fechamento.fecharMes(conn, '2026-07');
+  assert.equal(conn.mensal.get('1:2026-07:ia_tokens').CUSTO_INCOMPLETO, false);
+});
+
+// ===========================================================================
+// Achado de review (FIL-76): recuperação fechava só o mês corrente + o
+// anterior — uma competência mais antiga pendente (worker fora do ar por
+// mais de um mês) nunca era fechada.
+// ===========================================================================
+test('fecharPendentes: descobre e fecha TODAS as competências com evento pendente, não só as 2 mais recentes', async () => {
+  const conn = conexao({ mesesPendentes: ['2026-04', '2026-05', '2026-07'], eventosAgrupados: [{ TENANT_ID: 9, TIPO: 'mensagem_enviada', QUANTIDADE: 10, CUSTO_CENTAVOS: 0, CUSTO_INCOMPLETO: false }] });
+  await fechamento.fecharPendentes(conn);
+  const fechados = conn.cap.filter((c) => /INSERT INTO consumo_mensal/i.test(c.sql)).map((c) => c.binds.anoMes);
+  assert.deepEqual(fechados, ['2026-04', '2026-05', '2026-07'], 'fecha TODAS as competências pendentes, mesmo uma antiga isolada (2026-04)');
+  assert.ok(conn.cap.some((c) => /DELETE FROM consumo_evento/i.test(c.sql)), 'aplica a retenção depois de fechar tudo');
+});
+
+test('mesesComEventosPendentes: sem nenhum evento bruto, não fecha nada', async () => {
+  const conn = conexao({ mesesPendentes: [] });
+  const meses = await fechamento.mesesComEventosPendentes(conn);
+  assert.deepEqual(meses, []);
 });
 
 test('anoMesDe / mesAnteriorDe: competência em UTC, formato YYYY-MM', () => {

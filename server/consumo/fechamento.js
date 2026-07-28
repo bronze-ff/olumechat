@@ -36,19 +36,28 @@ async function fecharMes(conn, anoMes) {
   const r = await conn.execute(
     `SELECT tenant_id, tipo,
             COALESCE(SUM(quantidade), 0)      AS quantidade,
-            COALESCE(SUM(custo_centavos), 0)  AS custo_centavos
+            COALESCE(SUM(custo_centavos), 0)  AS custo_centavos,
+            bool_or(custo_centavos IS NULL)   AS custo_incompleto
        FROM consumo_evento
       WHERE to_char(criado_em, 'YYYY-MM') = :anoMes
       GROUP BY tenant_id, tipo`,
     { anoMes }
   );
   for (const row of r.rows) {
+    // Achado de review (FIL-76): SUM ignora NULL e COALESCE(...,0) transforma
+    // "não sei quanto custou" num zero exato e PERMANENTE (consumo_mensal
+    // nunca é reescrito depois que o bruto é apagado pela retenção). Marca o
+    // agregado como incompleto sem inventar um valor — ver migração 019.
     await conn.execute(
-      `INSERT INTO consumo_mensal (tenant_id, ano_mes, tipo, quantidade, custo_centavos, fechado_em)
-       VALUES (:tenantId, :anoMes, :tipo, :qtd, :custo, now())
+      `INSERT INTO consumo_mensal (tenant_id, ano_mes, tipo, quantidade, custo_centavos, custo_incompleto, fechado_em)
+       VALUES (:tenantId, :anoMes, :tipo, :qtd, :custo, :custoIncompleto, now())
        ON CONFLICT (tenant_id, ano_mes, tipo) DO UPDATE SET
-         quantidade = EXCLUDED.quantidade, custo_centavos = EXCLUDED.custo_centavos, fechado_em = now()`,
-      { tenantId: row.TENANT_ID, anoMes, tipo: row.TIPO, qtd: row.QUANTIDADE, custo: row.CUSTO_CENTAVOS }
+         quantidade = EXCLUDED.quantidade, custo_centavos = EXCLUDED.custo_centavos,
+         custo_incompleto = EXCLUDED.custo_incompleto, fechado_em = now()`,
+      {
+        tenantId: row.TENANT_ID, anoMes, tipo: row.TIPO, qtd: row.QUANTIDADE, custo: row.CUSTO_CENTAVOS,
+        custoIncompleto: row.CUSTO_INCOMPLETO === true,
+      }
     );
   }
   return r.rows.length;
@@ -74,17 +83,45 @@ async function limparEventosAntigos(conn, diasRetencao = DIAS_RETENCAO_PADRAO) {
   return r.rowsAffected || 0;
 }
 
-/** Um tick: fecha o mês corrente (para o painel do operador ficar próximo do
- *  tempo real) e o mês anterior (garante o fechamento definitivo mesmo se o
- *  processo ficou fora do ar na virada), depois aplica a retenção. */
+/**
+ * Todas as competências ('YYYY-MM') que ainda têm evento bruto. Achado de
+ * review (FIL-76): fechar só o mês corrente + o anterior deixa PARA SEMPRE
+ * sem agregado qualquer competência mais antiga que ficou pendente (worker
+ * fora do ar por >1 mês, deploy atrasado etc.) — o bruto dela nunca é limpo
+ * pela retenção (limparEventosAntigos só apaga o que JÁ tem fechamento) mas
+ * também nunca vira consumo_mensal, que é a fonte permanente do faturamento.
+ * DISTINCT sobre a tabela bruta é sempre pequeno na prática: assim que um mês
+ * fecha, a retenção o limpa em ~90 dias — poucas competências ficam abertas
+ * ao mesmo tempo.
+ */
+async function mesesComEventosPendentes(conn) {
+  const r = await conn.execute(
+    `SELECT DISTINCT to_char(criado_em, 'YYYY-MM') AS ano_mes FROM consumo_evento ORDER BY 1`
+  );
+  return r.rows.map((row) => row.ANO_MES);
+}
+
+/**
+ * Fecha TODAS as competências com evento pendente (não só as 2 mais
+ * recentes) e aplica a retenção. Recebe `conn` já aberto — separado de
+ * tick() para ser testável sem banco nem lock (mesmo padrão de fecharMes/
+ * limparEventosAntigos).
+ */
+async function fecharPendentes(conn) {
+  for (const anoMes of await mesesComEventosPendentes(conn)) {
+    await fecharMes(conn, anoMes);
+  }
+  await limparEventosAntigos(conn);
+}
+
+/** Um tick: fecha TODAS as competências com evento pendente (garante o
+ *  fechamento mesmo se o processo ficou fora do ar por mais de um mês),
+ *  depois aplica a retenção. */
 async function tick() {
   try {
     await comOperador(async (conn) => {
       if (!(await tentarGlobal(conn, 'consumo'))) return; // outra instância já está rodando o tick
-      const agora = new Date();
-      await fecharMes(conn, anoMesDe(agora));
-      await fecharMes(conn, mesAnteriorDe(agora));
-      await limparEventosAntigos(conn);
+      await fecharPendentes(conn);
     });
   } catch (err) {
     console.error('[consumo] fechamento/retenção falhou:', err.message);
@@ -102,4 +139,7 @@ function parar() {
   if (timer) { clearInterval(timer); timer = null; }
 }
 
-module.exports = { fecharMes, limparEventosAntigos, tick, iniciar, parar, anoMesDe, mesAnteriorDe };
+module.exports = {
+  fecharMes, limparEventosAntigos, fecharPendentes, mesesComEventosPendentes,
+  tick, iniciar, parar, anoMesDe, mesAnteriorDe,
+};

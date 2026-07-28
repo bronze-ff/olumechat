@@ -78,6 +78,14 @@ test('criarImplementacao rejeita valor decimal (nunca float)', async () => {
   );
 });
 
+test('criarImplementacao rejeita data prevista impossível (2026-02-31)', async () => {
+  db.getConnection = async () => conexao();
+  await assert.rejects(
+    implementacao.criarImplementacao({ operador: OPERADOR, tenantId: 5, dados: { ...DADOS_VALIDOS, dataPrevista: '2026-02-31' } }),
+    (err) => err.deOperador && err.status === 400
+  );
+});
+
 test('criarImplementacao exige numeroParcelas >= 2 quando parcelado', async () => {
   db.getConnection = async () => conexao();
   await assert.rejects(

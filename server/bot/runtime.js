@@ -21,6 +21,7 @@ const distribuidor = require('../fila/distribuidor');
 const { lerConfig } = require('../utils/configCache');
 const { foraDeHorario } = require('../utils/horario');
 const presence = require('../realtime/presence');
+const consumo = require('../consumo/registrar');
 
 /** Carrega tudo que o engine precisa. Devolve null se a conversa não está em bot. */
 async function carregar(conn, tenantId, conversaId) {
@@ -80,7 +81,7 @@ async function comSavepoint(conn, fn) {
 }
 
 /** Envia e persiste as mensagens do bot. */
-async function enviarMensagens(conn, cv, mensagens) {
+async function enviarMensagens(conn, tenantId, cv, mensagens) {
   for (const txt of mensagens) {
     let wamid = null;
     let status = 'sent';
@@ -99,6 +100,12 @@ async function enviarMensagens(conn, cv, mensagens) {
        VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, now())`,
       { cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt, st: status }
     );
+    // Medição de consumo (FIL-76/FIL-77): achado de review — envio do bot
+    // determinístico não tinha produtor nenhum antes. Só o que REALMENTE saiu
+    // (status sent) é cobrável; falha de envio não é.
+    if (status === 'sent') {
+      await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: cv.conversaId });
+    }
   }
 }
 
@@ -119,7 +126,7 @@ async function auditarConversa(conn, conversaId, acao) {
     senão outra conexão (SSE, distribuidor) pode reagir a um estado que ainda
     não está visível fora desta transação. */
 async function aplicar(conn, tenantId, cv, resultado) {
-  await enviarMensagens(conn, cv, resultado.mensagens);
+  await enviarMensagens(conn, tenantId, cv, resultado.mensagens);
   const posCommit = [];
 
   if (resultado.acao && resultado.acao.tipo === 'transferir') {
@@ -133,7 +140,7 @@ async function aplicar(conn, tenantId, cv, resultado) {
       const cfg = await lerConfig(tenantId, conn);
       const fora = foraDeHorario(cfg, new Date());
       if (fora && String(cfg.fora_horario_msg || '').trim()) {
-        await enviarMensagens(conn, cv, [String(cfg.fora_horario_msg).trim()]);
+        await enviarMensagens(conn, tenantId, cv, [String(cfg.fora_horario_msg).trim()]);
       }
       if (fora) await auditarConversa(conn, cv.conversaId, 'fila_fora_horario');
     });

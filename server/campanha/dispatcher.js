@@ -37,6 +37,7 @@ const { sendTemplate } = require('../graph/sendTemplate');
 const { publish } = require('../realtime/hub');
 const { variantes } = require('../utils/telefone');
 const { tentar: tentarLock } = require('../workers/leaderLock');
+const consumo = require('../consumo/registrar');
 
 const TICK_MS = 4000;        // varre campanhas 'enviando' a cada 4s
 const CUSTO_UTILITY_BR = 0.04; // estimativa R$/msg utility (ajustável)
@@ -142,6 +143,9 @@ async function processarItem(tenantId, campanhaId, item, deps) {
       await conn.execute(
         `UPDATE campanha SET ENVIADOS = ENVIADOS + 1, ATUALIZADO_EM = now() WHERE ID = :id`,
         { id: campanhaId });
+      // Medição de consumo (FIL-76/FIL-77): achado de review — disparo de
+      // campanha não tinha produtor de mensagem_enviada nenhum.
+      await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: item.ID });
       return 'enviado';
     } catch (err) {
       const code = err.isGraphError ? Number(err.graphCode) : 0;

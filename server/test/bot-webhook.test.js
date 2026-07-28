@@ -124,6 +124,41 @@ test('iniciarFluxo: conversa em bot recebe a saudação e o menu', async () => {
   assert.equal(updEstado.binds.no, 'menu');
 });
 
+test('FIL-76 (achado de review): cada mensagem do bot ENVIADA COM SUCESSO grava um evento mensagem_enviada (não existia produtor)', async () => {
+  presence._reset();
+  const capturas = [];
+  const enviados = [];
+  global.fetch = async (url, opts) => {
+    enviados.push(JSON.parse(opts.body));
+    return { ok: true, json: async () => ({ messages: [{ id: 'wamid.BOT' + enviados.length }] }) };
+  };
+  const conn = fakeConn((sql, binds) => {
+    capturas.push({ sql, binds });
+    if (sql.includes('FROM conversa')) {
+      return {
+        rows: [{
+          ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, FILA_STATUS: 'bot', PROTOCOLO: '260610100077',
+          BOT_FLUXO_ID: 9, BOT_NO_ATUAL: null, BOT_VARIAVEIS: null, BOT_INVALIDAS: 0,
+          TELEFONE: '5562999990000', NOME_PERFIL: 'Cliente', PHONE_NUMBER_ID: '1112223334',
+          DEFINICAO: FLUXO_DEF,
+        }],
+      };
+    }
+  });
+  db.getConnection = async () => conn;
+
+  await runtime.iniciarFluxo(TENANT_ID, 88);
+  await aguardar();
+
+  assert.equal(enviados.length, 2, 'saudação + menu');
+  const eventos = capturas.filter((c) => /INSERT INTO consumo_evento/i.test(c.sql));
+  assert.equal(eventos.length, 2, 'uma linha de consumo por mensagem realmente enviada');
+  for (const evt of eventos) {
+    assert.equal(evt.binds.tipo, 'mensagem_enviada');
+    assert.equal(evt.binds.tenantId, TENANT_ID);
+  }
+});
+
 test('processarEntrada: "1" em conversa bot transfere pro departamento e vai pra fila', async () => {
   presence._reset();
   const capturas = [];

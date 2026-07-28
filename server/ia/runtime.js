@@ -18,12 +18,14 @@ const auth = require('./autorizacao');
 const historico = require('./historico');
 const limitePlano = require('./limitePlano');
 const consumo = require('../consumo/registrar');
+const precos = require('../consumo/precos');
 const { partirTexto } = require('./chunk');
 
 const SISTEMA_FALLBACK = 'Você é o assistente da Multicanal Atacado no WhatsApp. Responda de forma objetiva '
   + 'e em português. Use SOMENTE as ferramentas disponíveis para obter números; nunca invente dados. '
   + 'Formate valores em R$ e datas em DD/MM/AAAA.';
 const MAX_ITER = 4;
+const MSG_TETO_ESTOURADO = 'O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.';
 
 /** System prompt curado vem do mc-OS (sync) em CONHECIMENTO_DIR/system-prompt.md;
     o fallback embutido só cobre instalação sem o arquivo. */
@@ -60,36 +62,69 @@ async function responder(conn, tenantId, cv, textos) {
         `INSERT INTO mensagem (tenant_id, CONVERSA_ID, CONTATO_ID, NUMERO_ID, WAMID, DIRECAO, TIPO, CONTEUDO, STATUS, TS)
          VALUES (:tenantId, :cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, now())`,
         { tenantId, cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt: pedaco, st: status });
+      // Medição de consumo (FIL-76/FIL-77): achado de review — resposta do
+      // bot de IA não tinha produtor de mensagem_enviada nenhum (só ia_tokens
+      // já existia). Só o que REALMENTE saiu é cobrável.
+      if (status === 'sent') {
+        await consumo.registrar(conn, tenantId, { tipo: 'mensagem_enviada', quantidade: 1, referencia: cv.conversaId });
+      }
     }
   }
 }
 
+/**
+ * FIL-78 (achado de review): resolver a credencial (store.carregar) exige
+ * NÃO segurar a conexão de tenant ao mesmo tempo — na falta de chave própria
+ * ela abre sua própria transação de operador (ver ia/iaConfigStore.js), e
+ * duas conexões seguradas por uma mesma requisição esgotam o pool sob
+ * concorrência. Por isso o processamento roda em 3 fases sequenciais, nunca
+ * duas conexões abertas ao mesmo tempo:
+ *   1) comTenant — valida conversa, plano (ia_habilitada + teto) e
+ *      autorização; já pode terminar aqui (e manda um recado) sem nunca
+ *      precisar da credencial.
+ *   2) SEM conexão nenhuma aberta — resolve a credencial.
+ *   3) comTenant (nova transação) — histórico, loop de tool-calls, resposta.
+ */
 async function processarEntrada(tenantId, conversaId, texto) {
   try {
-    await db.comTenant(tenantId, async (conn) => {
+    const cv = await db.comTenant(tenantId, async (conn) => {
       const cv = await carregarConversa(conn, tenantId, conversaId);
-      if (!cv) return;
+      if (!cv) return null;
 
       // IA é add-on vendido à parte (FIL-70-ia): plano desligado ⇒ o bot nem
       // tenta responder, mesmo que ia_config ainda tenha um provedor salvo de
       // uma configuração anterior do operador. Checagem server-side, não só
       // de UI — quem liga/desliga é operador/tenants.js::definirIa.
       const tenantRow = await conn.execute(`SELECT ia_habilitada FROM tenant WHERE id = :tenantId`, { tenantId });
-      if ((tenantRow.rows[0] || {}).IA_HABILITADA !== 'S') return;
+      if ((tenantRow.rows[0] || {}).IA_HABILITADA !== 'S') return null;
 
       // Teto mensal do add-on (FIL-78): estourar bloqueia ANTES de gastar 1
       // token no provedor. Mensagem genérica — nunca fala de custo/tokens
       // (ver ia/limitePlano.js).
       if (await limitePlano.estourouTeto(conn, tenantId)) {
-        await responder(conn, tenantId, cv, ['O assistente atingiu o limite de uso deste mês. Peça para o administrador da sua empresa entrar em contato com o suporte.']);
-        return;
+        await responder(conn, tenantId, cv, [MSG_TETO_ESTOURADO]);
+        return null;
       }
 
       if (!(await auth.autorizado(conn, tenantId, cv.telefone, cv.numeroId))) {
         await responder(conn, tenantId, cv, ['Olá! Este canal é restrito. Fale com a TI da Multicanal para liberar seu acesso.']);
-        return;
+        return null;
       }
-      const config = await store.carregar(conn, tenantId);
+      return cv;
+    });
+    if (!cv) return;
+
+    // Fase 2 — nenhuma conexão do pool aberta aqui.
+    const config = await store.carregar(tenantId);
+    // Preço (FIL-77) resolvido AQUI, na mesma fase — consumo/precos.js abre
+    // sua própria transação de operador; resolver dentro da comTenant() da
+    // fase 3 prenderia 2 conexões do pool ao mesmo tempo pela mesma
+    // requisição (o mesmo defeito de conexão aninhada que esta função já
+    // corrige para a credencial, ver o comentário acima).
+    const preco = config ? await precos.carregarPreco(config.provider, config.modelo) : null;
+
+    // Fase 3 — nova transação de tenant, só para o que falta.
+    await db.comTenant(tenantId, async (conn) => {
       if (!config) {
         await responder(conn, tenantId, cv, ['O assistente está temporariamente indisponível (provedor de IA não configurado).']);
         return;
@@ -115,12 +150,23 @@ async function processarEntrada(tenantId, conversaId, texto) {
           const out = await client.chamar({ config, sistema, mensagens });
           // Mede a CADA chamada ao provedor (FIL-77): tokens reais que ele
           // devolveu, nunca estimados. Best-effort — nunca derruba o turno.
+          // `preco` já foi resolvido na fase 2 (fora desta conexão) — não faz
+          // mais nenhuma consulta de preço por baixo dos panos aqui dentro.
           await consumo.registrarIaTokens(conn, tenantId, {
             tokensEntrada: out.uso && out.uso.tokensEntrada,
             tokensSaida: out.uso && out.uso.tokensSaida,
-            provider: config.provider, modelo: config.modelo, referencia: conversaId,
+            preco, referencia: conversaId,
           });
           if (out.toolCalls && out.toolCalls.length) {
+            // Achado de review (FIL-76): o teto pode estourar NESTA chamada (a
+            // que acabou de ser medida acima) e o provedor ainda pedir tool
+            // calls — sem reconferir aqui, as iterações restantes do loop
+            // continuariam chamando o provedor e gastando além do limite
+            // configurado. Reconfere ANTES de cada chamada subsequente.
+            if (await limitePlano.estourouTeto(conn, tenantId)) {
+              respostaFinal = MSG_TETO_ESTOURADO;
+              break;
+            }
             for (const tc of out.toolCalls) {
               await historico.salvar(conn, tenantId, conversaId, 'assistant', { texto: out.texto, toolCallId: tc.id, nome: tc.nome, args: tc.args });
               let resultado;

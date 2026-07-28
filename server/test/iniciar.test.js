@@ -31,6 +31,7 @@ function fakeConn({ optout = false, numero = { ID: 2 }, depExiste = true, captur
       if (sql.includes('FROM conversa')) return { rows: [] };
       if (sql.startsWith('INSERT INTO conversa')) { capture.insert = binds; return { outBinds: { id: [7] } }; }
       if (sql.includes('FROM atendente')) return { rows: [{ ID: 9 }] };
+      if (/INSERT INTO consumo_evento/i.test(sql)) { capture.consumo = binds; return { rows: [] }; }
       return { rows: [], outBinds: {} };
     },
     commit: async () => {}, rollback: async () => {}, close: async () => {},
@@ -63,8 +64,9 @@ function post(port, body) {
 
 test('iniciar: envia template e cria conversa (201)', async () => {
   let captured;
+  const capture = {};
   global.fetch = async (url, opts) => { captured = JSON.parse(opts.body); return { ok: true, json: async () => ({ messages: [{ id: 'wamid.T1' }] }) }; };
-  const { server, port } = await startApp(fakeConn());
+  const { server, port } = await startApp(fakeConn({ capture }));
   try {
     const r = await post(port, { telefone: '62 99999-0000', templateName: 'lembrete_pagamento', variaveis: ['Fulano', '150,00', '10/06'] });
     assert.equal(r.status, 201);
@@ -72,6 +74,12 @@ test('iniciar: envia template e cria conversa (201)', async () => {
     assert.equal(captured.type, 'template');
     assert.equal(captured.template.name, 'lembrete_pagamento');
     assert.equal(captured.to, '5562999990000'); // DDI 55 adicionado
+
+    // FIL-76 (achado de review): disparo manual de template não tinha
+    // produtor de mensagem_enviada nenhum.
+    assert.ok(capture.consumo, 'não gravou o evento de consumo do template disparado');
+    assert.equal(capture.consumo.tipo, 'mensagem_enviada');
+    assert.equal(capture.consumo.tenantId, 1);
   } finally { server.close(); }
 });
 

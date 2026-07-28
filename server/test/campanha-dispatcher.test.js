@@ -75,6 +75,13 @@ test('envio OK: claim → sendTemplate → STATUS=enviado + WAMID + ENVIADOS++',
   const updOk = capturas.find((c) => c.sql.includes("SET STATUS = 'enviado'"));
   assert.equal(updOk.binds.w, 'wamid.C1');
   assert.ok(capturas.some((c) => c.sql.includes('ENVIADOS = ENVIADOS + 1')));
+
+  // FIL-76 (achado de review): disparo de campanha não tinha produtor de
+  // mensagem_enviada nenhum.
+  const evt = capturas.find((c) => /INSERT INTO consumo_evento/i.test(c.sql));
+  assert.ok(evt, 'não gravou o evento de consumo do disparo');
+  assert.equal(evt.binds.tipo, 'mensagem_enviada');
+  assert.equal(evt.binds.tenantId, TENANT);
 });
 
 test('throttle: o lote pede no máximo RATE_POR_SEG itens', async () => {

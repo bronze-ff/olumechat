@@ -4,25 +4,35 @@
 // (compat com quem já migrou antes do FIL-78); senão (2) a credencial GLOBAL
 // do operador (provedor_credencial, migração 015).
 //
-// A consulta à credencial global NUNCA usa a `conn` do tenant (ela roda como
-// `falatta_app`, e provedor_credencial é fechada pra esse role — ver a
-// migração 015): passa por operador/credencialIa.js::carregarAtivaComChave(),
-// que abre sua PRÓPRIA transação via operador/db.js::comOperador (BYPASSRLS,
-// contexto de tenant nulo). É o mesmo motivo pelo qual o resto do sistema só
-// toca dado cross-tenant por ali.
+// ⚠️ SEM `conn`: carregar(tenantId) NÃO recebe a conexão de tenant do
+// chamador. Resolve tudo (chave própria E credencial global) NUMA ÚNICA
+// transação de operador (operador/db.js::comOperador, BYPASSRLS, tenant_id
+// sempre explícito nas queries — mesmo padrão de
+// operador/tenants.js::carregarIaConfig), porque `provedor_credencial` é
+// fechada pra `falatta_app` (RLS deny, migração 015) e a query de ia_config
+// própria do tenant é redundante fazer duas vezes.
+//
+// Por isso: SEMPRE chame carregar(tenantId) FORA de um db.comTenant() em
+// andamento. Achado de review do FIL-78: buscar a credencial global com uma
+// SEGUNDA conexão (comOperador) enquanto o chamador ainda segurava a conexão
+// de tenant (db.comTenant) esgotava o pool sob concorrência — cada
+// requisição podia prender 2 conexões simultâneas em vez de 1. Ver
+// ia/runtime.js e api/conversas.js: a credencial é resolvida numa fase
+// própria, entre duas transações de tenant (ou antes/depois de uma única).
 //
 // Cache com TTL 60s, chaveado por tenant (FIL-63: um cache global vazaria a
 // config de um tenant pro outro) + uma chave reservada para a credencial
 // global, invalidada separadamente (invalidarGlobal).
 'use strict';
 const { descriptografar } = require('./crypto');
-const credencialOperador = require('../operador/credencialIa');
+const { comOperador } = require('../operador/db');
+const credencialIa = require('../operador/credencialIa');
 
 const TTL_MS = 60_000;
 const cache = new Map(); // tenantId (string) -> { valor, exp }
 const CHAVE_GLOBAL = '__operador__';
 
-async function carregarDoTenant(conn, tenantId) {
+async function lerConfigDoTenant(conn, tenantId) {
   try {
     const r = await conn.execute(
       `SELECT PROVIDER, MODELO, BASE_URL, API_KEY_CRIPTOGRAFADA
@@ -51,26 +61,35 @@ async function carregarDoTenant(conn, tenantId) {
   }
 }
 
-async function carregarGlobal() {
-  const hit = cache.get(CHAVE_GLOBAL);
-  if (hit && hit.exp > Date.now()) return hit.valor;
-  let valor = null;
-  try {
-    valor = await credencialOperador.carregarAtivaComChave();
-  } catch (e) {
-    console.error('[ia] falha ao carregar a credencial global do operador:', e.message);
-  }
-  cache.set(CHAVE_GLOBAL, { valor, exp: Date.now() + TTL_MS });
-  return valor;
+/** Resolve tudo NUMA ÚNICA conexão de operador — chave própria do tenant
+ *  primeiro, credencial global depois (com seu próprio cache, TTL 60s,
+ *  pra não reconsultar provedor_credencial a cada tenant sem chave própria).
+ *  Devolve também `deGlobal` — de onde veio o valor — pra `carregar()` marcar
+ *  a entrada do tenant e `invalidarGlobal()` saber quais evictar. */
+async function resolver(tenantId) {
+  return comOperador(async (conn) => {
+    const doTenant = await lerConfigDoTenant(conn, tenantId);
+    if (doTenant) return { valor: doTenant, deGlobal: false };
+
+    const hit = cache.get(CHAVE_GLOBAL);
+    if (hit && hit.exp > Date.now()) return { valor: hit.valor, deGlobal: true };
+    const global = await credencialIa.lerAtivaComChave(conn);
+    cache.set(CHAVE_GLOBAL, { valor: global, exp: Date.now() + TTL_MS });
+    return { valor: global, deGlobal: true };
+  });
 }
 
-async function carregar(conn, tenantId) {
+/**
+ * Config ativa do tenant (própria ou, na falta dela, a global do operador).
+ * NÃO recebe `conn` — abre sua própria transação de operador. Chame SEMPRE
+ * fora de um db.comTenant() em andamento (ver cabeçalho do arquivo).
+ */
+async function carregar(tenantId) {
   const chave = String(tenantId);
   const hit = cache.get(chave);
   if (hit && hit.exp > Date.now()) return hit.valor;
-
-  const valor = (await carregarDoTenant(conn, tenantId)) || (await carregarGlobal());
-  cache.set(chave, { valor, exp: Date.now() + TTL_MS });
+  const { valor, deGlobal } = await resolver(tenantId);
+  cache.set(chave, { valor, exp: Date.now() + TTL_MS, deGlobal });
   return valor;
 }
 
@@ -81,10 +100,19 @@ function invalidar(tenantId) {
   else cache.delete(String(tenantId));
 }
 
-/** Invalida só o cache da credencial global — chamada por
- *  operador/credencialIa.js::salvarCredencial após trocar a credencial. */
+/**
+ * Invalida a credencial global E toda entrada de TENANT que tinha sido
+ * resolvida a partir dela. Achado de review (FIL-76): antes só apagava
+ * CHAVE_GLOBAL — um tenant sem chave própria que já tinha caído no fallback
+ * global continuava servindo a credencial VELHA da própria entrada dele
+ * (chaveada por tenantId) por até 60s depois de rotacionar a chave, mesmo com
+ * a rota chamando invalidarGlobal() explicitamente.
+ */
 function invalidarGlobal() {
   cache.delete(CHAVE_GLOBAL);
+  for (const [chave, entrada] of cache) {
+    if (entrada.deGlobal) cache.delete(chave);
+  }
 }
 
 module.exports = { carregar, invalidar, invalidarGlobal };

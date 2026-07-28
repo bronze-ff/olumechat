@@ -95,6 +95,34 @@ test('conversa NOVA em número SEM depto → em_atendimento, sem protocolo nem e
   assert.equal(eventos.some((e) => e.tipo === 'fila'), false);
 });
 
+test('FIL-76 (achado de review): conversa NOVA grava um evento conversa_iniciada (não existia produtor)', async () => {
+  presence._reset();
+  const capturas = [];
+  db.getConnection = async () => fakeConn({ deptoDoNumero: 4, capturas });
+
+  await processPayload(payloadInbound());
+
+  const evt = capturas.find((c) => /INSERT INTO consumo_evento/i.test(c.sql));
+  assert.ok(evt, 'não gravou o evento conversa_iniciada');
+  assert.equal(evt.binds.tipo, 'conversa_iniciada');
+  assert.equal(evt.binds.tenantId, 1);
+});
+
+test('FIL-76: renovar conversa EXISTENTE não grava conversa_iniciada de novo', async () => {
+  presence._reset();
+  const capturas = [];
+  db.getConnection = async () => fakeConn({
+    deptoDoNumero: 4,
+    conversaExistente: { ID: 50, DEPARTAMENTO_ID: 4 },
+    capturas,
+  });
+
+  await processPayload(payloadInbound());
+
+  const evt = capturas.find((c) => /INSERT INTO consumo_evento/i.test(c.sql) && c.binds.tipo === 'conversa_iniciada');
+  assert.equal(evt, undefined, 'renovar janela de conversa já existente não é uma conversa NOVA');
+});
+
 test('REGRESSÃO: renovar janela de conversa existente NÃO toca FILA_STATUS', async () => {
   presence._reset();
   const capturas = [];
