@@ -60,6 +60,16 @@ function naoAuditor(req, res, next) {
   next();
 }
 
+/** Bloqueia sessão de SUPORTE (implantação do operador, ver auth/rbac.js::PERFIL_SUPORTE).
+    Ela chega com req.perfil.papel === 'ADMIN', então `naoAuditor` sozinho não barra —
+    precisa checar req.user.suporte (marcado no JWT curto emitido pro operador). */
+function naoSuporte(req, res, next) {
+  if (req.user && req.user.suporte === true) {
+    return res.status(403).json({ error: 'Sessão de suporte não pode executar esta ação.' });
+  }
+  next();
+}
+
 /**
  * A Cloud API entrega todas as mensagens como o mesmo número comercial; ela
  * não tem o rótulo nativo de agente visto em alguns produtos. Prefixamos a
@@ -497,7 +507,7 @@ router.get('/:id/mensagens', async (req, res, next) => {
 // (gera custo no provedor de IA e não é uma ação de diagnóstico) e exige que o
 // recurso esteja ligado em Ajustes (config.ia_sugestao_ativa) — desligado por
 // padrão até o admin optar e configurar um provedor.
-router.post('/:id/sugestao-resposta', naoAuditor, async (req, res, next) => {
+router.post('/:id/sugestao-resposta', naoAuditor, naoSuporte, async (req, res, next) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
