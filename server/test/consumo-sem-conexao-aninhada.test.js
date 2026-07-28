@@ -73,7 +73,7 @@ test('ia/runtime.processarEntrada: pico de conexões continua 1 mesmo gravando i
   const TENANT_ID = 5301;
   const pool = fabricarPool([
     [/ia_habilitada FROM tenant/, { rows: [{ IA_HABILITADA: 'S' }] }],
-    [/FROM conversa/, { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] }],
+    [/FROM conversa/, { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111', FILA_STATUS: 'ia', IA_MODO_TESTE: 'S' }] }],
     [/ia_teto_tokens_mes/, { rows: [] }],
     [/FROM ia_config/, { rows: [] }],
     [/FROM provedor_credencial WHERE ativo/, { rows: [{ PROVIDER: 'anthropic', MODELO_PADRAO: 'claude-sonnet-5', BASE_URL: null, API_KEY_CRIPTOGRAFADA: cifrar('sk-global') }] }],

@@ -32,14 +32,23 @@ const MSG_NAO_AUTORIZADO = 'Olá! Este canal é restrito e o seu número ainda n
 
 async function carregarConversa(conn, tenantId, conversaId) {
   const r = await conn.execute(
-    `SELECT c.ID, c.CONTATO_ID, c.NUMERO_ID, ct.TELEFONE, n.PHONE_NUMBER_ID
+    `SELECT c.ID, c.CONTATO_ID, c.NUMERO_ID, c.FILA_STATUS, ct.TELEFONE,
+            n.PHONE_NUMBER_ID, n.IA_MODO_TESTE
        FROM conversa c
        JOIN contato ct ON ct.tenant_id = c.tenant_id AND ct.ID = c.CONTATO_ID
        LEFT JOIN numero n ON n.tenant_id = c.tenant_id AND n.ID = c.NUMERO_ID
       WHERE c.tenant_id = :tenantId AND c.ID = :id`, { tenantId, id: conversaId });
   if (!r.rows || !r.rows.length) return null;
   const row = r.rows[0];
-  return { conversaId, contatoId: row.CONTATO_ID, numeroId: row.NUMERO_ID, telefone: row.TELEFONE, phoneNumberId: row.PHONE_NUMBER_ID };
+  return {
+    conversaId, contatoId: row.CONTATO_ID, numeroId: row.NUMERO_ID,
+    telefone: row.TELEFONE, phoneNumberId: row.PHONE_NUMBER_ID,
+    filaStatus: row.FILA_STATUS || null,
+    // FIL-84: 'S' = allowlist (modo teste); 'N' = canal aberto a qualquer
+    // cliente. Coluna ausente (migração 021 pendente) ⇒ 'S', o fail-closed que
+    // o canal tinha antes.
+    iaModoTeste: row.IA_MODO_TESTE || 'S',
+  };
 }
 
 async function responder(conn, tenantId, cv, textos) {
@@ -82,6 +91,10 @@ async function processarEntrada(tenantId, conversaId, texto) {
       const cv = await carregarConversa(conn, tenantId, conversaId);
       if (!cv) return null;
 
+      // A conversa pode ter saído da IA entre o webhook e este ponto (o
+      // atendente clicou em Assumir). Não é erro: a IA simplesmente cala.
+      if (cv.filaStatus !== 'ia') return null;
+
       // IA é add-on vendido à parte (FIL-70-ia): plano desligado ⇒ o bot nem
       // tenta responder, mesmo que ia_config ainda tenha um provedor salvo de
       // uma configuração anterior do operador. Checagem server-side, não só
@@ -97,7 +110,12 @@ async function processarEntrada(tenantId, conversaId, texto) {
         return null;
       }
 
-      if (!(await auth.autorizado(conn, tenantId, cv.telefone, cv.numeroId))) {
+      // FIL-84: a allowlist virou o MODO TESTE do canal. Ligado ⇒ só telefone
+      // autorizado é respondido (comportamento de piloto, e o default da
+      // migração 021 para quem já estava em modo='ia'). Desligado ⇒ a IA atende
+      // qualquer cliente do canal, e a mensagem de "canal restrito" nem existe.
+      if (cv.iaModoTeste === 'S'
+          && !(await auth.autorizado(conn, tenantId, cv.telefone, cv.numeroId))) {
         await responder(conn, tenantId, cv, [MSG_NAO_AUTORIZADO]);
         return null;
       }
