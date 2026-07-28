@@ -10,7 +10,7 @@
 const { comOperador } = require('./db');
 const auditoria = require('./auditoria');
 const { ErroOperador } = require('./erroOperador');
-const { ETAPAS, CHAVES, STATUS } = require('../onboardingMeta/etapas');
+const { ETAPAS, CHAVES, STATUS, ULTIMA_ETAPA } = require('../onboardingMeta/etapas');
 const { validarDataYYYYMMDD, paraDataTexto } = require('../utils/data');
 
 function textoOpcional(v, max) {
@@ -166,7 +166,31 @@ async function atualizarEtapa({ operador, tenantId, etapa, dados, ip }) {
       ip,
     });
 
-    return { ok: true, etapa: chave, status: v.status, statusAnterior: antes.status };
+    const resposta = { ok: true, etapa: chave, status: v.status, statusAnterior: antes.status };
+
+    // Achado [P2] de review do PR #28: o endpoint equivalente de sessão de
+    // suporte (api/onboardingMeta.js) devolve `sugestaoInicioCobranca` quando
+    // a ÚLTIMA etapa vira concluída com as outras 6 já concluídas — sinal que
+    // o financeiro usa para confirmar a data de início do contrato (FIL-76).
+    // Completar o onboarding por AQUI perdia esse sinal em silêncio. Mesmas
+    // três condições (nenhuma a menos): é a última etapa, ela REALMENTE virou
+    // concluída agora (não um re-salvamento de metadado numa etapa já
+    // concluída) e TODAS as 7 estão concluídas.
+    const todas = await conn.execute(
+      `SELECT etapa, status FROM onboarding_meta_etapa WHERE tenant_id = :tid`,
+      { tid: tenantId }
+    );
+    const statusPorEtapa = new Map(todas.rows.map((r) => [r.ETAPA, r.STATUS]));
+    const todasConcluidas = CHAVES.every((c) => statusPorEtapa.get(c) === 'concluida');
+    const completouAgora = chave === ULTIMA_ETAPA && v.status === 'concluida'
+      && antes.status !== 'concluida' && todasConcluidas;
+    if (completouAgora) {
+      resposta.sugestaoInicioCobranca = {
+        data: new Date().toISOString().slice(0, 10),
+        motivo: 'Webhook testado ponta a ponta — onboarding assistido concluído.',
+      };
+    }
+    return resposta;
   });
 }
 

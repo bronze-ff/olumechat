@@ -31,6 +31,14 @@ export default function RegistrarPagamentoModal({ fatura, onClose }) {
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['operador', 'financeiro'] });
+      // Achado [P2] de review do PR #28: usado também pela ficha financeira
+      // do cliente (FichaFinanceiraModal), que lê estas DUAS chaves — sem
+      // invalidá-las aqui, saldo/lista de pagamentos/status ficam velhos e a
+      // tela ainda oferece registrar pagamento de novo. Invalidar aqui, no
+      // componente compartilhado, cobre todo consumidor (é no-op onde a
+      // chave não está montada, como a lista de Cobrança).
+      qc.invalidateQueries({ queryKey: ['operador', 'faturas', fatura.tenantId] });
+      qc.invalidateQueries({ queryKey: ['operador', 'fatura-detalhe', fatura.tenantId, fatura.id] });
       onClose();
     },
     onError: (error) => setErro(error.response?.data?.error || 'Não foi possível registrar o pagamento.'),

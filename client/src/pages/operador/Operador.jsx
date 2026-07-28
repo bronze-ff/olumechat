@@ -8,6 +8,7 @@ import Icon from '../../components/ui/Icon';
 import OperadorShell from '../../components/layout/OperadorShell';
 import FichaFinanceiraModal from './FichaFinanceiraModal';
 import { SECOES, GRUPOS } from './nav';
+import { formatarData } from '../../utils/dinheiro';
 
 const STATUS = {
   ativo: { label: 'Ativo', className: 'bg-emerald-50 text-emerald-800 border-emerald-200', dot: 'bg-emerald-500' },
@@ -503,18 +504,30 @@ function OnboardingEtapaForm({ tenantId, etapa, onDone, onCancel }) {
     mutationFn: () => apiOperador.patch(`/tenants/${tenantId}/onboarding/${etapa}`, {
       status, responsavel: responsavel.trim() || undefined, observacao: observacao.trim() || undefined,
       dataReferencia: dataReferencia || undefined,
-    }),
-    onSuccess: () => {
+    }).then((r) => r.data),
+    onSuccess: (dados) => {
       qc.invalidateQueries({ queryKey: ['operador', 'onboarding'] });
       qc.invalidateQueries({ queryKey: ['operador', 'onboarding-etapas', tenantId] });
-      onDone();
+      onDone(dados);
     },
     onError: (error) => setErro(error.response?.data?.error || 'Não foi possível atualizar a etapa.'),
   });
 
   return (
     <div className="mt-2 p-3 rounded-lg border border-brand-200 bg-brand-50/40 space-y-2 w-full">
-      {etapas.isLoading ? <div className="py-2 flex justify-center"><Spinner size="sm" /></div> : (
+      {etapas.isLoading ? <div className="py-2 flex justify-center"><Spinner size="sm" /></div> : etapas.isError ? (
+        // Achado [P2] de review do PR #28: sem isto, a falha na leitura das
+        // etapas ainda liberava o formulário com os valores PADRÃO (status
+        // 'em_andamento', campos em branco) — salvar sobrescreveria
+        // responsável/observação/data já existentes com branco, porque
+        // atualizarEtapa() upserta o registro inteiro (não faz merge parcial
+        // como implementacao.js). Sem leitura OK, não há o que pré-preencher
+        // com segurança — só permite fechar.
+        <>
+          <p className="text-[11px] text-red-600">Não foi possível carregar a etapa atual — recarregue antes de editar (salvar agora apagaria responsável/observação/data já registrados).</p>
+          <button onClick={onCancel} className="w-full min-h-8 rounded-lg border border-paper-400 bg-white text-stone-700 text-xs font-semibold">Fechar</button>
+        </>
+      ) : (
         <>
           <div className="grid grid-cols-2 gap-2">
             <select className="input-field !min-h-9 !py-1.5 text-xs" value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -527,7 +540,7 @@ function OnboardingEtapaForm({ tenantId, etapa, onDone, onCancel }) {
           {erro && <p className="text-[11px] text-red-600">{erro}</p>}
           <div className="flex gap-2">
             <button onClick={onCancel} className="flex-1 min-h-8 rounded-lg border border-paper-400 bg-white text-stone-700 text-xs font-semibold">Cancelar</button>
-            <button onClick={() => salvar.mutate()} disabled={salvar.isPending} className="flex-1 min-h-8 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold disabled:opacity-40">
+            <button onClick={() => salvar.mutate()} disabled={!etapas.isSuccess || salvar.isPending} className="flex-1 min-h-8 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold disabled:opacity-40">
               {salvar.isPending ? 'Salvando…' : 'Salvar etapa'}
             </button>
           </div>
@@ -545,12 +558,31 @@ function OnboardingEtapaForm({ tenantId, etapa, onDone, onCancel }) {
 function Onboarding({ progresso }) {
   const lista = progresso.data || [];
   const [editando, setEditando] = useState(null);
+  // Achado [P2] de review do PR #28: o backend agora devolve
+  // sugestaoInicioCobranca (mesmo sinal que a sessão de suporte já mostra no
+  // painel do cliente), mas ninguém aqui exibia — o financeiro perdia o
+  // sinal de "onboarding concluído, confirme a data de início" ao completar
+  // pela tela cross-tenant.
+  const [sugestao, setSugestao] = useState(null);
   return (
     <section className="app-panel overflow-hidden">
       <header className="px-5 py-4 border-b border-paper-300">
         <h2 className="font-semibold text-ink-950">Onboarding assistido da Meta</h2>
         <p className="mt-0.5 text-xs text-stone-500">Progresso por cliente — quem está parado e em qual etapa.</p>
       </header>
+      {sugestao && (
+        <div className="mx-5 mt-4 p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-900 flex items-start gap-3" role="status">
+          <Icon name="check" size={18} className="mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p className="font-semibold">Onboarding concluído — sugestão de início de cobrança</p>
+            <p className="mt-1 text-xs">
+              {sugestao.motivo} Data sugerida: <strong>{formatarData(sugestao.data)}</strong>.
+              Isto não altera o contrato automaticamente — confirme na seção Contratos.
+            </p>
+          </div>
+          <button onClick={() => setSugestao(null)} className="text-xs font-semibold" aria-label="Fechar aviso">Fechar</button>
+        </div>
+      )}
       {progresso.isLoading && <div className="p-12 flex justify-center"><Spinner /></div>}
       {progresso.isError && <p className="p-5 text-sm text-red-700">Não foi possível carregar o onboarding.</p>}
       <div className="divide-y divide-paper-300">
@@ -584,7 +616,8 @@ function Onboarding({ progresso }) {
               {editando === item.tenantId && item.etapaAtual && (
                 <OnboardingEtapaForm
                   tenantId={item.tenantId} etapa={item.etapaAtual.etapa}
-                  onDone={() => setEditando(null)} onCancel={() => setEditando(null)}
+                  onDone={(dados) => { setEditando(null); if (dados?.sugestaoInicioCobranca) setSugestao(dados.sugestaoInicioCobranca); }}
+                  onCancel={() => setEditando(null)}
                 />
               )}
             </div>

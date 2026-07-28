@@ -23,7 +23,14 @@ export default function ContratoModal({ tenant, contratoAtual, onClose, onSaved 
   const [valor, setValor] = useState(contratoAtual ? (contratoAtual.valorRecorrenteCentavos / 100).toFixed(2).replace('.', ',') : '');
   const [ciclo, setCiclo] = useState(contratoAtual?.ciclo || 'mensal');
   const [diaVencimento, setDiaVencimento] = useState(contratoAtual?.diaVencimento ? String(contratoAtual.diaVencimento) : '10');
-  const [inicioCobranca, setInicioCobranca] = useState(contratoAtual?.inicioCobranca ? String(contratoAtual.inicioCobranca).slice(0, 10) : new Date().toISOString().slice(0, 10));
+  // A data efetiva do contrato SUBSTITUTO é a data da TROCA (hoje), nunca a
+  // do contrato anterior — achado de review do PR #28: copiar o
+  // inicioCobranca antigo faz o novo contrato cobrir competências passadas,
+  // e contratoNaCompetencia() (que ordena por criação) pode escolher o plano
+  // NOVO ao gerar uma fatura histórica ainda não emitida, cobrando o valor
+  // errado retroativamente. Um contrato NOVO (sem trocandoPlano) já nasce
+  // hoje por padrão — só o caso de troca copiava a data errada.
+  const [inicioCobranca, setInicioCobranca] = useState(new Date().toISOString().slice(0, 10));
   const [reajusteIndice, setReajusteIndice] = useState(contratoAtual?.reajusteIndice || '');
   const [reajusteMes, setReajusteMes] = useState(contratoAtual?.reajusteMes ? String(contratoAtual.reajusteMes) : '');
   const [observacoes, setObservacoes] = useState(contratoAtual?.observacoes || '');

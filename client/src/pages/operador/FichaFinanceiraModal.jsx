@@ -26,6 +26,10 @@ const TIPOS_ITEM_CONTRATO = [
 ];
 const TIPOS_ITEM_FATURA = [{ id: 'avulso', label: 'Avulso' }, { id: 'desconto', label: 'Desconto' }];
 const FORMAS_PAGAMENTO = [{ id: 'a_vista', label: 'À vista' }, { id: 'parcelado', label: 'Parcelado' }];
+// Mesma allowlist de server/operador/fatura.js::registrarPagamento — uma
+// fatura `prevista` ainda não foi emitida (nada a cobrar do cliente ainda);
+// oferecer "Registrar pagamento" nesse status sempre resultava em 409.
+const STATUS_FATURA_ACEITA_PAGAMENTO = ['emitida', 'atrasada', 'em_negociacao'];
 
 function CampoLabel({ children }) {
   return <label className="block text-[11px] font-semibold text-stone-600 mb-1">{children}</label>;
@@ -106,11 +110,16 @@ function ImplementacaoForm({ tenantId, existente, onDone, onCancel }) {
 
   const salvar = useMutation({
     mutationFn: () => {
+      // Achado [P2] de review do PR #28: `undefined` some do JSON (o Axios
+      // omite a chave), e atualizarImplementacao() interpreta CAMPO AUSENTE
+      // como "preserve o valor atual" (merge parcial) — limpar um campo
+      // opcional reportava sucesso mas não limpava nada. `null` explícito é o
+      // que de fato apaga o campo, tanto no PATCH (merge) quanto no POST.
       const payload = {
         valorCentavos, formaPagamento,
-        numeroParcelas: formaPagamento === 'parcelado' ? Number(numeroParcelas) : undefined,
-        status, dataPrevista: dataPrevista || undefined, dataEntrega: dataEntrega || undefined,
-        responsavel: responsavel.trim() || undefined,
+        numeroParcelas: formaPagamento === 'parcelado' ? Number(numeroParcelas) : null,
+        status, dataPrevista: dataPrevista || null, dataEntrega: dataEntrega || null,
+        responsavel: responsavel.trim() || null,
       };
       return existente
         ? apiOperador.patch(`/tenants/${tenantId}/implementacao/${existente.id}`, payload)
@@ -285,7 +294,7 @@ function FaturaLinha({ tenantId, tenantNome, fatura }) {
                       </button>
                     </>
                   )}
-                  {detalhe.data.saldoCentavos > 0 && fatura.status !== 'cancelada' && (
+                  {detalhe.data.saldoCentavos > 0 && STATUS_FATURA_ACEITA_PAGAMENTO.includes(fatura.status) && (
                     <button onClick={() => setPagamentoAberto(true)} className="min-h-7 px-2.5 rounded-md border border-paper-400 bg-white text-stone-700 hover:border-brand-300 hover:text-brand-800 text-[11px] font-semibold">
                       Registrar pagamento
                     </button>
@@ -373,15 +382,24 @@ export default function FichaFinanceiraModal({ tenant, onClose }) {
               <section>
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-xs font-semibold text-stone-600 uppercase tracking-wide">Contrato vigente</h3>
+                  {/* Achado [P1] de review do PR #28: se a leitura do contrato
+                      FALHA, contratos.data fica undefined e contratoAtivo
+                      parece "não existe" — o botão oferecia "Criar contrato"
+                      mesmo quando há um ativo de verdade, e o POST então
+                      ENCERRA esse contrato como troca de plano sem o operador
+                      saber que ele existia. Só habilita após leitura OK. */}
                   <button
                     onClick={() => setContratoModalAberto(true)}
-                    className="min-h-7 px-2.5 rounded-md border border-paper-400 bg-white hover:border-brand-300 hover:text-brand-800 text-stone-700 text-[11px] font-semibold inline-flex items-center gap-1"
+                    disabled={!contratos.isSuccess}
+                    className="min-h-7 px-2.5 rounded-md border border-paper-400 bg-white hover:border-brand-300 hover:text-brand-800 text-stone-700 text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-40 disabled:pointer-events-none"
                   >
                     <Icon name="edit" size={12} />
                     {contratoAtivo ? 'Trocar de plano' : 'Criar contrato'}
                   </button>
                 </div>
-                {contratoAtivo ? (
+                {contratos.isError ? (
+                  <p className="mt-2 text-sm text-red-700">Não foi possível carregar o contrato deste cliente — recarregue antes de criar ou trocar de plano.</p>
+                ) : contratoAtivo ? (
                   <div className="mt-2 p-3 rounded-lg border border-paper-300 bg-paper-50">
                     <div className="flex items-center justify-between gap-3">
                       <p className="font-semibold text-sm text-ink-950">{contratoAtivo.planoNome}</p>
