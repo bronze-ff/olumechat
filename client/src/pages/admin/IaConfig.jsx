@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import Spinner from '../../components/ui/Spinner';
@@ -23,6 +23,18 @@ const CAMPOS_FICHA = [
   { chave: 'observacoes', rotulo: 'Observações', placeholder: 'Estacionamento gratuito no local. Não trabalhamos com entrega aos domingos.' },
 ];
 
+// Espelho dos limites do servidor (server/ia/perfilStore.js::LIMITES). O GET
+// devolve os valores reais em `limites`; estes só cobrem o intervalo entre a
+// falha do GET e o retry — sem eles, os contadores fariam toLocaleString() em
+// undefined e derrubariam a página inteira.
+const LIMITES_PADRAO = { instrucoes: 8000, blocoTitulo: 120, blocoConteudo: 20000, blocos: 50 };
+const MEDIDOR_VAZIO = { caracteres: 0, tokensEstimados: 0, faixa: 'verde' };
+
+// A chamada ao provedor pode levar até 45s (server/ia/client.js). O axios global
+// corta em 30s: sem este timeout próprio, a UI dava erro enquanto o servidor
+// concluía E REGISTRAVA o consumo — o usuário reenviava e pagava duas vezes.
+const TIMEOUT_TESTE_MS = 60_000;
+
 const EXEMPLOS_BLOCO = [
   'Cardápio ou tabela de produtos',
   'Política de troca e devolução',
@@ -44,10 +56,12 @@ function Secao({ titulo, children, acao }) {
 }
 
 function Contador({ atual, limite }) {
-  const perto = atual > limite * 0.9;
+  const n = Number(atual) || 0;
+  const max = Number(limite) || 0;
+  const perto = max > 0 && n > max * 0.9;
   return (
-    <span className={`font-mono text-[11px] ${atual > limite ? 'text-red-600' : perto ? 'text-amber-600' : 'text-stone-400'}`}>
-      {atual.toLocaleString('pt-BR')}/{limite.toLocaleString('pt-BR')}
+    <span className={`font-mono text-[11px] ${max > 0 && n > max ? 'text-red-600' : perto ? 'text-amber-600' : 'text-stone-400'}`}>
+      {n.toLocaleString('pt-BR')}/{max.toLocaleString('pt-BR')}
     </span>
   );
 }
@@ -105,7 +119,7 @@ function Medidor({ medidor }) {
   );
 }
 
-function Bloco({ bloco, editavel, onSalvar, onRemover, salvando }) {
+function Bloco({ bloco, posicao, total, limiteConteudo, editavel, onSalvar, onMover, onRemover, salvando }) {
   const [aberto, setAberto] = useState(false);
   const [titulo, setTitulo] = useState(bloco.titulo);
   const [conteudo, setConteudo] = useState(bloco.conteudo);
@@ -118,7 +132,7 @@ function Bloco({ bloco, editavel, onSalvar, onRemover, salvando }) {
       <div className="flex items-center gap-2 px-3 py-2.5">
         <button type="button" onClick={() => setAberto((a) => !a)}
           className="flex-1 flex items-center gap-2 text-left min-w-0">
-          <span className={`font-mono text-[10px] w-5 text-stone-400 shrink-0`}>{bloco.ordem}</span>
+          <span className="font-mono text-[10px] w-5 text-stone-400 shrink-0">{posicao + 1}</span>
           <span className={`text-sm font-medium truncate ${bloco.ativo ? 'text-stone-800' : 'text-stone-400 line-through'}`}>
             {bloco.titulo}
           </span>
@@ -132,10 +146,14 @@ function Bloco({ bloco, editavel, onSalvar, onRemover, salvando }) {
                 className="w-4 h-4 accent-brand-700" />
               <span className="text-[11px] text-stone-500">{bloco.ativo ? 'no ar' : 'desligado'}</span>
             </label>
-            <button type="button" onClick={() => onSalvar({ ordem: Math.max(0, bloco.ordem - 1) })}
-              disabled={salvando || bloco.ordem === 0} title="Subir no prompt"
+            {/* Troca de lugar com o VIZINHO na lista exibida (e reescreve a
+                ordem dos dois). Mexer só no `ordem` de um bloco empatava com o
+                vizinho — e blocos novos nascem todos com ordem 0. */}
+            <button type="button" onClick={() => onMover(-1)}
+              disabled={salvando || posicao === 0} title="Subir no prompt"
               className="w-6 h-6 rounded text-stone-400 hover:text-stone-700 hover:bg-paper-200 disabled:opacity-30">↑</button>
-            <button type="button" onClick={() => onSalvar({ ordem: bloco.ordem + 1 })} disabled={salvando} title="Descer no prompt"
+            <button type="button" onClick={() => onMover(1)}
+              disabled={salvando || posicao === total - 1} title="Descer no prompt"
               className="w-6 h-6 rounded text-stone-400 hover:text-stone-700 hover:bg-paper-200 disabled:opacity-30">↓</button>
             <button type="button" onClick={onRemover} disabled={salvando} title="Remover bloco"
               className="w-6 h-6 rounded text-stone-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-30">×</button>
@@ -155,7 +173,7 @@ function Bloco({ bloco, editavel, onSalvar, onRemover, salvando }) {
                 className="px-4 py-1.5 rounded-lg bg-brand-700 hover:bg-brand-800 text-white text-xs font-semibold disabled:opacity-40">
                 Salvar bloco
               </button>
-              <Contador atual={conteudo.length} limite={20000} />
+              <Contador atual={conteudo.length} limite={limiteConteudo} />
             </div>
           )}
         </div>
@@ -199,8 +217,15 @@ export default function IaConfig() {
     if (geral.data) setSugestaoAtiva(geral.data.ia_sugestao_ativa === 'S');
   }, [geral.data]);
 
+  // Preenche o formulário UMA vez, na primeira carga. Toda mutação de bloco
+  // invalida ['ia-perfil']; re-sincronizar a cada refetch jogava fora instruções
+  // e ficha ainda não salvas de quem estava no meio da digitação.
+  const formInicializado = useRef(false);
   useEffect(() => {
-    if (perfil.data) { setInstrucoes(perfil.data.instrucoes || ''); setFicha(perfil.data.ficha || {}); }
+    if (!perfil.data || formInicializado.current) return;
+    setInstrucoes(perfil.data.instrucoes || '');
+    setFicha(perfil.data.ficha || {});
+    formInicializado.current = true;
   }, [perfil.data]);
 
   const salvarRecursos = useMutation({
@@ -237,8 +262,18 @@ export default function IaConfig() {
     onSuccess: () => { setErroBloco(''); qc.invalidateQueries({ queryKey: ['ia-perfil'] }); },
     onError: (e) => setErroBloco(e.response?.data?.error || 'Falha ao remover o bloco.'),
   });
+  // Reordenar = reescrever a `ordem` de quem mudou de posição, em sequência.
+  // Na primeira vez costuma tocar em vários (todos nascem com ordem 0); depois,
+  // só nos dois que trocaram de lugar.
+  const reordenarBlocos = useMutation({
+    mutationFn: async (mudancas) => {
+      for (const m of mudancas) await api.put(`/ia-conhecimento/${m.id}`, { ordem: m.ordem });
+    },
+    onSuccess: () => { setErroBloco(''); qc.invalidateQueries({ queryKey: ['ia-perfil'] }); },
+    onError: (e) => setErroBloco(e.response?.data?.error || 'Falha ao reordenar os blocos.'),
+  });
   const testar = useMutation({
-    mutationFn: () => api.post('/ia-perfil/testar', { pergunta }).then((r) => r.data),
+    mutationFn: () => api.post('/ia-perfil/testar', { pergunta }, { timeout: TIMEOUT_TESTE_MS }).then((r) => r.data),
     onSuccess: (d) => { setErroTeste(''); setResposta(d.resposta); },
     onError: (e) => { setResposta(''); setErroTeste(e.response?.data?.error || 'Falha ao testar.'); },
   });
@@ -246,10 +281,42 @@ export default function IaConfig() {
   if (!user?.iaHabilitada) return <SemPlano />;
   if (config.isLoading || perfil.isLoading) return <div className="p-10 flex justify-center"><Spinner /></div>;
 
-  const dados = perfil.data || { blocos: [], medidor: { caracteres: 0, tokensEstimados: 0, faixa: 'verde' }, limites: {} };
-  const limites = dados.limites || { instrucoes: 8000, blocoConteudo: 20000, blocos: 50 };
+  const dados = perfil.data || {};
+  // Espalhados por chave: `{ ...defaults, ...(recebido || {}) }`. Um objeto
+  // recebido vazio (ou parcial) não pode apagar os defaults — era o que
+  // derrubava a página quando o GET falhava.
+  const limites = { ...LIMITES_PADRAO, ...(dados.limites || {}) };
+  const medidor = { ...MEDIDOR_VAZIO, ...(dados.medidor || {}) };
   const blocos = dados.blocos || [];
-  const salvandoBloco = criarBloco.isPending || editarBloco.isPending || removerBloco.isPending;
+  const salvandoBloco = criarBloco.isPending || editarBloco.isPending
+    || removerBloco.isPending || reordenarBlocos.isPending;
+
+  /** Move o bloco da posição `idx` em `delta` na lista EXIBIDA e devolve ao
+   *  servidor só as ordens que realmente mudaram. */
+  const moverBloco = (idx, delta) => {
+    const destino = idx + delta;
+    if (destino < 0 || destino >= blocos.length) return;
+    const lista = [...blocos];
+    [lista[idx], lista[destino]] = [lista[destino], lista[idx]];
+    const mudancas = [];
+    lista.forEach((b, i) => { if (b.ordem !== i) mudancas.push({ id: b.id, ordem: i }); });
+    if (mudancas.length) reordenarBlocos.mutate(mudancas);
+  };
+
+  if (perfil.isError) {
+    return (
+      <div className="max-w-screen-md mx-auto space-y-4">
+        <Secao titulo="Agente de IA">
+          <p className="text-sm text-stone-700">Não foi possível carregar as instruções e a base de conhecimento.</p>
+          <p className="text-xs text-stone-500">{perfil.error?.response?.data?.error || 'Verifique sua conexão e tente de novo.'}</p>
+          <button type="button" onClick={() => perfil.refetch()} disabled={perfil.isFetching}
+            className="px-5 py-2 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-40">
+            {perfil.isFetching ? 'Carregando…' : 'Tentar de novo'}
+          </button>
+        </Secao>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-screen-md mx-auto space-y-4">
@@ -368,9 +435,11 @@ export default function IaConfig() {
         )}
 
         <div className="space-y-2">
-          {blocos.map((b) => (
-            <Bloco key={b.id} bloco={b} editavel={isAdmin} salvando={salvandoBloco}
+          {blocos.map((b, i) => (
+            <Bloco key={b.id} bloco={b} posicao={i} total={blocos.length}
+              limiteConteudo={limites.blocoConteudo} editavel={isAdmin} salvando={salvandoBloco}
               onSalvar={(campos) => editarBloco.mutate({ id: b.id, ...campos })}
+              onMover={(delta) => moverBloco(i, delta)}
               onRemover={() => removerBloco.mutate(b.id)} />
           ))}
         </div>
@@ -402,7 +471,7 @@ export default function IaConfig() {
       </Secao>
 
       {/* 5 — Medidor -------------------------------------------------------- */}
-      <Medidor medidor={dados.medidor} />
+      <Medidor medidor={medidor} />
 
       {/* 6 — Testar --------------------------------------------------------- */}
       {isAdmin && (
@@ -414,7 +483,9 @@ export default function IaConfig() {
           <div className="flex gap-2">
             <input value={pergunta} placeholder="Ex.: vocês entregam no Setor Bueno?"
               onChange={(e) => setPergunta(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && pergunta.trim()) testar.mutate(); }}
+              // Cada teste é uma chamada paga ao provedor: Enter repetido não
+              // pode disparar outra enquanto a anterior está no ar.
+              onKeyDown={(e) => { if (e.key === 'Enter' && pergunta.trim() && !testar.isPending) testar.mutate(); }}
               className="input-field flex-1" />
             <button type="button" onClick={() => testar.mutate()} disabled={!pergunta.trim() || testar.isPending}
               className="px-5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-40 shrink-0">
