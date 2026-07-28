@@ -1,7 +1,11 @@
 // Testes de guarda do POST /api/conversas/:id/sugestao-resposta.
 // A sessão de SUPORTE (implantação do operador) chega com req.perfil.papel
-// 'ADMIN' — naoAuditor sozinho não barra. Esta rota gera custo real no
-// provedor de IA e precisa bloquear req.user.suporte explicitamente (403).
+// 'ADMIN' — naoAuditor sozinho não barra, e não deve barrar: suporte tem o
+// mesmo CRUD que um ADMIN do cliente (decisão de produto, FIL-70). Existiu
+// aqui um guard `naoSuporte` que bloqueava a sessão de suporte com 403 —
+// foi removido de propósito; o custo do provedor de IA fica coberto pelo
+// rate-limit por usuário (sugestaoIaLimiter) e pela auditoria central de
+// auth/middleware.js, não por um bloqueio de rota.
 'use strict';
 
 process.env.META_APP_SECRET = 'test_app_secret';
@@ -77,15 +81,15 @@ function post(port, path, token) {
   });
 }
 
-test('sugestao-resposta: sessão de SUPORTE recebe 403 (não gera custo de IA)', async () => {
+test('sugestao-resposta: sessão de SUPORTE NÃO é barrada por ser suporte (mesmo CRUD do ADMIN)', async () => {
   const conn = fakeConn();
   const { server, port } = await startApp(conn);
   try {
     const r = await post(port, '/api/conversas/7/sugestao-resposta', TOKEN_SUPORTE);
-    assert.equal(r.status, 403);
-    assert.match(r.body.error, /suporte/i);
-    // Nunca chegou a consultar config/provedor de IA — barrado antes do handler.
-    assert.ok(!conn.executed.some((e) => e.sql.includes('ia_habilitada')));
-    assert.ok(!conn.executed.some((e) => e.sql.includes('ia_sugestao_ativa')));
+    // Chega no handler de verdade: 404 porque a conversa não existe no banco
+    // falso, NUNCA 403 por ser sessão de suporte.
+    assert.equal(r.status, 404);
+    assert.ok(!/suporte/i.test(r.body.error || ''), `resposta não deveria mencionar suporte: ${r.body.error}`);
+    assert.ok(conn.executed.some((e) => e.sql.includes('FROM conversa WHERE id')), 'precisa ter chegado a consultar a conversa');
   } finally { server.close(); }
 });

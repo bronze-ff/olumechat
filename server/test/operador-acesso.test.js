@@ -131,14 +131,6 @@ function startApp() {
   app.delete('/api/atalhos/1', authMiddleware, rbac.anexarPerfil, executou);
   app.put('/api/presenca', authMiddleware, rbac.anexarPerfil, executou);
   app.get('/api/atalhos', authMiddleware, rbac.anexarPerfil, (req, res) => res.json([]));
-  // Provisionamento de canal — as ÚNICAS mutações da allowlist de suporte
-  // (exigirSuporteOperador em api/numeros.js e api/meta.js). Caminho real,
-  // handler falso: aqui o que importa é o deny central, não o provisionamento.
-  app.post('/api/numeros', authMiddleware, rbac.anexarPerfil, executou);
-  app.put('/api/numeros/1', authMiddleware, rbac.anexarPerfil, executou);
-  app.post('/api/numeros/1/registrar', authMiddleware, rbac.anexarPerfil, executou);
-  app.post('/api/numeros/1/registrar-extra', authMiddleware, rbac.anexarPerfil, executou);
-  app.post('/api/meta/signup/exchange', authMiddleware, rbac.anexarPerfil, executou);
   app.use('/api/auth', authRoutes);
   app.use('/api/stream', streamRoutes);
   // eslint-disable-next-line no-unused-vars
@@ -303,20 +295,22 @@ test('acesso de suporte devolve ADMIN temporário do tenant escolhido e auditado
   assert.equal(estado.auditoriaOperador.filter((a) => a.ACAO === 'acesso_suporte').length, 1);
   assert.equal(estado.auditoriaTenant.filter((a) => a.ACAO === 'acesso_suporte').length, 1);
 
-  // Ela ENTRA no painel do cliente com visibilidade de ADMIN...
+  // Ela ENTRA no painel do cliente com administração completa...
   const leitura = await req(ctx.port, 'GET', '/api/conversas', { tok: r.body.token });
   assert.equal(leitura.status, 200);
   assert.equal(leitura.body.tenantId, TENANT_ID);
   assert.equal(leitura.body.papel, 'ADMIN');
   assert.equal(leitura.body.atendenteId, null, 'o operador não pode virar autor de nada no tenant');
 
-  // ...mas o perfil ADMIN não basta: o deny central de suporte barra a
-  // escrita em rota fora da allowlist, mesmo numa rota que exige ADMIN.
+  // ...e pode executar uma rota que exige ADMIN. Decisão de produto (FIL-70):
+  // quem implanta e configura o tenant de um cliente sem equipe técnica é o
+  // operador, com o mesmo CRUD de um ADMIN — a contrapartida é a auditoria,
+  // não um bloqueio de escrita.
   const escrita = await req(ctx.port, 'POST', '/api/atendentes/1', { tok: r.body.token, body: { papel: 'ADMIN' } });
-  assert.equal(escrita.status, 403);
+  assert.equal(escrita.status, 200);
   assert.ok(
     estado.auditoriaTenant.some((item) => item.ACAO === 'suporte_mutacao'),
-    'a tentativa de escrita precisa aparecer na auditoria do cliente mesmo bloqueada'
+    'a alteração administrativa do operador precisa aparecer na auditoria do cliente'
   );
 
   // ...e NÃO volta a valer no painel do operador.
@@ -325,12 +319,22 @@ test('acesso de suporte devolve ADMIN temporário do tenant escolhido e auditado
 });
 
 // ---------------------------------------------------------------------------
-// Somente-leitura do suporte: imposto CENTRALMENTE, não rota a rota.
+// Administração de suporte: CRUD completo, auditado CENTRALMENTE.
+//
+// Decisão de produto (FIL-70): o cliente final muitas vezes não sabe mexer
+// com tecnologia — quem implanta e configura o tenant (departamentos,
+// atendentes, fluxos, tags, atalhos, ajustes, campanhas, IA) é o operador,
+// numa sessão de suporte com o MESMO CRUD de um ADMIN do cliente. Isso já foi
+// tratado como regressão neste mesmo ticket (FIL-70 original bloqueava a
+// escrita) e revertido de propósito — a proteção do cliente não é um bloqueio
+// de escrita, é a AUDITORIA: toda mutação de suporte fica registrada, visível
+// na trilha que o próprio cliente lê. NÃO reintroduza um deny aqui sem
+// alinhar com produto.
 // ---------------------------------------------------------------------------
-test('suporte é bloqueado em mutação de rota SEM guarda de papel (o deny é central)', async () => {
+test('suporte muta rotas sem guarda de papel e cada tentativa é auditada', async () => {
   const tok = await tokenDeSuporte();
   // Estas três não têm exigirPapel nem o guarda de AUDITOR no repo real —
-  // se o bloqueio dependesse da rota, passariam.
+  // a auditoria central precisa registrar mesmo assim.
   const casos = [
     ['POST', '/api/atalhos', { atalho: 'oi', conteudo: 'texto' }],
     ['DELETE', '/api/atalhos/1', undefined],
@@ -338,21 +342,28 @@ test('suporte é bloqueado em mutação de rota SEM guarda de papel (o deny é c
   ];
   for (const [metodo, rota, body] of casos) {
     const r = await req(ctx.port, metodo, rota, { tok, body });
-    assert.equal(r.status, 403, `${metodo} ${rota} devolveu ${r.status} para uma sessão de suporte`);
+    assert.equal(r.status, 200, `${metodo} ${rota} devolveu ${r.status} para uma sessão administrativa`);
   }
-  assert.deepEqual(mutacoesExecutadas, [], 'a mutação chegou a EXECUTAR com sessão de suporte');
-  // A tentativa bloqueada também fica auditada — o cliente precisa enxergar
-  // o que o operador tentou, mesmo o que foi negado.
+  assert.deepEqual(mutacoesExecutadas, [
+    'POST /api/atalhos',
+    'DELETE /api/atalhos/1',
+    'PUT /api/presenca',
+  ]);
   assert.equal(
     estado.auditoriaTenant.filter((item) => item.ACAO === 'suporte_mutacao').length,
     3
   );
 });
 
-test('o mesmo bloqueio não atinge o usuário legítimo do tenant', async () => {
+test('a auditoria de suporte não atinge o usuário legítimo do tenant', async () => {
   const r = await req(ctx.port, 'POST', '/api/atalhos', { tok: tokenTenant(), body: { atalho: 'oi' } });
-  assert.equal(r.status, 200, 'o deny do suporte não pode pegar quem é do cliente');
+  assert.equal(r.status, 200);
   assert.equal(mutacoesExecutadas.length, 1);
+  assert.equal(
+    estado.auditoriaTenant.filter((item) => item.ACAO === 'suporte_mutacao').length,
+    0,
+    'mutação de usuário legítimo do tenant não é auditoria de SUPORTE'
+  );
 });
 
 test('suporte lê normalmente e mantém logout e ticket de SSE', async () => {
@@ -360,40 +371,6 @@ test('suporte lê normalmente e mantém logout e ticket de SSE', async () => {
   assert.equal((await req(ctx.port, 'GET', '/api/atalhos', { tok })).status, 200);
   assert.equal((await req(ctx.port, 'POST', '/api/stream/ticket', { tok })).status, 200, 'sem ticket não há SSE para diagnosticar');
   assert.equal((await req(ctx.port, 'POST', '/api/auth/logout', { tok })).status, 200, 'encerrar a própria sessão tem que continuar possível');
-});
-
-test('a allowlist libera o provisionamento de canal, que EXIGE sessão de suporte', async () => {
-  const tok = await tokenDeSuporte();
-  const casos = [
-    ['POST', '/api/numeros'],
-    ['PUT', '/api/numeros/1'],
-    ['POST', '/api/numeros/1/registrar'],
-    ['POST', '/api/meta/signup/exchange'],
-  ];
-  for (const [metodo, rota] of casos) {
-    const r = await req(ctx.port, metodo, rota, { tok, body: {} });
-    assert.equal(r.status, 200, `${metodo} ${rota} devolveu ${r.status} para sessão de suporte`);
-  }
-  assert.deepEqual(mutacoesExecutadas, [
-    'POST /api/numeros',
-    'PUT /api/numeros/1',
-    'POST /api/numeros/1/registrar',
-    'POST /api/meta/signup/exchange',
-  ]);
-});
-
-test('a allowlist do suporte não abre por prefixo, query string ou barra final', async () => {
-  const tok = await tokenDeSuporte();
-  const casos = [
-    ['POST', '/api/numeros/1/registrar-extra'], // sufixo do caminho liberado (prefixo não conta)
-    ['POST', '/api/atalhos?x=1'],               // query string não libera rota bloqueada
-    ['POST', '/api/atalhos/'],                  // barra final não libera rota bloqueada
-  ];
-  for (const [metodo, rota] of casos) {
-    const r = await req(ctx.port, metodo, rota, { tok, body: {} });
-    assert.equal(r.status, 403, `${metodo} ${rota} devolveu ${r.status} — a allowlist casou por engano`);
-  }
-  assert.deepEqual(mutacoesExecutadas, [], 'alguma variante da allowlist chegou a EXECUTAR');
 });
 
 test('leitura e ticket SSE não poluem a auditoria de mutações', () => {

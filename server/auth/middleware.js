@@ -19,20 +19,21 @@
 // módulos um a um seria mexer em arquivo de outro ticket, e uma divergência
 // entre as duas seria justamente um buraco de isolamento.
 //
-//  3. SESSÃO DE SUPORTE É SOMENTE-LEITURA, E ISSO É DECIDIDO AQUI (FIL-70).
+//  3. SESSÃO DE SUPORTE TEM CRUD COMPLETO, E ISSO É DECISÃO DE PRODUTO (FIL-70).
 //     O operador entra em UM tenant escolhido com um token curto marcado
-//     `suporte: true`. A fronteira continua sendo o tenantId assinado no token,
-//     mas a sessão existe para DIAGNOSTICAR, não para mexer no tenant do
-//     cliente. Dar a ela um papel administrativo não basta: uma checagem de
-//     papel só barra nas rotas que se lembram de checar (`exigirPapel`) — e
-//     várias mutações não checam papel nenhum (POST/DELETE /api/atalhos, PUT
-//     /api/presenca). Uma promessa de "somente-leitura" que depende de cada
-//     rota lembrar é uma promessa quebrada na próxima rota nova. Então o
-//     bloqueio é AQUI, no único ponto por onde toda rota de tenant passa, e é
-//     FAIL-CLOSED: qualquer método que não seja de leitura morre na porta,
-//     salvo uma allowlist mínima e explícita. Toda tentativa de escrita —
-//     inclusive as bloqueadas — é auditada, para o cliente enxergar o que o
-//     operador tentou.
+//     `suporte: true`, para IMPLANTAR e CONFIGURAR o tenant de clientes que não
+//     têm equipe técnica própria: criar departamentos, atendentes, fluxos,
+//     tags, atalhos, ajustar configurações, campanhas, IA — o mesmo CRUD de um
+//     ADMIN do cliente que logou com email e senha próprios. NENHUMA rota
+//     diferencia suporte de ADMIN em permissão (as poucas exceções pontuais,
+//     como `exigirSuporteOperador` em api/numeros.js/meta.js, vão no sentido
+//     contrário: restringem o ADMIN comum, não o suporte).
+//     A CONTRAPARTIDA DESSE PODER, NÃO UM SUBSTITUTO DELE, É A AUDITORIA:
+//     toda mutação de uma sessão de suporte é registrada AQUI, antes da rota,
+//     inclusive nas rotas que não têm auditoria própria — e cai na trilha que
+//     o PRÓPRIO CLIENTE lê no painel dele. Não reintroduza um bloqueio central
+//     de escrita aqui sem alinhar com produto: já foi tentado (FIL-70 original
+//     e uma reversão temporária deste ticket) e revertido nas duas vezes.
 'use strict';
 
 const jwt = require('jsonwebtoken');
@@ -59,50 +60,6 @@ function mutacaoDeSuporte(req) {
   // Ticket SSE só cria um valor efêmero em memória; não altera o cliente e
   // ocorre a cada reconexão, portanto não deve poluir a auditoria.
   return caminhoDaRequisicao(req) !== '/api/stream/ticket';
-}
-
-/**
- * Allowlist mínima e explícita de mutações liberadas para a sessão de
- * suporte. Caminho exato — sem casar por prefixo, query string ou barra
- * final (`caminhoDaRequisicao()` já normaliza isso). Cada entrada existe por
- * um motivo pontual comentado abaixo.
- *
- * ACRESCENTAR ROTA AQUI É DECISÃO DE SEGURANÇA E PASSA POR REVIEW — não é
- * conveniência. Toda rota fora desta lista morre em 403 na porta.
- */
-const SUPORTE_LIBERADOS = [
-  // Ticket SSE: emite um valor efêmero em memória (auth/sseTicket.js) para
-  // abrir o SSE; sem ele o operador não diagnostica um inbox congelado.
-  { metodo: 'POST', caminho: '/api/stream/ticket' },
-  // Encerrar a própria sessão precisa continuar possível.
-  { metodo: 'POST', caminho: '/api/auth/logout' },
-  // Provisionamento de canal: EXIGE sessão de suporte (ver
-  // `exigirSuporteOperador` em api/numeros.js e api/meta.js) — o cliente não
-  // tem credenciais/IDs da Meta, e conectar o canal é justamente para isso
-  // que a sessão de suporte existe.
-  { metodo: 'POST', caminho: '/api/numeros' },
-  { metodo: 'PUT', caminho: /^\/api\/numeros\/\d+$/ },
-  { metodo: 'POST', caminho: /^\/api\/numeros\/\d+\/registrar$/ },
-  { metodo: 'POST', caminho: '/api/meta/signup/exchange' },
-];
-
-function liberadoParaSuporte(req) {
-  const caminho = caminhoDaRequisicao(req);
-  return SUPORTE_LIBERADOS.some(({ metodo, caminho: alvo }) => {
-    if (metodo !== req.method) return false;
-    return typeof alvo === 'string' ? alvo === caminho : alvo.test(caminho);
-  });
-}
-
-/**
- * A requisição é permitida para uma sessão de suporte do operador?
- * Exportada para teste — é a regra que sustenta a promessa de "o operador
- * diagnostica, não mexe" (salvo o provisionamento de canal, que é a exceção
- * deliberada da allowlist acima).
- */
-function leituraDeSuporte(req) {
-  if (METODOS_DE_LEITURA.has(req.method)) return true;
-  return liberadoParaSuporte(req);
 }
 
 async function auditarMutacaoDeSuporte(req, decoded, tenantId) {
@@ -171,19 +128,9 @@ module.exports = async function auth(req, res, next) {
     } catch (err) {
       return next(err);
     }
-    // Deny central, fail-closed: decidido AQUI, antes de qualquer rota rodar
-    // (ver ponto 3 no cabeçalho). Depois da auditoria — a tentativa bloqueada
-    // também fica registrada.
-    if (!leituraDeSuporte(req)) {
-      return res.status(403).json({
-        error: 'Sessão de suporte é somente-leitura. Peça ao cliente para executar a ação, ou use o painel do operador.',
-      });
-    }
   }
   next();
 };
 
 module.exports.mutacaoDeSuporte = mutacaoDeSuporte;
 module.exports.auditarMutacaoDeSuporte = auditarMutacaoDeSuporte;
-module.exports.leituraDeSuporte = leituraDeSuporte;
-module.exports.SUPORTE_LIBERADOS = SUPORTE_LIBERADOS;

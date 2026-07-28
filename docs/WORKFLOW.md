@@ -106,3 +106,11 @@ humano mergeia.
 - Onda do ticket = `max(onda dos blockers) + 1`.
 - Comentário de review é **insumo, não ordem**: correção confirmada no código
   vira commit na mesma branch; achado que contradiz o ticket vai pro humano.
+
+## §9 Segurança
+
+Todo ticket, PR e worker deste projeto segue [`SEGURANCA.md`](SEGURANCA.md).
+O corpo do PR deve confirmar, item a item, os pontos do checklist que a
+mudança tocou (ex.: "toca tenant/query → provei que o tenant A não lê dado do
+B"; "toca rota de mutação → tem guarda de papel ou checagem de escopo"). Se
+nenhum item se aplica, diga isso explicitamente no PR — não deixe em branco.
