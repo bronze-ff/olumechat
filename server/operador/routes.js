@@ -33,6 +33,7 @@ const auditoria = require('./auditoria');
 const tenants = require('./tenants');
 const credencialIa = require('./credencialIa');
 const iaConfigStore = require('../ia/iaConfigStore');
+const onboarding = require('./onboarding');
 const { trocarCodigo } = require('../api/meta');
 const { guardar } = require('../meta/connection');
 const { linkDeConvite } = require('../utils/conviteLink');
@@ -480,6 +481,18 @@ router.put(
     }
   }
 );
+
+// ---------------------------------------------------------------------------
+// GET /api/operador/onboarding — progresso do onboarding assistido da Meta
+// por cliente, com a etapa em que cada um está parado (FIL-81).
+// ---------------------------------------------------------------------------
+router.get('/onboarding', async (req, res, next) => {
+  try {
+    res.json(await onboarding.listarProgresso());
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // GET /api/operador/auditoria?tenantId=&limite= — trilha do operador.
