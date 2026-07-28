@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import Spinner from '../../components/ui/Spinner';
@@ -9,6 +9,17 @@ import Icon from '../../components/ui/Icon';
 // JWT com 403 — ver server/api/onboardingMeta.js). Nenhuma automação de Graph
 // API aqui: é acompanhamento manual de um processo que a Meta exige interação
 // humana para concluir.
+
+// Data PURA (YYYY-MM-DD, sem hora) formatada SEM passar por Date/fuso: o
+// construtor `new Date('YYYY-MM-DD')` interpreta a string como UTC, e
+// `toLocaleDateString` depois formata no fuso local — num fuso negativo (o
+// nosso, UTC-3) isso empurra a data exibida um dia pra trás. Fatiar a string
+// já evita o problema por completo.
+function formatarDataBR(isoDateOnly) {
+  if (!isoDateOnly) return '';
+  const [ano, mes, dia] = String(isoDateOnly).slice(0, 10).split('-');
+  return `${dia}/${mes}/${ano}`;
+}
 
 const STATUS = {
   pendente: { label: 'Pendente', className: 'bg-stone-100 text-stone-700 border-stone-200', dot: 'bg-stone-400' },
@@ -32,6 +43,19 @@ function Etapa({ etapa, salvar, pendente }) {
   const [responsavel, setResponsavel] = useState(etapa.responsavel || '');
   const [observacao, setObservacao] = useState(etapa.observacao || '');
   const [dataReferencia, setDataReferencia] = useState(etapa.dataReferencia ? etapa.dataReferencia.slice(0, 10) : '');
+
+  // Ressincroniza com o servidor sempre que ele devolve dados novos (1ª carga
+  // e após cada save + refetch). Sem isto, o formulário guarda o valor DIGITADO
+  // (ex.: "Ana " com espaço no fim) mesmo depois do servidor gravar a versão
+  // trimada — o botão "Salvar" ficava preso em habilitado (`mudou` sempre
+  // true) porque o estado local nunca mais batia com o que veio do banco.
+  useEffect(() => {
+    setStatus(etapa.status);
+    setResponsavel(etapa.responsavel || '');
+    setObservacao(etapa.observacao || '');
+    setDataReferencia(etapa.dataReferencia ? etapa.dataReferencia.slice(0, 10) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [etapa.status, etapa.responsavel, etapa.observacao, etapa.dataReferencia, etapa.atualizadoEm]);
 
   const mudou = status !== etapa.status || responsavel !== (etapa.responsavel || '')
     || observacao !== (etapa.observacao || '') || dataReferencia !== (etapa.dataReferencia ? etapa.dataReferencia.slice(0, 10) : '');
@@ -128,7 +152,7 @@ export default function OnboardingMeta() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-ink-950">Onboarding concluído — sugestão de início de cobrança</p>
             <p className="mt-1 text-xs text-stone-600">
-              {sugestao.motivo} Data sugerida: <strong>{new Date(sugestao.data).toLocaleDateString('pt-BR')}</strong>.
+              {sugestao.motivo} Data sugerida: <strong>{formatarDataBR(sugestao.data)}</strong>.
               Isto não altera o contrato automaticamente — confirme com o financeiro (FIL-76).
             </p>
           </div>
