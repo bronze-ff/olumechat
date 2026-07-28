@@ -7,9 +7,18 @@
 // nem atrasar o atendimento. Toda função aqui é best-effort — captura
 // qualquer erro, loga e retorna normalmente. Quem chama não precisa (e não
 // deve) envolver estas chamadas em try/catch de novo.
+//
+// ⚠️ SEM CONEXÃO ANINHADA (mesmo achado de review do FIL-78, ver o cabeçalho
+// de ia/iaConfigStore.js): este módulo NUNCA abre uma transação de operador
+// (consumo/precos.js::carregarPreco) por baixo dos panos enquanto a conexão
+// de tenant do chamador (`conn`, passada por parâmetro) está aberta — isso
+// prenderia 2 conexões do pool ao mesmo tempo pela mesma requisição.
+// `registrarIaTokens` por isso recebe o PREÇO JÁ RESOLVIDO (`preco`) — quem
+// chama resolve consumo/precos.js::carregarPreco() numa fase própria, fora
+// de qualquer db.comTenant() em andamento (ver ia/runtime.js e
+// api/conversas.js::/sugestao-resposta).
 'use strict';
 
-const precos = require('./precos');
 const limitePlano = require('../ia/limitePlano');
 
 const TIPOS = Object.freeze(['ia_tokens', 'mensagem_enviada', 'conversa_iniciada', 'midia_armazenada']);
@@ -32,31 +41,30 @@ async function registrar(conn, tenantId, { tipo, quantidade, custoCentavos = nul
   }
 }
 
+/** Custo em centavos a partir do preço já resolvido (consumo/precos.js) —
+ *  cálculo puro, sem banco. `null` se `preco` for null (provider+modelo
+ *  ainda sem preço cadastrado) — nunca inventa um valor. */
+function calcularCustoCentavos(preco, tokensEntrada, tokensSaida) {
+  if (!preco) return null;
+  return (tokensEntrada / 1000) * preco.precoEntradaCentavos1k + (tokensSaida / 1000) * preco.precoSaidaCentavos1k;
+}
+
 /**
  * Tokens de UMA chamada ao provedor de IA: grava o evento `ia_tokens` com o
- * custo calculado pela tabela de preço do operador (consumo/precos.js;
- * `null` se o preço daquele provider+modelo ainda não foi cadastrado — nunca
- * estimamos por caractere, só usamos o uso real que o provedor devolveu) e
- * incrementa `ia_consumo_mensal` — o teto do FIL-78 (ia/limitePlano.js) é o
- * ponto de extensão que aquela migração deixou pronto para o FIL-77 plugar.
- * NUNCA lança.
+ * custo (a partir do `preco` JÁ RESOLVIDO por quem chama — ver o cabeçalho
+ * deste arquivo sobre por que este módulo não busca o preço sozinho; `null`
+ * quando o preço daquele provider+modelo ainda não foi cadastrado, nunca
+ * estimado por caractere) e incrementa `ia_consumo_mensal` — o teto do
+ * FIL-78 (ia/limitePlano.js) é o ponto de extensão que aquela migração
+ * deixou pronto para o FIL-77 plugar. NUNCA lança.
  */
-async function registrarIaTokens(conn, tenantId, { tokensEntrada = 0, tokensSaida = 0, provider, modelo, referencia = null }) {
+async function registrarIaTokens(conn, tenantId, { tokensEntrada = 0, tokensSaida = 0, preco = null, referencia = null }) {
   const entrada = Number(tokensEntrada) || 0;
   const saida = Number(tokensSaida) || 0;
   const total = entrada + saida;
   if (total <= 0) return; // provedor não devolveu uso nesta chamada — nada a medir
 
-  let custoCentavos = null;
-  try {
-    const preco = await precos.carregarPreco(provider, modelo);
-    if (preco) {
-      custoCentavos = (entrada / 1000) * preco.precoEntradaCentavos1k + (saida / 1000) * preco.precoSaidaCentavos1k;
-    }
-  } catch (err) {
-    console.error('[consumo] falha ao calcular custo (evento gravado sem custo):', err.message);
-  }
-
+  const custoCentavos = calcularCustoCentavos(preco, entrada, saida);
   await registrar(conn, tenantId, { tipo: 'ia_tokens', quantidade: total, custoCentavos, referencia });
 
   try {

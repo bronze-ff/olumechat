@@ -16,12 +16,15 @@ const OPERADOR = { id: 1, email: 'op@falatta.com' };
 /** comOperador roda tudo numa "transação" via db.getConnection — não passa
     por RLS de verdade (bypassrls), então o fake só precisa devolver linhas
     plausíveis e registrar o que foi executado. */
-function conexao({ tenant = { ID: 5, NOME: 'Cliente X', SLUG: 'cliente-x', STATUS: 'ativo' }, chaveExistente = null } = {}) {
+function conexao({ tenant = { ID: 5, NOME: 'Cliente X', SLUG: 'cliente-x', STATUS: 'ativo' }, chaveExistente = null, ativoIaConfig = null } = {}) {
   const cap = [];
   return { cap, async execute(sql, binds = {}) {
     cap.push({ sql, binds });
     if (/SELECT id, nome, slug, status FROM tenant WHERE id = :id/i.test(sql)) {
       return tenant ? { rows: [tenant] } : { rows: [] };
+    }
+    if (/SELECT ativo FROM ia_config/i.test(sql)) {
+      return { rows: ativoIaConfig ? [{ ATIVO: ativoIaConfig }] : [] };
     }
     if (/SELECT api_key_criptografada FROM ia_config/i.test(sql)) {
       return { rows: chaveExistente ? [{ API_KEY_CRIPTOGRAFADA: chaveExistente }] : [] };
@@ -103,6 +106,90 @@ test('definirIa/salvarIaConfig com tenant inexistente dá 404', async () => {
   db.getConnection = async () => conexao({ tenant: null });
   await assert.rejects(
     tenants.definirIa({ operador: OPERADOR, tenantId: 999, habilitada: true }),
+    (err) => err.deOperador && err.status === 404
+  );
+});
+
+// ---------------------------------------------------------------------------
+// FIL-78 (achado de review, P2): desativarIaConfig — a migração gradual pra
+// credencial global anunciada no ticket exige um caminho pra APOSENTAR a
+// chave própria de um tenant, não só gravar uma nova.
+// ---------------------------------------------------------------------------
+test('desativarIaConfig sem chave própria ativa → 409 (nada pra desativar)', async () => {
+  db.getConnection = async () => conexao({ ativoIaConfig: null });
+  await assert.rejects(
+    tenants.desativarIaConfig({ operador: OPERADOR, tenantId: 5 }),
+    (err) => err.deOperador && err.status === 409
+  );
+});
+
+test('desativarIaConfig com chave própria ativa: marca ativo=N, audita e invalida o cache do tenant', async () => {
+  const iaConfigStore = require('../ia/iaConfigStore');
+  let invalidado = null;
+  const orig = iaConfigStore.invalidar;
+  iaConfigStore.invalidar = (id) => { invalidado = id; };
+  try {
+    const conn = conexao({ ativoIaConfig: 'S' });
+    db.getConnection = async () => conn;
+    const r = await tenants.desativarIaConfig({ operador: OPERADOR, tenantId: 5, ip: '10.0.0.1' });
+    assert.equal(r.chaveProprAtiva, false);
+    const upd = conn.cap.find((c) => /UPDATE ia_config SET ativo = 'N'/i.test(c.sql));
+    assert.ok(upd, 'marca ativo=N (não apaga a linha nem a chave)');
+    assert.ok(conn.cap.some((c) => /INSERT INTO operador_auditoria|auditoria/i.test(c.sql)), 'audita a desativação');
+    assert.equal(invalidado, 5, 'invalida o cache do tenant — a próxima chamada já usa o fallback global');
+  } finally {
+    iaConfigStore.invalidar = orig;
+  }
+});
+
+test('desativarIaConfig com tenant inexistente dá 404', async () => {
+  db.getConnection = async () => conexao({ tenant: null });
+  await assert.rejects(
+    tenants.desativarIaConfig({ operador: OPERADOR, tenantId: 999 }),
+    (err) => err.deOperador && err.status === 404
+  );
+});
+
+// ---------------------------------------------------------------------------
+// FIL-78 (achado de review, P2): definirTetoIa — sem rota pra configurar o
+// valor, o teto do plano (ia/limitePlano.js) nunca dispara na prática.
+// ---------------------------------------------------------------------------
+test('definirTetoIa grava o teto e audita', async () => {
+  const conn = conexao();
+  db.getConnection = async () => conn;
+  const r = await tenants.definirTetoIa({ operador: OPERADOR, tenantId: 5, tetoTokensMes: 100000, ip: '10.0.0.1' });
+  assert.equal(r.tetoTokensMes, 100000);
+  const upd = conn.cap.find((c) => /UPDATE tenant SET ia_teto_tokens_mes/i.test(c.sql));
+  assert.ok(upd);
+  assert.equal(upd.binds.v, 100000);
+  assert.ok(conn.cap.some((c) => /INSERT INTO operador_auditoria|auditoria/i.test(c.sql)), 'audita a definição do teto');
+});
+
+test('definirTetoIa com null REMOVE o teto (sem limite)', async () => {
+  const conn = conexao();
+  db.getConnection = async () => conn;
+  const r = await tenants.definirTetoIa({ operador: OPERADOR, tenantId: 5, tetoTokensMes: null });
+  assert.equal(r.tetoTokensMes, null);
+  const upd = conn.cap.find((c) => /UPDATE tenant SET ia_teto_tokens_mes/i.test(c.sql));
+  assert.equal(upd.binds.v, null);
+});
+
+test('definirTetoIa rejeita valor negativo ou não-inteiro', async () => {
+  db.getConnection = async () => conexao();
+  await assert.rejects(
+    tenants.definirTetoIa({ operador: OPERADOR, tenantId: 5, tetoTokensMes: -1 }),
+    (err) => err.deOperador && err.status === 400
+  );
+  await assert.rejects(
+    tenants.definirTetoIa({ operador: OPERADOR, tenantId: 5, tetoTokensMes: 1.5 }),
+    (err) => err.deOperador && err.status === 400
+  );
+});
+
+test('definirTetoIa com tenant inexistente dá 404', async () => {
+  db.getConnection = async () => conexao({ tenant: null });
+  await assert.rejects(
+    tenants.definirTetoIa({ operador: OPERADOR, tenantId: 999, tetoTokensMes: 100 }),
     (err) => err.deOperador && err.status === 404
   );
 });

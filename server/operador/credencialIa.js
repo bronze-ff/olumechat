@@ -84,33 +84,45 @@ async function salvarCredencial({ operador, provider, modeloPadrao, baseUrl, api
 }
 
 /**
- * A credencial ativa, COM a chave decifrada. Único ponto de leitura da chave
- * em claro no processo inteiro — chamado só pelo runtime
- * (ia/iaConfigStore.js), nunca por uma rota HTTP. Se a decifragem falhar
- * (segredo rotacionado, blob corrompido), devolve null em vez de derrubar o
- * runtime — mesmo racional do iaConfigStore de tenant.
+ * A credencial ativa, COM a chave decifrada, usando uma conexão de operador
+ * JÁ ABERTA (`conn`) — NÃO abre transação própria. Único ponto de leitura da
+ * chave em claro no processo inteiro. Se a decifragem falhar (segredo
+ * rotacionado, blob corrompido), devolve null em vez de derrubar o runtime —
+ * mesmo racional do iaConfigStore de tenant.
+ *
+ * Existe separada de carregarAtivaComChave() para que ia/iaConfigStore.js
+ * possa ler a config PRÓPRIA do tenant e a credencial GLOBAL na MESMA
+ * transação de operador (uma só conexão) — ver o cabeçalho de
+ * ia/iaConfigStore.js sobre por que abrir uma segunda conexão aqui seria o
+ * mesmo defeito de conexão aninhada que a review pegou.
  */
-async function carregarAtivaComChave() {
-  return comOperador(async (conn) => {
-    let r;
-    try {
-      r = await conn.execute(
-        `SELECT provider, modelo_padrao, base_url, api_key_criptografada FROM provedor_credencial WHERE ativo = 'S'`);
-    } catch (err) {
-      if (err.code === '42P01') return null; // migração 015 ainda não aplicada
-      throw err;
-    }
-    if (!r.rows.length) return null;
-    const row = r.rows[0];
-    let apiKey;
-    try {
-      apiKey = decifrar(row.API_KEY_CRIPTOGRAFADA);
-    } catch (e) {
-      console.error('[ia] credencial global do operador não decifrável — reconfigure em /api/operador/ia-credencial:', e.message);
-      return null;
-    }
-    return { provider: row.PROVIDER, modelo: row.MODELO_PADRAO, baseUrl: row.BASE_URL || null, apiKey };
-  });
+async function lerAtivaComChave(conn) {
+  let r;
+  try {
+    r = await conn.execute(
+      `SELECT provider, modelo_padrao, base_url, api_key_criptografada FROM provedor_credencial WHERE ativo = 'S'`);
+  } catch (err) {
+    if (err.code === '42P01') return null; // migração 015 ainda não aplicada
+    throw err;
+  }
+  if (!r.rows.length) return null;
+  const row = r.rows[0];
+  let apiKey;
+  try {
+    apiKey = decifrar(row.API_KEY_CRIPTOGRAFADA);
+  } catch (e) {
+    console.error('[ia] credencial global do operador não decifrável — reconfigure em /api/operador/ia-credencial:', e.message);
+    return null;
+  }
+  return { provider: row.PROVIDER, modelo: row.MODELO_PADRAO, baseUrl: row.BASE_URL || null, apiKey };
 }
 
-module.exports = { listarCredenciais, salvarCredencial, carregarAtivaComChave };
+/** Mesma coisa que lerAtivaComChave(), mas abrindo sua PRÓPRIA transação de
+ *  operador — para quem não já está dentro de uma (ex.: chamada avulsa,
+ *  script, teste). Runtime nunca deve usar esta: usa lerAtivaComChave(conn)
+ *  dentro da transação que ia/iaConfigStore.js já abriu. */
+async function carregarAtivaComChave() {
+  return comOperador((conn) => lerAtivaComChave(conn));
+}
+
+module.exports = { listarCredenciais, salvarCredencial, carregarAtivaComChave, lerAtivaComChave };

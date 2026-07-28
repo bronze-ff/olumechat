@@ -89,11 +89,20 @@ export default function IaConfig() {
               <Icon name="bot" size={17} />
             </span>
             <div className="min-w-0">
-              <p className="text-sm font-medium text-stone-800">
-                {NOME_PROVEDOR[config.data.provider] || config.data.provider} <span className="font-mono text-stone-400">· {config.data.modelo}</span>
-              </p>
-              {config.data.atualizadoEm && (
-                <p className="text-[11px] text-stone-400">Atualizado em {new Date(config.data.atualizadoEm).toLocaleString('pt-BR')}</p>
+              {config.data.origem === 'tenant' ? (
+                <>
+                  <p className="text-sm font-medium text-stone-800">
+                    {NOME_PROVEDOR[config.data.provider] || config.data.provider} <span className="font-mono text-stone-400">· {config.data.modelo}</span>
+                  </p>
+                  {config.data.atualizadoEm && (
+                    <p className="text-[11px] text-stone-400">Atualizado em {new Date(config.data.atualizadoEm).toLocaleString('pt-BR')}</p>
+                  )}
+                </>
+              ) : (
+                // Credencial GLOBAL do operador (FIL-78): nenhum detalhe de
+                // provedor/modelo é exposto por rota de tenant — só que está
+                // ativa (a conta é da Multicanal, não do cliente).
+                <p className="text-sm font-medium text-stone-800">Configurado pela Multicanal</p>
               )}
             </div>
           </div>
