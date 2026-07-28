@@ -2,7 +2,7 @@
 
 // pg_try_advisory_xact_lock nunca espera: perder o lock e um caminho normal
 // quando ha mais de uma instancia do worker.
-const BASE = Object.freeze({ fila: 7301000000n, bot: 7302000000n, campanha: 7303000000n, consumo: 7304000000n });
+const BASE = Object.freeze({ fila: 7301000000n, bot: 7302000000n, campanha: 7303000000n, consumo: 7304000000n, fatura: 7305000000n });
 
 function chave(worker, tenantId) {
   const tenant = BigInt(Number(tenantId));

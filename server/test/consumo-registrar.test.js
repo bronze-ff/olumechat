@@ -44,6 +44,24 @@ test('REGRESSÃO SEGURANCA.md: falha ao gravar o evento nunca propaga (medir nã
   await assert.doesNotReject(registrar.registrar(conn, 1, { tipo: 'mensagem_enviada', quantidade: 1 }));
 });
 
+test('SAVEPOINT (achado de review do PR #26): falha no INSERT isola em SAVEPOINT — try/catch em JS sozinho NÃO recupera a transação do Postgres', async () => {
+  const conn = fakeConn({ falharEm: /INSERT INTO consumo_evento/i });
+  await registrar.registrar(conn, 1, { tipo: 'mensagem_enviada', quantidade: 1 });
+  assert.ok(conn.cap.some((c) => /^SAVEPOINT/i.test(c.sql)), 'deveria abrir um SAVEPOINT antes do INSERT arriscado');
+  assert.ok(
+    conn.cap.some((c) => /^ROLLBACK TO SAVEPOINT/i.test(c.sql)),
+    'sem ROLLBACK TO SAVEPOINT após a falha, o PRÓXIMO comando do chamador (salvar a mensagem, dar commit) falharia com "current transaction is aborted"'
+  );
+});
+
+test('SAVEPOINT: caminho de sucesso libera o savepoint (RELEASE) em vez de deixar aberto', async () => {
+  const conn = fakeConn();
+  await registrar.registrar(conn, 1, { tipo: 'mensagem_enviada', quantidade: 1 });
+  assert.ok(conn.cap.some((c) => /^SAVEPOINT/i.test(c.sql)));
+  assert.ok(conn.cap.some((c) => /^RELEASE SAVEPOINT/i.test(c.sql)));
+  assert.ok(!conn.cap.some((c) => /^ROLLBACK TO SAVEPOINT/i.test(c.sql)), 'sucesso não precisa de rollback');
+});
+
 // NOTA (merge com o fix da review do #22/FIL-78): registrarIaTokens() NÃO
 // resolve mais o preço sozinho (chamar consumo/precos.js::carregarPreco()
 // aqui dentro, com a conexão de tenant do chamador ainda aberta, era o MESMO
@@ -97,4 +115,10 @@ test('REGRESSÃO SEGURANCA.md: falha ao atualizar o teto (ia_consumo_mensal) nã
   const conn = fakeConn({ falharEm: /INSERT INTO ia_consumo_mensal/i });
   await assert.doesNotReject(registrar.registrarIaTokens(conn, 7, { tokensEntrada: 10, tokensSaida: 5 }));
   assert.ok(conn.cap.some((c) => /INSERT INTO consumo_evento/i.test(c.sql)), 'o evento em si já tinha sido gravado antes da falha no teto');
+});
+
+test('SAVEPOINT (achado de review do PR #26): falha ao atualizar ia_consumo_mensal também isola em SAVEPOINT', async () => {
+  const conn = fakeConn({ falharEm: /INSERT INTO ia_consumo_mensal/i });
+  await registrar.registrarIaTokens(conn, 7, { tokensEntrada: 10, tokensSaida: 5 });
+  assert.ok(conn.cap.some((c) => /^ROLLBACK TO SAVEPOINT/i.test(c.sql)), 'a falha do teto também precisa recuperar a transação, não só a do evento');
 });
