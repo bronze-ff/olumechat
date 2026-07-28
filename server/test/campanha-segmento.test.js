@@ -31,3 +31,27 @@ test('filtro não concatena valores fornecidos', () => {
   assert.doesNotMatch(r.texto, /DROP TABLE/);
   assert.equal(r.binds.f0, '["vip\'); DROP TABLE contato;--"]');
 });
+
+test('CSV: acima do teto de linhas rejeita com erro claro (não trava o parse síncrono)', () => {
+  const linhas = ['telefone'];
+  for (let i = 0; i < 5; i++) linhas.push(`5562999990${String(i).padStart(3, '0')}`);
+  const csv = linhas.join('\n');
+  assert.throws(
+    () => seg.parseCsv(csv, { limiteLinhas: 3 }),
+    (err) => err instanceof seg.SegmentoInvalido && /mais de 3 linhas/.test(err.message)
+  );
+  // Dentro do teto, passa normalmente.
+  assert.doesNotThrow(() => seg.parseCsv(csv, { limiteLinhas: 10 }));
+});
+
+test('CSV: validarImportacao propaga o teto de linhas pro parseCsv', () => {
+  const linhas = ['telefone', '5562999990001', '5562999990002', '5562999990003'];
+  assert.throws(
+    () => seg.validarImportacao(linhas.join('\n'), [], { limiteLinhas: 1 }),
+    seg.SegmentoInvalido
+  );
+});
+
+test('CSV: teto padrão vem de LIMITE_LINHAS_PADRAO (50.000) quando não informado', () => {
+  assert.equal(seg.LIMITE_LINHAS_PADRAO, 50000);
+});
