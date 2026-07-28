@@ -267,6 +267,13 @@ async function rodada(departamentoId, tentativa = 0) {
             txt: aviso,
           }
         );
+        // A lista de conversas ordena por ultima_msg_em e mostra o preview da
+        // última mensagem — sem isto, o aviso aparece no preview com a hora
+        // antiga da mensagem anterior, e a conversa some da ordenação certa.
+        await conn.execute(
+          `UPDATE conversa SET ultima_msg_em = now() WHERE id = :id`,
+          { id: resultado.conversaId }
+        );
       });
       publish({
         tipo: 'mensagem',

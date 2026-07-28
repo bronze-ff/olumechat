@@ -200,6 +200,45 @@ test('distribuidor: empate de carga → quem está há mais tempo sem receber', 
   assert.equal(evento.atendenteId, 22);
 });
 
+test('distribuidor: aviso de indisponibilidade atualiza ultima_msg_em NA MESMA transação do insert', async () => {
+  presence._reset();
+  // 900 é a referência do cliente, mas está OFFLINE — só 901 (substituto) está online.
+  presence.conectar({ atendenteId: 901, tenantId: TENANT, deptoIds: [40], nome: 'Substituto' });
+  const capturas = [];
+  const conn = fakeConnFila({
+    fila: [{
+      id: 700, numeroId: null, contatoId: 55,
+      preferredId: 900, preferredName: 'Zeca (referência)',
+      telefone: '5562999990000', phoneNumberId: '1112223334',
+    }],
+    cargas: { 901: 0 },
+    capturas,
+  });
+  const closeOriginal = conn.close.bind(conn);
+  conn.close = async () => { capturas.push({ sql: '__CLOSE__' }); await closeOriginal(); };
+  db.getConnection = async () => conn;
+
+  const oldFetch = global.fetch;
+  global.fetch = async () => ({ ok: true, json: async () => ({ messages: [{ id: 'wamid.aviso1' }] }) });
+  try {
+    await distribuidor.atribuir(40);
+  } finally {
+    global.fetch = oldFetch;
+  }
+
+  const idxInsert = capturas.findIndex((c) => c.sql.startsWith('INSERT INTO mensagem'));
+  const idxUpdateUltima = capturas.findIndex((c) => c.sql.startsWith('UPDATE conversa') && c.sql.includes('ultima_msg_em = now()'));
+  assert.ok(idxInsert >= 0, 'deveria ter inserido a mensagem de aviso de indisponibilidade');
+  assert.ok(idxUpdateUltima >= 0, 'deveria ter atualizado conversa.ultima_msg_em');
+  assert.match(capturas[idxInsert].binds.txt, /Zeca \(referência\)/);
+  assert.equal(capturas[idxUpdateUltima].binds.id, 700);
+
+  // MESMA TRANSAÇÃO do insert: update logo em seguida, sem fechar a conexão entre os dois.
+  assert.equal(idxUpdateUltima, idxInsert + 1, 'UPDATE deveria vir logo após o INSERT, na mesma transação');
+  const fechouEntreOsDois = capturas.slice(idxInsert, idxUpdateUltima + 1).some((c) => c.sql === '__CLOSE__');
+  assert.equal(fechouEntreOsDois, false, 'não deveria fechar a conexão entre o insert e o update (mesma transação)');
+});
+
 test('distribuidor: acesso por número — só quem atende o número da conversa recebe', async () => {
   presence._reset();
   presence.conectar({ atendenteId: 41, tenantId: TENANT, deptoIds: [3], numeroIds: [99] });   // só nº 99 (ativo)
