@@ -28,10 +28,12 @@ async function carregarContexto(conn, conversaId) {
   }));
 }
 
-/** Gera a sugestão. Lança com mensagem amigável em vez de propagar o erro cru
-    do provedor — quem chama (rota HTTP) só precisa exibir err.message. */
-async function gerar(conn, config, conversaId) {
-  const mensagens = await carregarContexto(conn, conversaId);
+/** Chama o provedor com o contexto JÁ CARREGADO (sem `conn` — a chamada externa
+ *  pode levar até 45s; quem chama já deve ter devolvido a conexão ao pool antes
+ *  de rodar isto, senão dez sugestões simultâneas travam o pool inteiro, ver
+ *  api/conversas.js). Lança com mensagem amigável em vez de propagar o erro cru
+ *  do provedor — quem chama (rota HTTP) só precisa exibir err.message. */
+async function gerarComContexto(config, mensagens) {
   if (!mensagens.length) throw new Error('Sem mensagens nesta conversa ainda para basear uma sugestão.');
   const out = await client.chamar({ config, sistema: SISTEMA, mensagens, semFerramentas: true });
   const texto = (out.texto || '').trim();
@@ -39,4 +41,12 @@ async function gerar(conn, config, conversaId) {
   return texto;
 }
 
-module.exports = { gerar };
+/** Atalho que carrega o contexto E chama o provedor numa tacada só — use só
+ *  quando `conn` puder ficar ocupada durante a chamada externa (não é o caso
+ *  da rota HTTP; ver gerarComContexto + carregarContexto separados). */
+async function gerar(conn, config, conversaId) {
+  const mensagens = await carregarContexto(conn, conversaId);
+  return gerarComContexto(config, mensagens);
+}
+
+module.exports = { gerar, gerarComContexto, carregarContexto };

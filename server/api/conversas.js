@@ -530,7 +530,11 @@ router.post('/:id/sugestao-resposta', naoAuditor, naoSuporte, sugestaoIaLimiter,
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
   try {
-    const sugestao = await db.comTenant(req.tenantId, async (conn) => {
+    // Carrega config/contexto DENTRO da transação, mas devolve a conexão ao
+    // pool ANTES de chamar o provedor de IA (a chamada externa pode levar até
+    // 45s). Com pool de 10, dez sugestões simultâneas presas em comTenant()
+    // esgotariam o pool inteiro e derrubariam o webhook e o resto da API.
+    const { config, mensagens } = await db.comTenant(req.tenantId, async (conn) => {
       if (!(await conversaNoEscopo(conn, id, req.perfil))) {
         throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
       }
@@ -549,8 +553,12 @@ router.post('/:id/sugestao-resposta', naoAuditor, naoSuporte, sugestaoIaLimiter,
       if (!config) {
         throw new RespostaHttp(400, { error: 'Nenhum provedor de IA configurado. Configure em Administração → Agente de IA.' });
       }
-      return sugestaoResposta.gerar(conn, config, id);
+      const mensagens = await sugestaoResposta.carregarContexto(conn, id);
+      return { config, mensagens };
     });
+
+    // A conexão JÁ FOI DEVOLVIDA ao pool aqui — a chamada externa roda livre.
+    const sugestao = await sugestaoResposta.gerarComContexto(config, mensagens);
     res.json({ sugestao });
   } catch (err) {
     if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
