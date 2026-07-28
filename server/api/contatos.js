@@ -13,6 +13,7 @@ const express = require('express');
 const db = require('../db/pool');
 const { exigirPapel } = require('../auth/rbac');
 const { acharClientePorTelefone, dadosClienteWinthor } = require('../utils/clienteLookup');
+const { normalizar: normalizarTelefone } = require('../utils/telefone');
 const { publish } = require('../realtime/hub');
 
 const router = express.Router();
@@ -127,11 +128,19 @@ function textoOpcional(valor, limite) {
   return String(valor).trim().slice(0, limite) || null;
 }
 
-function telefoneValido(valor, obrigatorio = false) {
+/**
+ * @param {boolean} normalizarPrincipal  usa a MESMA normalização do webhook/envio
+ *   (utils/telefone::normalizar — adiciona o DDI 55 em número BR de 10/11
+ *   dígitos). Só o telefone PRINCIPAL casa com `acharContato`/`variantes` (o
+ *   que identifica o contato nas conversas); sem isso, um telefone digitado
+ *   sem DDI no CRM ("62999999999") grava diferente do que o WhatsApp usa
+ *   ("5562999999999") e vira um contato duplicado, com histórico partido.
+ */
+function telefoneValido(valor, obrigatorio = false, normalizarPrincipal = false) {
   const telefone = String(valor || '').replace(/\D/g, '').slice(0, 20);
   if (!telefone && !obrigatorio) return null;
   if (telefone.length < 8) return undefined;
-  return telefone;
+  return normalizarPrincipal ? normalizarTelefone(telefone) : telefone;
 }
 
 function dadosDaFicha(body) {
@@ -342,7 +351,7 @@ router.get('/historico', async (req, res, next) => {
 
 // POST /api/contatos — cria uma ficha antes do primeiro atendimento ativo.
 router.post('/', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
-  const telefone = telefoneValido(req.body && req.body.telefone, true);
+  const telefone = telefoneValido(req.body && req.body.telefone, true, true);
   if (telefone === undefined) return res.status(400).json({ error: 'Informe um telefone válido com DDD.' });
   const ficha = dadosDaFicha(req.body);
   if (ficha.erro) return res.status(400).json({ error: ficha.erro });
@@ -433,7 +442,7 @@ router.put('/:id', naoAuditor, async (req, res, next) => {
   if ((tem(b, 'telefone') || tem(b, 'vinculosAtendimento')) && !gestor) {
     return res.status(403).json({ error: 'Telefone e responsáveis por departamento só podem ser alterados pela gestão.' });
   }
-  const telefone = tem(b, 'telefone') ? telefoneValido(b.telefone, true) : null;
+  const telefone = tem(b, 'telefone') ? telefoneValido(b.telefone, true, true) : null;
   if (tem(b, 'telefone') && telefone === undefined) {
     return res.status(400).json({ error: 'Informe um telefone válido com DDD.' });
   }

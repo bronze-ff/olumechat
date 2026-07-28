@@ -16,6 +16,7 @@ const db = require('../db/pool');
 const {
   partesTelefone, acharClientePorTelefone, dadosClienteWinthor, registrarProvedor,
 } = require('../utils/clienteLookup');
+const { normalizar, variantes } = require('../utils/telefone');
 const contatosRoutes = require('../api/contatos');
 
 // ---------- clienteLookup (unidade) ----------
@@ -83,6 +84,7 @@ function fakeConn({
         return { rows: vinculosValidos ? [{ ATENDENTE_ID: binds.a }] : [] };
       }
       if (sql.startsWith('UPDATE contato')) { cap.update = binds; return { rowsAffected: 1 }; }
+      if (sql.startsWith('INSERT INTO contato (')) { cap.insert = binds; return { rows: [{ ID: 42 }] }; }
       if (sql.startsWith('DELETE FROM contato_atendente_depto')) {
         cap.deleteVinculos = binds;
         return { rowsAffected: 1 };
@@ -192,5 +194,66 @@ test('GET /contatos/:id: TAGS_CONTATO já vem decodificado (array) do driver —
     const r = await req(port, 'GET', '/api/contatos/5');
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.tags, [1, 2, 3]);
+  } finally { server.close(); }
+});
+
+// REGRESSÃO: o manager digitava "62999999999" (11 díg, sem DDI) no CRM e o
+// contato gravava assim; o webhook/envio normalizam pra "5562999999999" via
+// utils/telefone::normalizar — resultado era um contato DUPLICADO por
+// telefone e o histórico partia ao meio na primeira interação por WhatsApp.
+// POST e PUT agora usam a MESMA função de normalização.
+
+test('POST /contatos: telefone com 11 dígitos (DDD + 9º dígito, sem DDI) grava com o DDI 55', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'POST', '/api/contatos', { telefone: '62999999999' });
+    assert.equal(r.status, 201);
+    assert.equal(cap.insert.tel, '5562999999999');
+  } finally { server.close(); }
+});
+
+test('POST /contatos: telefone com 13 dígitos (já com DDI) não muda', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'POST', '/api/contatos', { telefone: '5562999999999' });
+    assert.equal(r.status, 201);
+    assert.equal(cap.insert.tel, '5562999999999');
+  } finally { server.close(); }
+});
+
+test('POST /contatos: telefone digitado com máscara ("(62) 99999-9999") normaliza igual', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'POST', '/api/contatos', { telefone: '(62) 99999-9999' });
+    assert.equal(r.status, 201);
+    assert.equal(cap.insert.tel, '5562999999999');
+  } finally { server.close(); }
+});
+
+test('POST /contatos: telefone gravado casa com a MESMA variante que o webhook usaria pra achar o contato (dedup do 9º dígito)', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    // Manager digita SEM o 9º dígito (forma que o WhatsApp às vezes entrega).
+    const r = await req(port, 'POST', '/api/contatos', { telefone: '6299999999' });
+    assert.equal(r.status, 201);
+    // acharContato busca por variantes(telefone_recebido_do_whatsapp) IN (...).
+    // O telefone gravado pelo CRM precisa estar entre as variantes do mesmo
+    // número, senão o contato criado manualmente nunca casa com a conversa.
+    assert.ok(variantes('5562999999999').includes(cap.insert.tel));
+  } finally { server.close(); }
+});
+
+test('PUT /contatos/:id: telefone normaliza igual ao POST (mesma função)', async () => {
+  const cap = {};
+  const { server, port } = await app(fakeConn({ cap }));
+  try {
+    const r = await req(port, 'PUT', '/api/contatos/5', { telefone: '62988887777' });
+    assert.equal(r.status, 200);
+    assert.equal(cap.update.tel, normalizar('62988887777'));
+    assert.equal(cap.update.tel, '5562988887777');
   } finally { server.close(); }
 });
