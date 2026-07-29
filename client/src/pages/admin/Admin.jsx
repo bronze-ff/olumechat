@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import useScrollEdges from '../../hooks/useScrollEdges';
 import Brand from '../../components/ui/Brand';
 import Icon from '../../components/ui/Icon';
 import ThemeMenu from '../../components/ui/ThemeMenu';
@@ -75,21 +76,25 @@ function DesktopNav({ abas, atual, onChange }) {
 export default function Admin() {
   const { isGestor, isAdmin, isAuditor, loading, user, logout, encerrarSuporte } = useAuth();
   const [aba, setAba] = useState('monitor');
+  const navMobileRef = useRef(null);
   // Sessão de implantação do operador (FIL-70): perfil ADMIN temporário, sem
   // criar um atendente fictício dentro do cliente. AUDITOR entra somente-leitura
   // (backend já restringe as mutações — ver naoAuditor/exigirPapel no server).
   const podeVerAdmin = isGestor || user?.suporte || isAuditor;
 
-  if (loading) return null;
-  if (!podeVerAdmin) return <Navigate to="/conversas" replace />;
-
   // `papeis` (allowlist explícita) tem precedência sobre `adminOnly`; sem
   // nenhum dos dois, a aba vale para todo mundo que já passou pelo
-  // `podeVerAdmin` acima.
+  // `podeVerAdmin` abaixo. Calculado antes dos early returns só pra alimentar
+  // o useScrollEdges (hook não pode vir depois de um return condicional).
   const abas = ABAS.filter((item) => (
     (item.papeis ? item.papeis.includes(user?.papel) : (!item.adminOnly || isAdmin))
     && (!item.suporteOnly || user?.suporte)
   ));
+  const navMobile = useScrollEdges(navMobileRef, [abas.length]);
+
+  if (loading) return null;
+  if (!podeVerAdmin) return <Navigate to="/conversas" replace />;
+
   const atual = abas.find((item) => item.id === aba) || abas[0];
   const Conteudo = atual.el;
   const empresa = localStorage.getItem('empresa') || 'sua empresa';
@@ -153,27 +158,43 @@ export default function Admin() {
             </Link>
           </div>
           {user?.suporte && (
-            <p className="mx-4 mb-2 inline-flex items-center gap-1.5 bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-medium px-2.5 py-1 rounded-md">
-              <Icon name="support" size={13} />
-              Implantação Falatta · acesso administrativo
-            </p>
-          )}
-          <nav className="flex gap-1 px-3 pb-2 overflow-x-auto" aria-label="Seções administrativas">
-            {abas.map((item) => (
+            <div className="mx-4 mb-2 flex items-center gap-2">
+              <p className="flex-1 min-w-0 inline-flex items-center gap-1.5 bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-medium px-2.5 py-1 rounded-md">
+                <Icon name="support" size={13} />
+                Implantação Falatta · acesso administrativo
+              </p>
               <button
-                key={item.id}
-                onClick={() => setAba(item.id)}
-                className={`shrink-0 min-h-9 px-3 rounded-lg border flex items-center gap-2 text-xs font-medium ${
-                  atual.id === item.id
-                    ? 'bg-brand-50 border-brand-100 text-brand-800'
-                    : 'border-transparent text-stone-600 hover:bg-paper-100'
-                }`}
+                type="button"
+                onClick={encerrarSuporte}
+                title="Voltar ao painel do operador"
+                aria-label="Voltar ao painel do operador"
+                className="shrink-0 w-8 h-8 rounded-md border border-amber-200 bg-amber-50 text-amber-800 flex items-center justify-center hover:bg-amber-100"
               >
-                <Icon name={item.icon} size={15} />
-                {item.rotulo}
+                <Icon name="logout" size={14} />
               </button>
-            ))}
-          </nav>
+            </div>
+          )}
+          <div className="relative">
+            <nav ref={navMobileRef} className="flex gap-1 px-3 pb-2 overflow-x-auto" aria-label="Seções administrativas">
+              {abas.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setAba(item.id)}
+                  className={`shrink-0 min-h-9 px-3 rounded-lg border flex items-center gap-2 text-xs font-medium ${
+                    atual.id === item.id
+                      ? 'bg-brand-50 border-brand-100 text-brand-800'
+                      : 'border-transparent text-stone-600 hover:bg-paper-100'
+                  }`}
+                >
+                  <Icon name={item.icon} size={15} />
+                  {item.rotulo}
+                </button>
+              ))}
+            </nav>
+            {/* Sinaliza que a barra continua além da borda (FIL-89, adendo). */}
+            <div className={`pointer-events-none absolute inset-y-0 bottom-2 left-0 w-6 bg-gradient-to-r from-white to-transparent transition-opacity ${navMobile.atStart ? 'opacity-0' : 'opacity-100'}`} aria-hidden="true" />
+            <div className={`pointer-events-none absolute inset-y-0 bottom-2 right-0 w-6 bg-gradient-to-l from-white to-transparent transition-opacity ${navMobile.atEnd ? 'opacity-0' : 'opacity-100'}`} aria-hidden="true" />
+          </div>
         </header>
 
         <header className="hidden lg:flex h-[56px] px-6 items-center justify-between bg-white border-b border-paper-300 sticky top-0 z-20">
@@ -186,10 +207,21 @@ export default function Admin() {
           </div>
           <div className="flex items-center gap-2">
             {user?.suporte && (
-              <span className="inline-flex items-center gap-2 text-xs font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5">
-                <Icon name="support" size={15} />
-                Implantação Falatta · alterações auditadas
-              </span>
+              <>
+                <span className="inline-flex items-center gap-2 text-xs font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5">
+                  <Icon name="support" size={15} />
+                  Implantação Falatta · alterações auditadas
+                </span>
+                <button
+                  type="button"
+                  onClick={encerrarSuporte}
+                  title="Voltar ao painel do operador"
+                  aria-label="Voltar ao painel do operador"
+                  className="w-8 h-8 rounded-md border border-amber-200 bg-amber-50 text-amber-800 flex items-center justify-center hover:bg-amber-100"
+                >
+                  <Icon name="logout" size={15} />
+                </button>
+              </>
             )}
             <ThemeMenu />
           </div>
