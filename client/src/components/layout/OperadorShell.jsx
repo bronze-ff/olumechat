@@ -1,7 +1,9 @@
+import { useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import Brand from '../ui/Brand';
 import Icon from '../ui/Icon';
 import ThemeMenu from '../ui/ThemeMenu';
+import useScrollEdges from '../../hooks/useScrollEdges';
 
 // Casco visual do painel do operador (FIL-70): sidebar + cabeçalho mobile +
 // breadcrumb desktop. Extraído de Operador.jsx (FIL-80) para o painel
@@ -9,6 +11,8 @@ import ThemeMenu from '../ui/ThemeMenu';
 // identidade) sem duplicar o layout inteiro em cada página nova.
 export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titulo, descricao, acao, erro, onFecharErro, children }) {
   const inicial = (eu.data?.nome || eu.data?.email || '?').slice(0, 1).toUpperCase();
+  const navMobileRef = useRef(null);
+  const navMobile = useScrollEdges(navMobileRef, [secoes.length]);
 
   return (
     <div className="admin-surface min-h-screen bg-paper-50 lg:flex">
@@ -87,23 +91,29 @@ export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titul
               <Icon name="logout" />
             </button>
           </div>
-          <nav className="flex gap-1 px-3 pb-2 overflow-x-auto" aria-label="Seções do operador">
-            {secoes.map((item) => (
-              <NavLink
-                key={item.id}
-                to={item.to}
-                end
-                className={({ isActive }) => `shrink-0 min-h-9 px-3 rounded-lg border flex items-center gap-2 text-xs font-medium ${
-                  isActive
-                    ? 'bg-brand-50 border-brand-100 text-brand-800'
-                    : 'border-transparent text-stone-600 hover:bg-paper-100'
-                }`}
-              >
-                <Icon name={item.icon} size={15} />
-                {item.label}
-              </NavLink>
-            ))}
-          </nav>
+          <div className="relative">
+            <nav ref={navMobileRef} className="flex gap-1 px-3 pb-2 overflow-x-auto" aria-label="Seções do operador">
+              {secoes.map((item) => (
+                <NavLink
+                  key={item.id}
+                  to={item.to}
+                  end
+                  className={({ isActive }) => `shrink-0 min-h-9 px-3 rounded-lg border flex items-center gap-2 text-xs font-medium ${
+                    isActive
+                      ? 'bg-brand-50 border-brand-100 text-brand-800'
+                      : 'border-transparent text-stone-600 hover:bg-paper-100'
+                  }`}
+                >
+                  <Icon name={item.icon} size={15} />
+                  {item.label}
+                </NavLink>
+              ))}
+            </nav>
+            {/* Sinaliza que a barra continua além da borda (sem isso, no
+                celular parece que só existem as primeiras seções visíveis). */}
+            <div className={`pointer-events-none absolute inset-y-0 bottom-2 left-0 w-6 bg-gradient-to-r from-white to-transparent transition-opacity ${navMobile.atStart ? 'opacity-0' : 'opacity-100'}`} aria-hidden="true" />
+            <div className={`pointer-events-none absolute inset-y-0 bottom-2 right-0 w-6 bg-gradient-to-l from-white to-transparent transition-opacity ${navMobile.atEnd ? 'opacity-0' : 'opacity-100'}`} aria-hidden="true" />
+          </div>
         </header>
 
         <header className="hidden lg:flex h-[56px] px-6 items-center justify-between bg-white border-b border-paper-300 sticky top-0 z-20">
