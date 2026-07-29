@@ -73,8 +73,9 @@ function instalarBanco(capturas = []) {
 
 function startApp() {
   const app = express();
-  // Igual ao app.js — é o que faz req.ip vir do X-Forwarded-For, e é assim que
-  // cada teste consegue seu próprio balde de rate-limit.
+  // É o que faz req.ip vir do X-Forwarded-For, e é assim que cada teste
+  // consegue seu próprio balde de rate-limit (o valor exato — quantos hops —
+  // não importa aqui; ver test/trust-proxy.test.js para o valor real do app.js).
   app.set('trust proxy', 1);
   app.use('/api', express.json());
   app.use('/api/auth', authRoutes);

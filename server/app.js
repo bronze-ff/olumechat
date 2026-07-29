@@ -16,9 +16,12 @@ const cfg = loadConfig();
 const hub = require('./realtime/hub');
 
 const app = express();
-// 1 hop confiável (o IIS/ARR na frente). Não usar `true` (confia em qualquer
+// 2 hops confiáveis: Cloudflare (borda) → Traefik (Coolify) → Express. Cada um
+// agrega seu endereço percebido ao X-Forwarded-For — com um valor menor, o
+// rate limit por IP e a auditoria (operador/auditoria.js) enxergariam o IP de
+// um dos proxies, não o do cliente. Não usar `true` (confia em qualquer
 // X-Forwarded-For → permite spoof de IP e burla o rate-limit por IP).
-app.set('trust proxy', 1);
+app.set('trust proxy', 2);
 
 // O frontend de produção vive em outro domínio (Vercel). CORS é restrito ao
 // APP_URL e, opcionalmente, às origens adicionais de CORS_ORIGINS. Aplicado
@@ -69,14 +72,20 @@ app.get('/health/live', (req, res) =>
   res.json({ status: 'ok', service: 'olume-chat', ts: new Date().toISOString() })
 );
 async function readiness(req, res) {
+  // Estado do hub SSE/LISTEN-NOTIFY (FIL-93/P0.7) — só REPORTADO, nunca gate
+  // do status HTTP: o hub tem retry próprio (realtime/hub.js) e uma queda
+  // transitória durante um rolling update não pode tirar uma instância
+  // saudável de rotação. De propósito, sem checar a mídia guardada no bucket
+  // remoto aqui — isso é diagnóstico próprio, não dependência de readiness.
+  const hubStatus = hub.status();
   let conn;
   try {
     conn = await db.getConnection();
     await conn.execute('SELECT 1 AS ok');
-    return res.json({ status: 'ok', service: 'olume-chat', database: 'ok', ts: new Date().toISOString() });
+    return res.json({ status: 'ok', service: 'olume-chat', database: 'ok', hub: hubStatus, ts: new Date().toISOString() });
   } catch (err) {
     console.error('[health] readiness falhou:', err.message);
-    return res.status(503).json({ status: 'indisponivel', service: 'olume-chat', database: 'erro' });
+    return res.status(503).json({ status: 'indisponivel', service: 'olume-chat', database: 'erro', hub: hubStatus });
   } finally {
     if (conn) await conn.close().catch(() => {});
   }
@@ -193,7 +202,12 @@ function versaoApp() {
 async function start() {
   try {
     await db.initPool();
-    hub.start();
+    // Aguarda a tentativa inicial de conexão do hub antes de aceitar tráfego
+    // (FIL-93/P0.7): não bloqueia se DATABASE_URL_DIRECT estiver ausente
+    // (hub.start() resolve rápido nesse caso) nem se a conexão falhar (o hub
+    // já agenda retry sozinho) — só garante que /health/ready não reporte um
+    // estado que o processo nem tentou alcançar ainda.
+    await hub.start();
     // Recuperação pós-restart: redistribui conversas que ficaram aguardando.
     require('./fila/distribuidor').varrerPendentes();
     // Timeout de inatividade do bot (autoatendimento).
@@ -204,8 +218,11 @@ async function start() {
     require('./consumo/fechamento').iniciar();
     // financeiro: geração mensal de fatura + marcação de atrasadas (FIL-79).
     require('./financeiro/faturamento').iniciar();
-    // Telemetria/licença (Pulso) — opcional: sem PULSO_* no .env fica inerte (não derruba o app).
-    require('./telemetria/pulso-agent').iniciar({
+    // Telemetria/licença (Pulso) — opcional: sem PULSO_* no .env fica inerte
+    // (não derruba o app). Capturado (não descartado) porque tem estado
+    // próprio de módulo (timer) — chamar iniciar() de novo no shutdown pra
+    // conseguir o parar() vazaria um segundo timer por cima do primeiro.
+    const pulso = require('./telemetria/pulso-agent').iniciar({
       app: 'mc-atendimentos',
       versao: versaoApp(),
       online: () => require('./realtime/presence').snapshot().filter((p) => p.estado === 'online').length,
@@ -214,12 +231,35 @@ async function start() {
       console.log(`[mc-zap] Rodando na porta ${cfg.port} — ${cfg.nodeEnv}`);
     });
 
+    // FIL-93 (P0.7): shutdown gracioso com prazo máximo. server.close() só
+    // chama seu callback quando TODA conexão HTTP existente termina — uma SSE
+    // fica aberta indefinidamente, então sem fechar essas conexões (e sem um
+    // deadline) o processo travaria no SIGTERM em vez de sair limpo.
     function shutdown() {
       console.log('[mc-zap] Encerrando...');
+      const prazoMs = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000;
+      const forcar = setTimeout(() => {
+        console.error(`[mc-zap] Encerramento excedeu ${prazoMs}ms — saindo à força.`);
+        process.exit(1);
+      }, prazoMs);
+
+      // Para timers periódicos primeiro (não abrem transação nova depois
+      // daqui) e fecha as conexões SSE (senão prendem server.close()).
+      require('./bot/sweeper').parar();
+      require('./campanha/dispatcher').parar();
+      require('./consumo/fechamento').parar();
+      require('./financeiro/faturamento').parar();
+      pulso.parar();
+      require('./api/stream').encerrarTodas();
+
       server.close(async () => {
-        await hub.stop();
-        await db.closePool();
-        process.exit(0);
+        try {
+          await hub.stop();
+          await db.closePool();
+        } finally {
+          clearTimeout(forcar);
+          process.exit(0);
+        }
       });
     }
     process.on('SIGTERM', shutdown);

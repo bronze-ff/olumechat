@@ -106,6 +106,16 @@ function createHub({ clientFactory = (connectionString) => new Client({ connecti
     publisher = null;
   }
 
+  /**
+   * Estado do barramento para /health/ready (FIL-93/P0.7): `habilitado` diz
+   * se DATABASE_URL_DIRECT está configurada (sem ela o SSE externo é
+   * opcionalmente desligado, não é uma falha); `conectado` diz se listener e
+   * publisher estão de pé agora.
+   */
+  function status() {
+    return { habilitado: Boolean(directUrl), conectado: Boolean(listener && publisher) };
+  }
+
   function publish(evento) {
     const id = tenantValido(evento && evento.tenantId);
     // Assinantes sem tenant são mantidos para compatibilidade com workers/testes;
@@ -149,7 +159,7 @@ function createHub({ clientFactory = (connectionString) => new Client({ connecti
     };
   }
 
-  return { publish, subscribe, start, stop, _canalDoTenant: canalDoTenant };
+  return { publish, subscribe, start, stop, status, _canalDoTenant: canalDoTenant };
 }
 
 const hub = createHub();
@@ -158,6 +168,7 @@ module.exports = {
   subscribe: hub.subscribe,
   start: hub.start,
   stop: hub.stop,
+  status: hub.status,
   createHub,
   canalDoTenant,
 };

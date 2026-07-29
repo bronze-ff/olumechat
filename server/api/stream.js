@@ -35,6 +35,29 @@ const { carregarPerfil, PERFIL_SUPORTE } = require('../auth/rbac');
 
 const router = express.Router();
 
+// Conexões SSE abertas (FIL-93/P0.7): server.close() (app.js) só chama seu
+// callback quando TODAS as conexões existentes terminam — uma SSE fica aberta
+// indefinidamente até o cliente reconectar, então sem encerrar essas
+// conexões no SIGTERM o shutdown travaria até o prazo máximo (ou para
+// sempre, se não houvesse um).
+const conexoesAbertas = new Set();
+
+// Achado de review P3 (Codex, PR #39): entre o ticket ser consumido e a
+// resposta virar SSE, o handler faz um `await carregarPerfil(...)` (consulta
+// real ao banco) — se o drain começar NESSA janela, a conexão ainda não está
+// em `conexoesAbertas` e escaparia do encerramento, prendendo server.close()
+// até o prazo máximo do shutdown estourar. Esta flag é checada depois de
+// QUALQUER await no handler, antes de abrir o stream.
+let encerrando = false;
+
+/** Fecha toda conexão SSE aberta agora e passa a rejeitar setup em andamento. O client reconecta sozinho (`retry: 5000` já escrito no stream). */
+function encerrarTodas() {
+  encerrando = true;
+  for (const res of conexoesAbertas) {
+    try { res.end(); } catch { /* já fechada */ }
+  }
+}
+
 // Emite um ticket de uso único (cliente já autenticado por JWT).
 router.post('/ticket', authMiddleware, (req, res) => {
   res.json({ ticket: criarTicket(req.user || {}) });
@@ -84,6 +107,11 @@ router.get('/', async (req, res) => {
     }
   }
 
+  // O setup acima pode ter atravessado um SIGTERM (await carregarPerfil em
+  // voo quando encerrarTodas() varreu conexoesAbertas) — não abre stream
+  // novo depois que o drain já começou.
+  if (encerrando) return res.status(503).json({ error: 'Servidor em encerramento — tente novamente em instantes.' });
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
@@ -92,6 +120,7 @@ router.get('/', async (req, res) => {
   });
   res.write('retry: 5000\n\n');            // o navegador reconecta em 5s se cair
   res.write('event: ready\ndata: {}\n\n'); // sinaliza conexão pronta
+  conexoesAbertas.add(res);
 
   const enviar = (evt) => {
     if (evt.tenantId === undefined) {
@@ -124,6 +153,7 @@ router.get('/', async (req, res) => {
   if (hb.unref) hb.unref();
 
   req.on('close', () => {
+    conexoesAbertas.delete(res);
     clearInterval(hb);
     cancelar();
     if (!ehSuporte) presence.desconectar(perfil.atendenteId);
@@ -132,3 +162,4 @@ router.get('/', async (req, res) => {
 
 module.exports = router;
 module.exports.podeReceber = podeReceber; // uso em teste
+module.exports.encerrarTodas = encerrarTodas; // uso no shutdown (app.js) e em teste
