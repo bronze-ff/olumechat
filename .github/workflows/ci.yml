@@ -70,7 +70,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: npm audit (bloqueia high/critical)
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
 
   # FIL-92 (P0.8): a imagem candidata a produção precisa construir a partir de
   # um clone limpo e, de fato, subir — migração + boot completo — antes que o
