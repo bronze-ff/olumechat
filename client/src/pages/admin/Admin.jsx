@@ -5,6 +5,7 @@ import useScrollEdges from '../../hooks/useScrollEdges';
 import Brand from '../../components/ui/Brand';
 import Icon from '../../components/ui/Icon';
 import ThemeMenu from '../../components/ui/ThemeMenu';
+import SuporteBadge from '../../components/layout/SuporteBadge';
 import Departamentos from './Departamentos';
 import Atendentes from './Atendentes';
 import Numeros from './Numeros';
@@ -158,20 +159,8 @@ export default function Admin() {
             </Link>
           </div>
           {user?.suporte && (
-            <div className="mx-4 mb-2 flex items-center gap-2">
-              <p className="flex-1 min-w-0 inline-flex items-center gap-1.5 bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-medium px-2.5 py-1 rounded-md">
-                <Icon name="support" size={13} />
-                Implantação Falatta · acesso administrativo
-              </p>
-              <button
-                type="button"
-                onClick={encerrarSuporte}
-                title="Voltar ao painel do operador"
-                aria-label="Voltar ao painel do operador"
-                className="shrink-0 w-8 h-8 rounded-md border border-amber-200 bg-amber-50 text-amber-800 flex items-center justify-center hover:bg-amber-100"
-              >
-                <Icon name="logout" size={14} />
-              </button>
+            <div className="mx-4 mb-2">
+              <SuporteBadge compact />
             </div>
           )}
           <div className="relative">
@@ -206,23 +195,7 @@ export default function Admin() {
             <span className="font-semibold text-ink-950">{atual.rotulo}</span>
           </div>
           <div className="flex items-center gap-2">
-            {user?.suporte && (
-              <>
-                <span className="inline-flex items-center gap-2 text-xs font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5">
-                  <Icon name="support" size={15} />
-                  Implantação Falatta · alterações auditadas
-                </span>
-                <button
-                  type="button"
-                  onClick={encerrarSuporte}
-                  title="Voltar ao painel do operador"
-                  aria-label="Voltar ao painel do operador"
-                  className="w-8 h-8 rounded-md border border-amber-200 bg-amber-50 text-amber-800 flex items-center justify-center hover:bg-amber-100"
-                >
-                  <Icon name="logout" size={15} />
-                </button>
-              </>
-            )}
+            {user?.suporte && <SuporteBadge />}
             <ThemeMenu />
           </div>
         </header>
