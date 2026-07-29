@@ -13,10 +13,41 @@
 // (contato, conversa, mensagem, auditoria) roda DENTRO de comTenant(tenantId).
 // phone_number_id desconhecido (número não provisionado para nenhum tenant) =
 // evento IGNORADO — nunca cria conversa órfã nem adivinha um tenant.
+//
+// ── REPLAY: ESTE MÓDULO RODA MAIS DE UMA VEZ PARA O MESMO PAYLOAD ───────────
+// Com a entrada durável (FIL-94), um evento aceito é reprocessado se o processo
+// morreu no meio. Duas consequências que MUDARAM o desenho daqui (achados P1 da
+// review do PR #40):
+//
+//   1. DEDUP ANTES DE MUTAR (não depois). O dedup por WAMID era o
+//      `ON CONFLICT DO NOTHING` do insertInbound — ou seja, DEPOIS de
+//      getOrCreateContato + openOrRenewConversa + consumo `conversa_iniciada`.
+//      No replay isso rebobinava `ultima_msg_em`/`janela_expira_em` de conversa
+//      aberta (ou criava conversa nova vazia, se a original já tinha sido
+//      resolvida) e podia cobrar `conversa_iniciada` de novo. Agora processChange
+//      consulta de uma vez os WAMIDs do change que JÁ estão gravados e pula
+//      essas mensagens sem tocar em NADA. O ON CONFLICT continua lá como rede
+//      contra corrida (dois processos no mesmo instante), não como dedup.
+//      ⚠️ O pré-check é POR MENSAGEM: payload com 3 mensagens das quais 2 já
+//      entraram tem que processar a terceira normalmente.
+//      ⚠️ RECIBO DE STATUS (`value.statuses`) não tem pré-check: `updateStatus`
+//      é um UPDATE por WAMID e o evento de tempo real é idempotente, então
+//      repetir no replay não muda o resultado — o preço é reemitir o SSE de
+//      status. Trocar isso por dedup exigiria uma consulta por recibo, e um
+//      lote de campanha traz centenas deles.
+//
+//   2. EFEITOS PÓS-COMMIT SÃO PERSISTIDOS (outbox), não só devolvidos em
+//      memória. Commitar o change e morrer antes de despachar deixava o cliente
+//      sem resposta automática — e o replay, que agora pula a mensagem
+//      duplicada, não teria como reproduzir o efeito. Ver webhook/efeitoStore.js.
+//      `processPayload(payload, { eventoId })` grava os efeitos na MESMA
+//      transação do change e despacha lendo do banco; sem `eventoId` (chamada
+//      direta, testes de unidade) mantém o comportamento antigo, em memória.
 'use strict';
 
 const db = require('../db/pool');
 const { tipos } = db;
+const efeitoStore = require('./efeitoStore');
 const { downloadMedia } = require('../graph/media');
 const { classificar, registrarOpt, normalizar } = require('./optOut');
 const { publish } = require('../realtime/hub');
@@ -434,6 +465,25 @@ async function anotarRespostaCampanha(conn, { conversaId, contatoId, telefone })
   }
 }
 
+/**
+ * WAMIDs deste change que JÁ estão gravados em `mensagem` (uma consulta para o
+ * lote inteiro, não uma por mensagem). É o dedup do REPLAY: usado ANTES de
+ * qualquer escrita, para não rebobinar conversa nem cobrar conversa de novo
+ * (ver item 1 do bloco REPLAY no cabeçalho). Roda dentro do comTenant(), então
+ * a RLS já limita o resultado ao tenant corrente.
+ */
+async function wamidsJaGravados(conn, mensagens) {
+  const ids = [...new Set((mensagens || []).map((m) => m && m.id).filter(Boolean))];
+  if (!ids.length) return new Set();
+  const binds = {};
+  const marks = ids.map((id, i) => { binds['w' + i] = id; return ':w' + i; });
+  const r = await conn.execute(
+    `SELECT wamid FROM mensagem WHERE wamid IN (${marks.join(',')})`,
+    binds
+  );
+  return new Set((r.rows || []).map((l) => l.WAMID).filter(Boolean));
+}
+
 /** Processa UMA change (já com o tenant/número resolvidos) dentro de comTenant().
     Devolve a lista de eventos a publicar/despachar depois do commit. */
 async function processChange(conn, numero, value) {
@@ -441,9 +491,15 @@ async function processChange(conn, numero, value) {
   const numeroId = numero.id;
   const contacts = value.contacts || [];
   const eventos = [];
+  const jaGravados = await wamidsJaGravados(conn, value.messages);
 
   // --- Mensagens recebidas ---
   for (const msg of value.messages || []) {
+    // REPLAY (P1-2): mensagem já gravada em entrega anterior → NÃO toca em
+    // nada (contato, conversa, janela de 24h, consumo, download de mídia). Os
+    // efeitos pós-commit daquela entrega estão no outbox e são despachados de
+    // lá — reproduzi-los aqui é que seria duplicar.
+    if (msg.id && jaGravados.has(msg.id)) continue;
     const ts = epochToDate(msg.timestamp);
     // Cliente trocou de número (system/user_changed_number): o número ANTIGO só
     // vem no texto livre `system.body` ("...changed from X to Y") — tanto `from`
@@ -652,8 +708,75 @@ async function processChange(conn, numero, value) {
   return eventos;
 }
 
-/** Processa um payload bruto do webhook (objeto já parseado). Idempotente. */
-async function processPayload(payload) {
+/**
+ * Despacha UM efeito pós-commit. Chamada única para os dois caminhos (memória e
+ * outbox), e é sempre "dar a partida": bot/IA/envios seguem assíncronos e
+ * isolados, como sempre foram — o que a durabilidade garante é que a partida
+ * acontece, não que o runtime terminou (ele tem o próprio estado).
+ */
+function despachar(evt) {
+  const runtime = require('../bot/runtime');
+  if (evt.tipo === 'bot_iniciar') { runtime.iniciarFluxo(evt.tenantId, evt.conversaId); return; }
+  if (evt.tipo === 'bot_entrada') { runtime.processarEntrada(evt.tenantId, evt.conversaId, evt.texto); return; }
+  if (evt.tipo === 'ia_entrada') { require('../ia/runtime').processarEntrada(evt.tenantId, evt.conversaId, evt.entrada); return; }
+  if (evt.tipo === 'encerrar_cliente') {
+    confirmarEncerramento(evt); // envia a confirmação fora da tx (isolado)
+    publish({ tipo: 'conversa', conversaId: evt.conversaId, departamentoId: evt.departamentoId, tenantId: evt.tenantId });
+    return;
+  }
+  if (evt.tipo === 'fora_horario') { enviarAvisoForaHorario(evt); return; }
+  publish(evt);
+  // Conversa nova na fila → tenta distribuir (fora da transação do webhook).
+  if (evt.tipo === 'fila') distribuidor.atribuir(evt.departamentoId);
+}
+
+/**
+ * Despacha os efeitos PERSISTIDOS de um evento que ainda não saíram, marcando
+ * cada um individualmente. É o caminho que fecha o furo P1-1: vale tanto para a
+ * primeira passada quanto para o replay (onde o dedup por WAMID não produz
+ * efeito novo nenhum, mas os efeitos da entrega anterior estão aqui).
+ *
+ * Despacha e SÓ DEPOIS marca (at-least-once) — ver o ⚠️ do efeitoStore. Efeito
+ * que falha ao despachar NÃO é marcado: o evento não conclui (guarda do
+ * eventoStore::concluir) e a recuperação tenta de novo, até o teto de tentativas.
+ * @returns {Promise<{despachados: number, pendentes: number}>}
+ */
+async function despacharPendentes(eventoId) {
+  const linhas = await efeitoStore.pendentes(eventoId);
+  let despachados = 0;
+  for (const linha of linhas) {
+    let evt;
+    try {
+      evt = { ...JSON.parse(linha.payload), tenantId: linha.tenantId };
+    } catch (err) {
+      // Efeito ilegível nunca vai ficar legível: marca para não travar o evento
+      // (o mesmo princípio do payload bruto ilegível em durabilidade.js).
+      console.error(`[webhook] efeito ${linha.id} (${linha.tipo}) com payload ilegível, descartado:`, err.message);
+      await efeitoStore.marcarDespachado(linha.id, linha.tenantId);
+      continue;
+    }
+    try {
+      despachar(evt);
+    } catch (err) {
+      console.error(`[webhook] efeito ${linha.id} (${linha.tipo}) falhou ao despachar:`, err.message);
+      continue; // sem marcar: será tentado de novo pela recuperação
+    }
+    await efeitoStore.marcarDespachado(linha.id, linha.tenantId);
+    despachados += 1;
+  }
+  return { despachados, pendentes: linhas.length - despachados };
+}
+
+/**
+ * Processa um payload bruto do webhook (objeto já parseado). Idempotente.
+ * @param {object} payload corpo do webhook já parseado
+ * @param {{eventoId?: number}} [opts] `eventoId` = linha de `webhook_evento`
+ *   (caminho durável, FIL-94): os efeitos pós-commit são gravados no outbox
+ *   dentro da transação de cada change e despachados de lá. Sem ele, os efeitos
+ *   são despachados da memória — caminho de chamada direta/teste de unidade.
+ */
+async function processPayload(payload, opts = {}) {
+  const eventoId = opts.eventoId || null;
   const entries = payload.entry || [];
   const eventosGlobais = [];
 
@@ -670,28 +793,22 @@ async function processPayload(payload) {
       }
       // Cada change roda na sua PRÓPRIA transação tenant-scoped: commit no
       // sucesso, rollback no erro (comTenant), sem misturar tenants na mesma tx.
-      const eventos = await db.comTenant(numero.tenantId, (conn) => processChange(conn, numero, value));
+      // Os efeitos entram no outbox NA MESMA TRANSAÇÃO — commitam com a
+      // mensagem ou não existem (é isso que fecha o P1-1).
+      const eventos = await db.comTenant(numero.tenantId, async (conn) => {
+        const efeitos = await processChange(conn, numero, value);
+        if (eventoId) await efeitoStore.gravar(conn, { eventoId, efeitos });
+        return efeitos;
+      });
       for (const evt of eventos) eventosGlobais.push({ ...evt, tenantId: numero.tenantId });
     }
   }
 
   // Só notifica os clientes (SSE) depois de persistir com sucesso.
   // Eventos bot_* são internos: viram chamadas ao runtime (isolado, pós-commit).
-  const runtime = require('../bot/runtime');
-  for (const evt of eventosGlobais) {
-    if (evt.tipo === 'bot_iniciar') { runtime.iniciarFluxo(evt.tenantId, evt.conversaId); continue; }
-    if (evt.tipo === 'bot_entrada') { runtime.processarEntrada(evt.tenantId, evt.conversaId, evt.texto); continue; }
-    if (evt.tipo === 'ia_entrada') { require('../ia/runtime').processarEntrada(evt.tenantId, evt.conversaId, evt.entrada); continue; }
-    if (evt.tipo === 'encerrar_cliente') {
-      confirmarEncerramento(evt); // envia a confirmação fora da tx (isolado)
-      publish({ tipo: 'conversa', conversaId: evt.conversaId, departamentoId: evt.departamentoId, tenantId: evt.tenantId });
-      continue;
-    }
-    if (evt.tipo === 'fora_horario') { enviarAvisoForaHorario(evt); continue; }
-    publish(evt);
-    // Conversa nova na fila → tenta distribuir (fora da transação do webhook).
-    if (evt.tipo === 'fila') distribuidor.atribuir(evt.departamentoId);
-  }
+  if (eventoId) return despacharPendentes(eventoId);
+  for (const evt of eventosGlobais) despachar(evt);
+  return { despachados: eventosGlobais.length, pendentes: 0 };
 }
 
-module.exports = { processPayload };
+module.exports = { processPayload, despacharPendentes };

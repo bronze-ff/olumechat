@@ -1,13 +1,19 @@
 // webhook/routes.js — Endpoints do webhook da Cloud API.
 //   GET  /webhook  → verificação (responde hub.challenge)
-//   POST /webhook  → eventos (valida assinatura, responde 200 rápido, processa async)
+//   POST /webhook  → eventos (valida assinatura, PERSISTE, responde 200, processa async)
+//
+// ⚠️ FIL-94 (docs/DEPLOY_VPS.md §P0.6): a ordem aqui é o ticket inteiro. O
+// evento bruto é gravado ANTES do ACK; só então respondemos 200 e processamos
+// fora do ciclo da resposta. Se a gravação falhar, respondemos 503 — erro
+// recuperável, que faz a Meta REENVIAR. O contrário (200 e processar em
+// memória) era o bug: um restart no instante seguinte perdia a mensagem do
+// cliente sem deixar rastro. Ver webhook/durabilidade.js.
 const express = require('express');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { rawBodyJson } = require('./rawBody');
 const { isValidSignature } = require('./verifySignature');
-const { processPayload } = require('./processEvent');
-const { getConnection, tipos } = require('../db/pool');
+const durabilidade = require('./durabilidade');
 
 /** Comparação de strings em tempo constante (anti timing attack). */
 function igualSeguro(a, b) {
@@ -65,62 +71,37 @@ function buildWebhookRouter(cfg) {
       return res.sendStatus(401);
     }
 
-    // Persiste o evento bruto e responde 200 IMEDIATAMENTE (< 250ms).
-    let eventoId;
+    // 1) DURABILIDADE ANTES DO ACK. Uma gravação, com chave idempotente.
+    let evento;
     try {
-      eventoId = await logRawEvent(req.rawBody);
+      evento = await durabilidade.receber(req.rawBody, req.body);
     } catch (err) {
-      console.error('[webhook] Falha ao gravar evento bruto:', err.message);
-      // Ainda assim respondemos 200 para evitar retries em loop; o evento
-      // será reenviado pela Meta se necessário. Logamos para investigação.
+      // Não conseguimos garantir a mensagem: 503 faz a Meta reenviar. Responder
+      // 200 aqui seria descartar a mensagem do cliente silenciosamente.
+      console.error('[webhook] Falha ao gravar evento bruto — pedindo reenvio à Meta:', err.message);
+      return res.status(503).json({ error: 'indisponivel' });
     }
+
+    // 2) ACK. A partir daqui o evento existe no banco: mesmo que o processo
+    //    morra agora, a varredura de recuperação o retoma.
     res.sendStatus(200);
 
-    // Processamento assíncrono (não bloqueia a resposta).
-    setImmediate(async () => {
-      try {
-        await processPayload(req.body);
-        if (eventoId) await markProcessed(eventoId, null);
-      } catch (err) {
+    // 3) Reentrega da Meta (mesma chave) já está gravada e processada/em
+    //    processamento — repetir o pipeline só duplicaria trabalho.
+    if (evento.duplicado) {
+      console.log('[webhook] evento reentregue pela Meta — já registrado, nada a fazer');
+      return;
+    }
+
+    // 4) Processamento fora do ciclo da resposta (não bloqueia o ACK).
+    setImmediate(() => {
+      durabilidade.processar(evento.id, req.body).catch((err) => {
         console.error('[webhook] Erro processando evento:', err.message);
-        if (eventoId) await markProcessed(eventoId, err.message).catch(() => {});
-      }
+      });
     });
   });
 
   return router;
-}
-
-async function logRawEvent(rawBody) {
-  const conn = await getConnection();
-  try {
-    const r = await conn.execute(
-      `INSERT INTO MC_ZAP_EVENTO_WEBHOOK (PAYLOAD, ASSINATURA_OK)
-       VALUES (:p, 'S') RETURNING ID INTO :id`,
-      {
-        p: rawBody.toString('utf8'),
-        id: { type: tipos.NUMBER, dir: tipos.BIND_OUT },
-      },
-      { autoCommit: true }
-    );
-    return r.outBinds.id[0];
-  } finally {
-    await conn.close().catch(() => {});
-  }
-}
-
-async function markProcessed(eventoId, erro) {
-  const conn = await getConnection();
-  try {
-    await conn.execute(
-      `UPDATE MC_ZAP_EVENTO_WEBHOOK
-          SET PROCESSADO = :ok, ERRO = :erro WHERE ID = :id`,
-      { ok: erro ? 'N' : 'S', erro: erro ? String(erro).slice(0, 4000) : null, id: eventoId },
-      { autoCommit: true }
-    );
-  } finally {
-    await conn.close().catch(() => {});
-  }
 }
 
 module.exports = { buildWebhookRouter };
