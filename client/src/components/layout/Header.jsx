@@ -5,6 +5,7 @@ import api from '../../services/api';
 import Brand from '../ui/Brand';
 import Icon from '../ui/Icon';
 import ThemeMenu from '../ui/ThemeMenu';
+import SuporteBadge from './SuporteBadge';
 
 const IDLE_MS = 30 * 60 * 1000;
 
@@ -78,17 +79,7 @@ export default function Header({ title, embedded = false }) {
             <p className={`text-stone-500 truncate ${embedded ? 'text-[10px]' : 'text-xs'}`}>{empresa}</p>
           </div>
 
-          {user?.suporte && (
-            <button
-              type="button"
-              onClick={encerrarSuporte}
-              title="Administração temporária e auditada. Voltar ao painel do operador."
-              className="hidden sm:inline-flex shrink-0 items-center gap-1.5 bg-amber-50 text-amber-900 border border-amber-200 text-xs font-semibold px-2.5 py-1.5 rounded-lg hover:bg-amber-100"
-            >
-              <Icon name="support" size={14} />
-              Implantação Falatta · sair do cliente
-            </button>
-          )}
+          {user?.suporte && <SuporteBadge className="hidden sm:inline-flex" />}
 
           <div className="flex items-center gap-1.5">
             {!embedded && <ThemeMenu />}

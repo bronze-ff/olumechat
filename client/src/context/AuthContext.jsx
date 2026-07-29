@@ -83,16 +83,21 @@ export function AuthProvider({ children }) {
   }, [navigate]);
 
   const encerrarSuporte = useCallback(async () => {
-    // Mesma corrida do logout acima — aqui o efeito é pior, pois o hard
-    // redirect do interceptor mandaria pro /login em vez de voltar ao
-    // painel do operador.
+    // FIL-90: navegação DURA, não `navigate()` do router. Com `navigate()`
+    // havia corrida com o `<Navigate to="/login">` que o ProtectedRoute do
+    // cliente monta no mesmo ciclo (renderiza com `user=null` antes de o
+    // router aplicar `/operador`) — o replace do /login rodava depois e
+    // vencia. `window.location.assign` troca o documento inteiro: elimina a
+    // corrida por construção e limpa de quebra todo o estado do painel do
+    // cliente (React Query, SSE, contexto). Simetria com a ENTRADA da
+    // implantação, que já é hard-nav.
     marcarSessaoEncerrando(true);
     try { await api.post('/auth/logout'); } catch { /* encerra localmente mesmo se a API falhar */ }
     localStorage.removeItem('token');
     queryClient.clear();
     setUser(null);
-    navigate('/operador', { replace: true });
-  }, [navigate]);
+    window.location.assign('/operador/clientes');
+  }, []);
 
   // Re-busca o perfil do servidor sem relogar — usado quando o PRÓPRIO usuário
   // tem o cadastro alterado (ex.: um admin que se auto-rebaixa a ATENDENTE), pra
