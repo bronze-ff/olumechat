@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import api from '../services/api';
+import api, { marcarSessaoEncerrando } from '../services/api';
 import { queryClient } from '../main';
 
 const AuthContext = createContext(null);
@@ -48,6 +48,9 @@ export function AuthProvider({ children }) {
   // quem manda no tenant é o `tenantId` assinado dentro do JWT.
   const login = useCallback(async (empresa, email, senha) => {
     const { data } = await api.post('/auth/login', { empresa, email, senha });
+    // Sessão nova: reabilita o redirect automático em 401/token ausente
+    // (suprimido durante um logout/encerrarSuporte controlado — ver api.js).
+    marcarSessaoEncerrando(false);
     // Troca de identidade = cache velho não vale mais. `/login` é rota pública:
     // dá para entrar em OUTRA empresa sem passar pelo logout, e as queryKeys
     // não são qualificadas por tenant ('conversas', 'departamentos'...), então
@@ -67,6 +70,11 @@ export function AuthProvider({ children }) {
   }, [navigate]);
 
   const logout = useCallback(async () => {
+    // Suprime o redirect automático do interceptor (api.js): sem isso, o
+    // queryClient.clear() abaixo reativa na hora queries ainda montadas
+    // (ex.: polling do Monitor do admin) e a resposta 401 delas dispara um
+    // window.location.href pro /login que corrida com o navigate abaixo.
+    marcarSessaoEncerrando(true);
     try { await api.post('/auth/logout'); } catch { /* ignora */ }
     localStorage.removeItem('token');
     queryClient.clear();
@@ -75,6 +83,10 @@ export function AuthProvider({ children }) {
   }, [navigate]);
 
   const encerrarSuporte = useCallback(async () => {
+    // Mesma corrida do logout acima — aqui o efeito é pior, pois o hard
+    // redirect do interceptor mandaria pro /login em vez de voltar ao
+    // painel do operador.
+    marcarSessaoEncerrando(true);
     try { await api.post('/auth/logout'); } catch { /* encerra localmente mesmo se a API falhar */ }
     localStorage.removeItem('token');
     queryClient.clear();
