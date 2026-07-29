@@ -1,16 +1,21 @@
 import { createContext, useContext, useLayoutEffect, useMemo, useState } from 'react';
 
 const ThemeContext = createContext(null);
-const STORAGE_KEY = 'falatta:tema';
+const STORAGE_KEY = 'olume:tema';
+const LEGACY_STORAGE_KEY = 'falatta:tema';
 
 export const THEMES = [
-  { id: 'light', nome: 'Claro', descricao: 'Mineral, preciso e confortável', amostra: ['#f7faf9', '#e7efec', '#087b63'] },
-  { id: 'dark', nome: 'Escuro', descricao: 'Carvão esverdeado e menta', amostra: ['#091210', '#111d1a', '#47d7ae'] },
+  { id: 'light', nome: 'Claro', descricao: 'Mineral, preciso e confortável', amostra: ['#f3f8f6', '#e9efea', '#1f7a60'] },
+  { id: 'dark', nome: 'Escuro', descricao: 'Carvão esverdeado e menta', amostra: ['#071a15', '#111d1a', '#5bd6ae'] },
 ];
 
 function temaSalvo() {
-  const valor = localStorage.getItem(STORAGE_KEY);
-  if (valor === 'light' || valor === 'dark') return valor;
+  const atual = localStorage.getItem(STORAGE_KEY);
+  const valor = atual || localStorage.getItem(LEGACY_STORAGE_KEY);
+  if (valor === 'light' || valor === 'dark') {
+    if (!atual) localStorage.setItem(STORAGE_KEY, valor);
+    return valor;
+  }
 
   // Normaliza preferências das versões anteriores. "Sistema" é resolvido uma
   // única vez; Drácula e Nord são migrados para o tema escuro equivalente.

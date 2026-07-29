@@ -158,7 +158,7 @@ export default function Monitor({ onIrPara }) {
                       <tr key={d.id} className="hover:bg-paper-50">
                         <td className="px-4 py-3">
                           <span className="inline-flex items-center gap-2 font-medium text-ink-950">
-                            <span aria-hidden className="w-2 h-2 rounded-full" style={{ backgroundColor: d.cor || '#087B63' }} />
+                            <span aria-hidden className="w-2 h-2 rounded-full" style={{ backgroundColor: d.cor || '#1F7A60' }} />
                             {d.nome}
                           </span>
                         </td>

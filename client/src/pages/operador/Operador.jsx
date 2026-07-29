@@ -124,7 +124,7 @@ function Provisionamento({ form, setForm, podeProvisionar, provisionar }) {
           <label htmlFor="empresa-slug" className="field-label">Identificador de acesso</label>
           <div className="flex rounded-lg focus-within:ring-2 focus-within:ring-brand-200">
             <span className="min-h-11 px-3 flex items-center rounded-l-lg border border-r-0 border-paper-400 bg-paper-100 text-xs text-stone-500">
-              falatta.com/
+              app.olume.com.br/
             </span>
             <input
               id="empresa-slug"
@@ -648,7 +648,7 @@ function Audit({ auditoria, filtro, setFiltro, lista }) {
       <header className="px-5 py-4 flex flex-wrap items-center gap-3 border-b border-paper-300">
         <div className="flex-1">
           <h2 className="font-semibold text-ink-950">Atividade administrativa</h2>
-          <p className="mt-0.5 text-xs text-stone-500">Trilha das ações realizadas pelos operadores da Falatta.</p>
+          <p className="mt-0.5 text-xs text-stone-500">Trilha das ações realizadas pelos operadores da Olume.</p>
         </div>
         <select className="min-h-10 text-xs border border-paper-400 rounded-lg px-3 bg-white text-stone-700" value={filtro} onChange={(event) => setFiltro(event.target.value)}>
           <option value="">Todos os clientes</option>

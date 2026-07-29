@@ -67,7 +67,7 @@ function Contador({ atual, limite }) {
 }
 
 // Sem plano de IA: nada de formulário — só o convite pra contratar. Quem
-// configura provider/modelo/chave é o time Falatta (painel do operador), não
+// configura provider/modelo/chave é o time Olume (painel do operador), não
 // o admin do cliente — ver server/api/iaConfig.js e operador/tenants.js.
 function SemPlano() {
   return (
@@ -80,7 +80,7 @@ function SemPlano() {
           <p className="text-sm font-medium text-stone-800">Não incluído no seu plano</p>
           <p className="mt-1 text-xs leading-relaxed text-stone-500 max-w-[54ch]">
             O agente de IA (primeiro atendimento, sugestão de resposta e outros recursos) é um recurso
-            vendido à parte. Fale com o time Falatta para adicionar ao seu plano.
+            vendido à parte. Fale com o time Olume para adicionar ao seu plano.
           </p>
         </div>
       </div>
@@ -538,7 +538,7 @@ export default function IaConfig() {
     <div className="max-w-screen-md mx-auto space-y-4">
       <Secao titulo="Provedor de IA">
         <p className="text-xs text-stone-500">
-          Provedor, modelo e chave de API são configurados pelo time Falatta — fale com o suporte para trocar.
+          Provedor, modelo e chave de API são configurados pelo time Olume — fale com o suporte para trocar.
         </p>
         {config.data?.ativo ? (
           <div className="rounded-lg border border-black/[0.07] px-3.5 py-3 flex items-center gap-3">
@@ -558,14 +558,14 @@ export default function IaConfig() {
               ) : (
                 // Credencial GLOBAL do operador (FIL-78): nenhum detalhe de
                 // provedor/modelo é exposto por rota de tenant — só que está
-                // ativa (a conta é do Falatta, não do cliente).
-                <p className="text-sm font-medium text-stone-800">Configurado pelo time Falatta</p>
+                // ativa (a conta é da Olume, não do cliente).
+                <p className="text-sm font-medium text-stone-800">Configurado pelo time Olume</p>
               )}
             </div>
           </div>
         ) : (
           <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            Seu plano inclui IA, mas o provedor ainda não foi configurado — fale com o time Falatta para ativar.
+            Seu plano inclui IA, mas o provedor ainda não foi configurado — fale com o time Olume para ativar.
           </p>
         )}
       </Secao>

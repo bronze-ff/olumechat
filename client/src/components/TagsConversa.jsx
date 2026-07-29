@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 
-const CORES = ['#087B63', '#47A987', '#B55343', '#9A6700', '#3E756C', '#65766F'];
+const CORES = ['#1F7A60', '#47A987', '#B55343', '#9A6700', '#3E756C', '#65766F'];
 
 // Controle de tags da conversa: mostra as tags atuais (chips) e um seletor
 // para marcar/desmarcar e criar novas. Persiste via PUT /conversas/:id/tags.
@@ -50,7 +50,7 @@ export default function TagsConversa({ conversaId, tags = [] }) {
         if (!t) return null;
         return (
           <span key={id} className="text-[10px] font-medium px-1.5 py-0.5 rounded-full text-white"
-            style={{ backgroundColor: t.cor || '#087B63' }}>
+            style={{ backgroundColor: t.cor || '#1F7A60' }}>
             {t.nome}
           </span>
         );
@@ -68,7 +68,7 @@ export default function TagsConversa({ conversaId, tags = [] }) {
             {(catalogo.data || []).map((t) => (
               <button key={t.id} onClick={() => toggle(t.id)}
                 className="w-full flex items-center gap-2 px-1.5 py-1 rounded hover:bg-paper-50 text-left">
-                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: t.cor || '#087B63' }} />
+                <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: t.cor || '#1F7A60' }} />
                 <span className="text-sm text-stone-700 flex-1 truncate">{t.nome}</span>
                 {tags.includes(t.id) && <span className="text-brand-700 text-xs">✓</span>}
               </button>

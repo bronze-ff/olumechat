@@ -70,7 +70,7 @@ export default function DefinirSenha() {
           <div className="w-10 h-10 rounded-xl bg-brand-100 text-brand-800 flex items-center justify-center">
             <Icon name={pronto ? 'check' : 'shield'} size={19} />
           </div>
-          <p className="mt-5 text-sm font-medium text-brand-700">Primeiro acesso · {empresa || 'Falatta'}</p>
+          <p className="mt-5 text-sm font-medium text-brand-700">Primeiro acesso · {empresa || 'Olume Chat'}</p>
           <h1 className="mt-2 text-2xl font-semibold tracking-[-0.025em] text-ink-950">
             {pronto ? 'Seu acesso está pronto' : 'Crie uma senha segura'}
           </h1>

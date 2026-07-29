@@ -62,7 +62,7 @@ function DeptoBadge({ nome, cor }) {
   const geral = !nome;
   return (
     <span className="inline-flex items-center gap-1 text-[10px] font-medium text-stone-500 shrink-0 min-w-0">
-      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: geral ? '#80978F' : (cor || '#087B63') }} />
+      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: geral ? '#80978F' : (cor || '#1F7A60') }} />
       <span className="truncate">{geral ? 'Geral' : nome}</span>
     </span>
   );
@@ -468,7 +468,7 @@ function ContatoModal({ conversa, onClose, onDone }) {
                   return (
                     <button key={t.id} onClick={() => toggleTag(t.id)}
                       className={`text-[11px] px-2 py-1 rounded-full border ${on ? 'text-white border-transparent' : 'text-stone-500 border-black/15'}`}
-                      style={on ? { backgroundColor: t.cor || '#087B63' } : {}}>
+                      style={on ? { backgroundColor: t.cor || '#1F7A60' } : {}}>
                       {t.nome}
                     </button>
                   );
@@ -793,7 +793,7 @@ function AtendimentoRail({ isGestor, suporte, user, secao, onSelect }) {
       <Link
         to="/conversas"
         className="h-14 w-full flex items-center justify-center border-b border-white/10"
-        aria-label="Falatta — conversas"
+        aria-label="Olume Chat — conversas"
       >
         <BrandMark inverse className="w-8 h-8" />
       </Link>
@@ -1030,7 +1030,7 @@ function EquipeOnline({ deptos }) {
                         const departamento = departamentos.get(Number(id));
                         return (
                           <span key={id} className="inline-flex items-center gap-1.5 text-[10px] text-stone-600">
-                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: departamento?.cor || '#087B63' }} />
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: departamento?.cor || '#1F7A60' }} />
                             {departamento?.nome || `Departamento #${id}`}
                           </span>
                         );
@@ -1136,7 +1136,7 @@ function PainelContexto({ isGestor, contagens, deptos, conversa, filaAtual }) {
               <div>
                 <p className="text-[10px] font-semibold text-stone-500">RESPONSABILIDADE</p>
                 <div className="mt-2 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: conversa.departamentoCor || '#087B63' }} />
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: conversa.departamentoCor || '#1F7A60' }} />
                   <span className="text-xs text-stone-700">{conversa.departamentoNome || 'Geral'}</span>
                 </div>
                 <p className="mt-2 text-xs text-stone-600">{conversa.atendenteNome || 'Ainda sem atendente responsável'}</p>

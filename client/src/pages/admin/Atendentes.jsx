@@ -111,7 +111,7 @@ function NovoAtendenteModal({ deptos, numeros, onClose, onCriado }) {
                 {(deptos || []).filter((d) => d.ativo === 'S').map((d) => (
                   <label key={d.id} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-paper-50 cursor-pointer">
                     <input type="checkbox" checked={sel.has(d.id)} onChange={() => toggleDepto(d.id)} className="w-4 h-4 accent-brand-700" />
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.cor || '#087B63' }} />
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.cor || '#1F7A60' }} />
                     <span className="text-sm text-stone-700">{d.nome}</span>
                   </label>
                 ))}
@@ -209,7 +209,7 @@ function EditarAtendente({ atd, deptos, numeros, onClose }) {
                 <label key={d.id} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-paper-50 cursor-pointer">
                   <input type="checkbox" checked={sel.has(d.id)} onChange={() => toggleDepto(d.id)}
                     className="w-4 h-4 accent-brand-700" />
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.cor || '#087B63' }} />
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.cor || '#1F7A60' }} />
                   <span className="text-sm text-stone-700">{d.nome}</span>
                 </label>
               ))}
@@ -346,7 +346,7 @@ export default function Atendentes() {
                 {(a.deptoIds || []).map((id) => {
                   const d = nomeDepto(id);
                   return d ? (
-                    <span key={id} className="text-[10px] px-1.5 py-0.5 rounded-full text-white" style={{ backgroundColor: d.cor || '#087B63' }}>
+                    <span key={id} className="text-[10px] px-1.5 py-0.5 rounded-full text-white" style={{ backgroundColor: d.cor || '#1F7A60' }}>
                       {d.nome}
                     </span>
                   ) : null;

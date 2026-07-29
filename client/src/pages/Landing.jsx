@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import Brand from '../components/ui/Brand';
+import Brand, { BrandMark } from '../components/ui/Brand';
 import Icon from '../components/ui/Icon';
 import ThemeMenu from '../components/ui/ThemeMenu';
 
@@ -68,7 +68,7 @@ const seguranca = [
   ['Ações rastreáveis', 'Histórico e auditoria registram decisões e acessos de suporte.'],
 ];
 
-const emailComercial = import.meta.env.VITE_COMERCIAL_EMAIL || 'comercial@falatta.com';
+const emailComercial = import.meta.env.VITE_COMERCIAL_EMAIL || 'comercial@olume.com.br';
 
 function ProductPreview() {
   const conversas = [
@@ -80,10 +80,10 @@ function ProductPreview() {
 
   return (
     <figure className="landing-product-wrap landing-enter landing-enter-delay">
-      <div className="landing-product-frame" role="img" aria-label="Visão do Falatta com fila de conversas, atendimento e indicadores da operação">
+      <div className="landing-product-frame" role="img" aria-label="Visão do Olume Chat com fila de conversas, atendimento e indicadores da operação">
         <div className="landing-product-topbar" aria-hidden="true">
           <div className="flex items-center gap-2">
-            <span className="landing-mini-mark">F</span>
+            <span className="landing-mini-mark"><BrandMark inverse className="h-4 w-4" /></span>
             <strong>Conversas</strong>
           </div>
           <div className="flex items-center gap-2 text-[9px] text-[#4D625C]">
@@ -110,7 +110,7 @@ function ProductPreview() {
                 Buscar nome ou protocolo
               </div>
               <div className="mt-2 grid grid-cols-2 rounded-md bg-[#E7EFEC] p-0.5 text-center text-[8px]">
-                <span className="rounded bg-white py-1 font-semibold text-[#087B63]">Aguardando 12</span>
+                <span className="rounded bg-white py-1 font-semibold text-[#1F7A60]">Aguardando 12</span>
                 <span className="py-1 text-[#4D625C]">Minhas 7</span>
               </div>
             </div>
@@ -124,8 +124,8 @@ function ProductPreview() {
                       <span className="text-[7px] text-[#6A7E77]">{tempo}</span>
                     </div>
                     <p className="truncate text-[8px] text-[#4D625C]">{mensagem}</p>
-                    <span className="mt-0.5 inline-flex items-center gap-1 text-[7px] text-[#087B63]">
-                      <span className="h-1 w-1 rounded-full bg-[#47D7AE]" />{setor}
+                    <span className="mt-0.5 inline-flex items-center gap-1 text-[7px] text-[#1F7A60]">
+                      <span className="h-1 w-1 rounded-full bg-[#5BD6AE]" />{setor}
                     </span>
                   </div>
                 </div>
@@ -151,7 +151,7 @@ function ProductPreview() {
               </div>
               <div className="ml-auto max-w-[67%] rounded-lg rounded-br-sm bg-[#D5F5E9] px-3 py-2 text-[8px] leading-4 text-[#123A32]">
                 Olá, Ana! Já encontrei seu cadastro. Pode me confirmar o CNPJ?
-                <span className="mt-1 block text-right text-[6px] text-[#087B63]">11:42 ✓✓</span>
+                <span className="mt-1 block text-right text-[6px] text-[#1F7A60]">11:42 ✓✓</span>
               </div>
               <div className="mx-auto max-w-[72%] rounded-md border border-[#E5CF98] bg-[#FFF8E5] px-3 py-2 text-[7px] text-[#715112]">
                 <strong className="block">NOTA INTERNA</strong>
@@ -160,12 +160,12 @@ function ProductPreview() {
             </div>
             <div className="border-t border-[#D3E0DB] bg-white p-2">
               <div className="mb-1.5 flex gap-3 text-[7px]">
-                <strong className="text-[#087B63]">Mensagem</strong>
+                <strong className="text-[#1F7A60]">Mensagem</strong>
                 <span className="text-[#4D625C]">Nota interna</span>
               </div>
               <div className="flex items-center gap-2 rounded-md border border-[#CBD8D4] px-2 py-2 text-[8px] text-[#6A7E77]">
                 Digite uma mensagem…
-                <span className="ml-auto flex h-6 w-6 items-center justify-center rounded bg-[#087B63] text-white">→</span>
+                <span className="ml-auto flex h-6 w-6 items-center justify-center rounded bg-[#1F7A60] text-white">→</span>
               </div>
             </div>
           </div>
@@ -188,7 +188,7 @@ function ProductPreview() {
               {[['Suporte', 78], ['Vendas', 54], ['Financeiro', 32]].map(([label, width]) => (
                 <div key={label} className="mt-3">
                   <div className="mb-1 flex justify-between text-[7px]"><span>{label}</span><span>{Math.round(width / 5)}</span></div>
-                  <div className="h-1 rounded-full bg-[#E7EFEC]"><div className="h-full rounded-full bg-[#087B63]" style={{ width: `${width}%` }} /></div>
+                  <div className="h-1 rounded-full bg-[#E7EFEC]"><div className="h-full rounded-full bg-[#1F7A60]" style={{ width: `${width}%` }} /></div>
                 </div>
               ))}
             </div>
@@ -309,7 +309,7 @@ export default function Landing() {
 
   function solicitarDemonstracao(event) {
     event.preventDefault();
-    const assunto = encodeURIComponent(`Demonstração Falatta para ${form.empresa}`);
+    const assunto = encodeURIComponent(`Demonstração Olume Chat para ${form.empresa}`);
     const corpo = encodeURIComponent([
       `Olá, meu nome é ${form.nome}.`,
       '',
@@ -317,7 +317,7 @@ export default function Landing() {
       `E-mail: ${form.email}`,
       `Tamanho da equipe: ${form.equipe}`,
       '',
-      'Quero conhecer a Falatta e entender como organizar nossa operação de atendimento.',
+      'Quero conhecer o Olume Chat e entender como organizar nossa operação de atendimento.',
     ].join('\n'));
     window.location.href = `mailto:${emailComercial}?subject=${assunto}&body=${corpo}`;
   }
@@ -329,8 +329,8 @@ export default function Landing() {
       </a>
 
       <header className="landing-nav-wrap sticky top-0 z-50 px-3 pt-3 sm:px-5">
-        <div className="landing-nav mx-auto flex h-[58px] max-w-[1240px] items-center gap-4 rounded-full bg-[#0B1513] px-3.5 text-white sm:px-5">
-          <Link to="/" aria-label="Falatta, página inicial" className="shrink-0 rounded-md">
+        <div className="landing-nav mx-auto flex h-[58px] max-w-[1240px] items-center gap-4 rounded-full bg-[#071A15] px-3.5 text-white sm:px-5">
+          <Link to="/" aria-label="Olume Chat, página inicial" className="shrink-0 rounded-md">
             <Brand inverse />
           </Link>
           <nav aria-label="Navegação principal" className="mx-auto hidden items-center gap-7 text-[13px] font-medium text-white/75 lg:flex">
@@ -344,7 +344,7 @@ export default function Landing() {
             <Link to="/login" className="hidden min-h-10 items-center px-3 text-[13px] font-semibold text-white/75 hover:text-white md:inline-flex">
               Entrar
             </Link>
-            <a href="#demonstracao" className="landing-mint-action inline-flex min-h-10 items-center justify-center rounded-full bg-[#47D7AE] px-3.5 text-xs font-bold text-[#0B1513] hover:bg-[#7BE0C2] sm:px-5 sm:text-[13px]">
+            <a href="#demonstracao" className="landing-mint-action inline-flex min-h-10 items-center justify-center rounded-full bg-[#5BD6AE] px-3.5 text-xs font-bold text-[#071A15] hover:bg-[#7BE0C2] sm:px-5 sm:text-[13px]">
               <span className="hidden sm:inline">Solicitar demonstração</span>
               <span className="sm:hidden">Demonstração</span>
               <span className="ml-2" aria-hidden="true">→</span>
@@ -358,7 +358,7 @@ export default function Landing() {
           <div className="mx-auto grid min-h-[calc(100svh-82px)] max-w-[1320px] items-center gap-12 px-5 py-14 sm:px-8 lg:grid-cols-[0.86fr_1.14fr] lg:gap-14 lg:py-16">
             <div className="landing-enter relative z-10 max-w-[630px]">
               <p className="mb-5 flex items-center gap-3 text-sm font-semibold text-stone-700">
-                <span className="h-2.5 w-2.5 bg-[#47D7AE]" aria-hidden="true" />
+                <span className="h-2.5 w-2.5 bg-[#5BD6AE]" aria-hidden="true" />
                 Atendimento que não perde o fio
               </p>
               <h1 className="landing-display max-w-[12ch] text-[clamp(3rem,5.2vw,5.1rem)] leading-[0.91] text-ink-950">
@@ -368,7 +368,7 @@ export default function Landing() {
                 WhatsApp, filas, equipe e automações em uma operação que todo mundo consegue acompanhar.
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-                <a href="#demonstracao" className="landing-cta landing-mint-action inline-flex min-h-12 items-center justify-center rounded-xl bg-[#47D7AE] px-6 text-sm font-bold text-[#0B1513] hover:bg-[#7BE0C2]">
+                <a href="#demonstracao" className="landing-cta landing-mint-action inline-flex min-h-12 items-center justify-center rounded-xl bg-[#5BD6AE] px-6 text-sm font-bold text-[#071A15] hover:bg-[#7BE0C2]">
                   Solicitar demonstração <span className="ml-3" aria-hidden="true">→</span>
                 </a>
                 <a href="#recursos" className="landing-cta inline-flex min-h-12 items-center justify-center rounded-xl border border-ink-950 bg-transparent px-6 text-sm font-bold text-ink-950 hover:bg-ink-950 hover:text-white">
@@ -394,7 +394,7 @@ export default function Landing() {
           </div>
         </section>
 
-        <section className="bg-[#0B1513] text-[#F2F7F5]">
+        <section className="bg-[#071A15] text-[#F2F7F5]">
           <div className="mx-auto max-w-[1240px] px-5 py-20 sm:px-8 lg:py-24">
             <h2 className="landing-display max-w-[850px] text-[clamp(2.6rem,5vw,4.8rem)] leading-[0.94]">
               O problema não é só responder.
@@ -402,7 +402,7 @@ export default function Landing() {
             <div className="landing-pain-grid mt-12">
               {dores.map((dor) => (
                 <article key={dor.titulo} className="landing-pain-item">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full border border-[#47D7AE] text-[#47D7AE]" aria-hidden="true">×</span>
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full border border-[#5BD6AE] text-[#5BD6AE]" aria-hidden="true">×</span>
                   <div>
                     <h3 className="text-xl font-bold">{dor.titulo}</h3>
                     <p className="mt-2 max-w-[34ch] text-sm leading-6 text-[#A9BBB5]">{dor.texto}</p>
@@ -410,8 +410,8 @@ export default function Landing() {
                 </article>
               ))}
             </div>
-            <p className="mt-12 border-t border-[#2D403A] pt-6 text-center text-lg font-bold text-[#47D7AE]">
-              A Falatta organiza o caminho inteiro da conversa.
+            <p className="mt-12 border-t border-[#2D403A] pt-6 text-center text-lg font-bold text-[#5BD6AE]">
+              O Olume Chat organiza o caminho inteiro da conversa.
             </p>
           </div>
         </section>
@@ -423,7 +423,7 @@ export default function Landing() {
                 O produto acompanha a operação real.
               </h2>
               <p className="max-w-[620px] text-base leading-7 text-stone-600 lg:justify-self-end">
-                Cada módulo corresponde a uma tarefa que já existe no Falatta — atender, distribuir, automatizar, acompanhar e controlar.
+                Cada módulo corresponde a uma tarefa que já existe no Olume Chat — atender, distribuir, automatizar, acompanhar e controlar.
               </p>
             </div>
 
@@ -515,7 +515,7 @@ export default function Landing() {
           </div>
         </section>
 
-        <section id="demonstracao" className="bg-[#0B1513] text-[#F2F7F5]">
+        <section id="demonstracao" className="bg-[#071A15] text-[#F2F7F5]">
           <div className="mx-auto grid max-w-[1240px] gap-12 px-5 py-20 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-20 lg:py-28">
             <div>
               <h2 className="landing-display max-w-[650px] text-[clamp(2.8rem,5vw,5rem)] leading-[0.94]">
@@ -525,8 +525,8 @@ export default function Landing() {
                 Conte um pouco sobre sua empresa. Abriremos seu aplicativo de e-mail com a solicitação pronta.
               </p>
               <p className="mt-10 text-sm text-[#A9BBB5]">
-                Já usa a Falatta?{' '}
-                <Link to="/login" className="font-bold text-[#F2F7F5] underline decoration-[#47D7AE] underline-offset-4">
+                Já usa o Olume Chat?{' '}
+                <Link to="/login" className="font-bold text-[#F2F7F5] underline decoration-[#5BD6AE] underline-offset-4">
                   Entrar no sistema
                 </Link>
               </p>
@@ -556,11 +556,11 @@ export default function Landing() {
                 </select>
               </label>
               <div className="sm:col-span-2">
-                <button type="submit" className="landing-mint-action inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-[#47D7AE] px-6 text-sm font-bold text-[#0B1513] hover:bg-[#7BE0C2] sm:w-auto">
+                <button type="submit" className="landing-mint-action inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-[#5BD6AE] px-6 text-sm font-bold text-[#071A15] hover:bg-[#7BE0C2] sm:w-auto">
                   Solicitar demonstração <span className="ml-3" aria-hidden="true">→</span>
                 </button>
                 <p className="mt-4 text-xs leading-5 text-[#A9BBB5]">
-                  Ou escreva para <a className="text-[#F2F7F5] underline underline-offset-4 hover:text-[#47D7AE]" href={`mailto:${emailComercial}`}>{emailComercial}</a>
+                  Ou escreva para <a className="text-[#F2F7F5] underline underline-offset-4 hover:text-[#5BD6AE]" href={`mailto:${emailComercial}`}>{emailComercial}</a>
                 </p>
               </div>
             </form>
@@ -589,7 +589,7 @@ export default function Landing() {
             <div>
               <p className="text-xs font-bold text-ink-950">Tecnologia oficial WhatsApp Business</p>
               <p className="mt-1 max-w-[640px] text-xs leading-5 text-stone-500">
-                A Falatta atua como parceira de tecnologia da Meta: todo o atendimento roda pela API oficial
+                A Olume atua como parceira de tecnologia da Meta: todo o atendimento roda pela API oficial
                 do WhatsApp Business (Cloud API), sem atalhos por fora dela. Para usar a plataforma, sua
                 empresa precisa de uma conta Meta Business ativa.
               </p>
@@ -598,7 +598,7 @@ export default function Landing() {
         </div>
         <div className="border-t border-paper-300">
           <div className="mx-auto flex max-w-[1240px] flex-col gap-2 px-5 py-5 text-[11px] text-stone-500 sm:px-8 md:flex-row md:justify-between">
-            <span>© {new Date().getFullYear()} Falatta</span>
+            <span>© {new Date().getFullYear()} Olume Software</span>
             <span>Simples. Humano. Contextual.</span>
           </div>
         </div>

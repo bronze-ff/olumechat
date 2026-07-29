@@ -1,21 +1,21 @@
 ---
 version: 1.0
-name: Falatta Product System
-description: A precise multi-tenant operations workspace with light navigation, near-white work surfaces, violet-indigo actions, visible hairline borders, and coral used only as a scarce Falatta signal. The interface favors familiar product patterns, compact data, clear task hierarchy, and explanatory empty states.
+name: Olume Chat Product System
+description: A precise multi-tenant operations workspace with deep-forest navigation, near-white work surfaces, operational-green actions, visible hairline borders, and signature mint reserved for the Olume identity. The interface favors familiar product patterns, compact data, clear task hierarchy, and explanatory empty states.
 colors:
-  ink: "#172033"
-  ink-strong: "#0E1525"
-  ink-muted: "#555D70"
-  neutral-soft: "#858DA0"
-  canvas: "#FBFBFD"
+  ink: "#071A15"
+  ink-strong: "#0B100E"
+  ink-muted: "#4D625C"
+  neutral-soft: "#778F87"
+  canvas: "#F3F8F6"
   surface: "#FFFFFF"
-  surface-subtle: "#F0F1F5"
-  border: "#E3E5EB"
-  border-strong: "#D2D6DF"
-  primary: "#5B4FD1"
-  primary-hover: "#4B40B8"
-  primary-soft: "#ECE9FF"
-  signal: "#E96557"
+  surface-subtle: "#E9EFEA"
+  border: "#D3E0DB"
+  border-strong: "#BFD0CA"
+  primary: "#1F7A60"
+  primary-hover: "#17664F"
+  primary-soft: "#EAFBF5"
+  signal: "#5BD6AE"
   success: "#16856A"
   warning: "#B76A11"
   danger: "#C83C4A"
@@ -41,11 +41,11 @@ spacing:
   xxl: "48px"
 ---
 
-# Falatta Design System
+# Olume Chat Design System
 
 ## Visual Theme & Atmosphere
 
-Falatta is a calm operations console used for long work sessions. Its hierarchy comes from a light, clearly divided application shell: white navigation and work surfaces sit on a near-white canvas, separated by precise 1px borders. Color is restrained: violet-indigo identifies action and selection; coral is the small conversational signal in the brand mark; semantic colors communicate real state.
+Olume Chat is a calm operations console used for long work sessions. Its hierarchy comes from clearly divided surfaces: deep forest anchors persistent navigation while white work areas sit on a cool near-white canvas, separated by precise 1px borders. Color is restrained: operational green identifies action and selection; signature mint carries the Olume mark and rare brand moments; semantic colors communicate real state.
 
 The product should feel complete before it feels expressive. Familiar controls, accurate alignment, concise labels, and useful status language are the main aesthetic. Decoration never competes with the user's queue, customer, or configuration.
 
@@ -56,7 +56,7 @@ The product should feel complete before it feels expressive. Familiar controls, 
 - `surface` holds task areas, tables, forms, and conversation panels.
 - `surface-subtle` distinguishes toolbars, selected rows, and secondary regions.
 - `primary` is reserved for primary actions, current navigation, focus, and links. Its soft tint may identify the current section without filling large areas.
-- `signal` appears in the Falatta mark and rare brand moments, not destructive actions.
+- `signal` appears in the Olume mark and rare brand moments, not destructive actions.
 - `success`, `warning`, `danger`, and `info` always accompany text or icon labels.
 - `border` is the default divider. Elevation depends on surface contrast and borders, not large shadows.
 
@@ -66,8 +66,8 @@ All text and controls must meet WCAG 2.2 AA contrast against their actual backgr
 
 Every surface exposes the same appearance control. The preference is stored locally and applies immediately across the landing page, conversations, administration, and the internal operator console.
 
-- `Claro` is the default Falatta composition, with cool near-white surfaces and dark operational text.
-- `Escuro` uses neutral graphite surfaces, light text, visible borders, and violet-indigo actions.
+- `Claro` is the default Olume Chat composition, with cool near-white surfaces and dark operational text.
+- `Escuro` uses deep forest and graphite surfaces, light text, visible borders, and operational-green actions.
 - Preferences from older versions are normalized on load. `Sistema` is resolved once to Claro or Escuro; Drácula and Nord migrate to Escuro.
 
 Themes change semantic tokens, not component markup. Surface, canvas, text, border, primary, signal, and status roles must remain consistent. Primary button text, body text, helper text, and status messaging must continue to meet WCAG 2.2 AA in every theme.
@@ -95,7 +95,7 @@ Desktop administration uses a 264px white sidebar with a persistent right divide
 
 ### Buttons
 
-Buttons use an 8px radius and a minimum 40px height. Primary buttons are lapis with white text. Secondary buttons use a white surface and a strong border. Tertiary actions are plain and gain a subtle surface on hover. Destructive actions use danger only when the consequence is destructive.
+Buttons use an 8px radius and a minimum 40px height. Primary buttons use operational green with white text. Secondary buttons use a white surface and a strong border. Tertiary actions are plain and gain a subtle surface on hover. Destructive actions use danger only when the consequence is destructive.
 
 Every button has hover, focus-visible, active, disabled, and loading states. Icon-only actions are at least 40×40px with accessible names.
 
@@ -165,7 +165,7 @@ Transitions run 150–220ms with ease-out curves and communicate hover, selectio
 
 ## Public Marketing Surface
 
-The public root route is a brand and acquisition surface, not an authenticated product screen. It keeps the same ink, violet-indigo, coral, borders, theme tokens, system typography, and 6–14px geometry, while allowing a more editorial scale and more open spacing.
+The public root route is a brand and acquisition surface, not an authenticated product screen. It keeps the same forest ink, operational green, signature mint, borders, theme tokens, system typography, and 6–14px geometry, while allowing a more editorial scale and more open spacing.
 
 - Lead with the operational pain, then show how the product changes the routine.
 - Use documentary, people-centered photography. Never fabricate a product screenshot or place illegible generated UI inside a device frame.
@@ -178,4 +178,4 @@ The public root route is a brand and acquisition surface, not an authenticated p
 
 ## Agent Prompt Guide
 
-When extending Falatta, begin with the existing workflow and semantic state. Use the light divided shell, near-white canvas, white surfaces, violet-indigo actions, restrained coral signal, Inter typography, 6–10px radii, and border-led depth. Prefer a familiar product pattern over a novel control. Every new component must define keyboard focus, loading, empty, error, and responsive behavior.
+When extending Olume Chat, begin with the existing workflow and semantic state. Use the divided shell, near-white canvas, white surfaces, operational-green actions, restrained mint signal, Inter typography, 6–10px radii, and border-led depth. Prefer a familiar product pattern over a novel control. Every new component must define keyboard focus, loading, empty, error, and responsive behavior.

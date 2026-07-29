@@ -69,7 +69,7 @@ export default function IaAutorizados() {
       <div className="bg-white rounded-2xl border border-black/[0.06] p-4">
         <p className="text-sm font-medium text-stone-800">Não incluído no seu plano</p>
         <p className="mt-1 text-xs leading-relaxed text-stone-500 max-w-[54ch]">
-          O agente de IA é um recurso vendido à parte. Fale com o time Falatta para adicionar ao seu plano.
+          O agente de IA é um recurso vendido à parte. Fale com o time Olume para adicionar ao seu plano.
         </p>
       </div>
     );

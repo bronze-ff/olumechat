@@ -1,37 +1,50 @@
 export function BrandMark({ className = 'w-8 h-8', inverse = false }) {
   return (
-    <svg className={className} viewBox="0 0 32 32" aria-hidden="true">
-      <rect
-        className={inverse ? '' : 'brand-mark-surface'}
-        width="32"
-        height="32"
-        rx="9"
-        fill={inverse ? '#F2F7F5' : '#0B1513'}
+    <svg className={className} viewBox="0 0 64 64" aria-hidden="true">
+      <circle
+        className={inverse ? '' : 'brand-mark-stroke'}
+        cx="32"
+        cy="29.5"
+        r="21.5"
+        fill="none"
+        stroke={inverse ? '#5BD6AE' : '#1F7A60'}
+        strokeWidth="9"
       />
       <path
-        className={inverse ? '' : 'brand-mark-bubble'}
-        d="M9 10.5h14v8.25a3.75 3.75 0 0 1-3.75 3.75H16l-4.5 3v-3H9V10.5Z"
-        fill="none"
-        stroke={inverse ? '#0B1513' : '#F7FAF9'}
-        strokeWidth="2.2"
-        strokeLinejoin="round"
+        className={inverse ? '' : 'brand-mark-fill'}
+        d="M16.6 44.6 12.4 58l14.2-7.5Z"
+        fill={inverse ? '#5BD6AE' : '#1F7A60'}
       />
-      <circle cx="20.8" cy="10.8" r="3.2" fill="#47D7AE" />
+      <circle cx="32" cy="29.5" r="5" fill="#5BD6AE" />
     </svg>
   );
 }
 
-export default function Brand({ inverse = false, compact = false, className = '' }) {
+export default function Brand({
+  inverse = false,
+  compact = false,
+  product = true,
+  className = '',
+}) {
+  const label = product ? 'Olume Chat' : 'Olume';
+
   return (
-    <div className={`flex items-center gap-2.5 min-w-0 ${className}`}>
+    <div className={`flex min-w-0 items-center gap-2.5 ${className}`} aria-label={label}>
       <BrandMark inverse={inverse} className="w-8 h-8 shrink-0" />
       {!compact && (
         <div className="min-w-0">
-          <span className={`block text-[17px] font-semibold tracking-[-0.02em] leading-none ${inverse ? 'text-white' : 'text-ink-950'}`}>
-            falatta
+          <span className="flex items-baseline gap-1.5 leading-none">
+            <span className={`text-[17px] font-semibold tracking-[-0.025em] ${inverse ? 'text-white' : 'text-ink-950'}`}>
+              olume
+            </span>
+            {product && (
+              <span className={`text-[15px] font-normal tracking-[-0.02em] ${inverse ? 'text-brand-400' : 'text-brand-700'}`}>
+                chat
+              </span>
+            )}
           </span>
           <span className={`block text-[10px] leading-none mt-1 ${inverse ? 'text-white/65' : 'text-stone-500'}`}>
-            central de atendimento
+            {product ? 'central de atendimento' : 'software'}
           </span>
         </div>
       )}

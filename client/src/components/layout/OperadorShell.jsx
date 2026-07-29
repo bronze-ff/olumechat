@@ -18,7 +18,7 @@ export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titul
     <div className="admin-surface min-h-screen bg-paper-50 lg:flex">
       <aside className="product-sidebar hidden lg:flex w-[264px] h-screen sticky top-0 self-start bg-ink-950 border-r border-white/10 flex-col shrink-0">
         <div className="h-[72px] px-5 flex items-center border-b border-white/10">
-          <Brand inverse />
+          <Brand inverse product={false} />
         </div>
 
         <div className="px-3 pt-4">
@@ -27,7 +27,7 @@ export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titul
               <Icon name="pulse" size={15} />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] text-white/45">Área interna Falatta</p>
+              <p className="text-[10px] text-white/45">Área interna Olume</p>
               <p className="text-[13px] font-semibold text-white truncate">Central de operações</p>
             </div>
             <span className="w-2 h-2 rounded-full bg-emerald-500" title="Ambiente operacional" />
@@ -81,7 +81,7 @@ export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titul
       <div className="min-w-0 flex-1">
         <header className="lg:hidden sticky top-0 z-30 bg-white border-b border-paper-300">
           <div className="h-16 px-4 flex items-center gap-3">
-            <Brand compact />
+            <Brand compact product={false} />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-ink-950 truncate">Central de operações</p>
               <p className="text-[11px] text-stone-500 truncate">{atual.label}</p>

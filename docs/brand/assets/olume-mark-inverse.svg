@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Olume</title>
+  <circle cx="32" cy="29.5" r="21.5" fill="none" stroke="#5BD6AE" stroke-width="9"/>
+  <path d="M16.6 44.6 12.4 58l14.2-7.5Z" fill="#5BD6AE"/>
+  <circle cx="32" cy="29.5" r="5" fill="#5BD6AE"/>
+</svg>

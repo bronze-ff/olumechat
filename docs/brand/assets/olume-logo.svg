@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 292 72" role="img" aria-labelledby="title">
+  <title id="title">Olume</title>
+  <g transform="translate(4 4)">
+    <circle cx="32" cy="29.5" r="21.5" fill="none" stroke="#1F7A60" stroke-width="9"/>
+    <path d="M16.6 44.6 12.4 58l14.2-7.5Z" fill="#1F7A60"/>
+    <circle cx="32" cy="29.5" r="5" fill="#5BD6AE"/>
+  </g>
+  <text x="80" y="49" fill="#071A15" font-family="Segoe UI Variable, Segoe UI, Arial, sans-serif" font-size="45" font-weight="650" letter-spacing="-1.6">olume</text>
+</svg>

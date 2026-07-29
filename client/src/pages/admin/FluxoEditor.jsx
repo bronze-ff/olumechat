@@ -6,7 +6,7 @@ import { formatPhone } from '../../utils/formatters';
 
 // Identidade visual por tipo de passo (cor do nó na timeline + chip).
 const TIPOS = [
-  { id: 'mensagem', rotulo: 'Mensagem', icone: '💬', cor: '#087B63', desc: 'Envia um texto e segue pro próximo passo' },
+  { id: 'mensagem', rotulo: 'Mensagem', icone: '💬', cor: '#1F7A60', desc: 'Envia um texto e segue pro próximo passo' },
   { id: 'menu', rotulo: 'Menu', icone: '🔢', cor: '#B7791F', desc: 'Cliente escolhe digitando o número' },
   { id: 'pergunta', rotulo: 'Pergunta', icone: '❓', cor: '#5B4B8A', desc: 'Captura uma resposta (ex.: código RCA)' },
   { id: 'consulta', rotulo: 'Consulta BD', icone: '🗄️', cor: '#0E7490', desc: 'Valida a resposta no banco (SELECT) e segue por encontrado/não encontrado' },

@@ -5,16 +5,16 @@
 @layer base {
   :root {
     color-scheme: light;
-    --falatta-ink: #0b1513;
-    --falatta-primary: #087b63;
-    --falatta-signal: #47d7ae;
+    --olume-ink: #071a15;
+    --olume-primary: #1f7a60;
+    --olume-signal: #5bd6ae;
     --color-surface: 255 255 255;
-    --color-ink-950: 11 21 19;
-    --color-ink-900: 15 31 27;
+    --color-ink-950: 7 26 21;
+    --color-ink-900: 11 29 24;
     --color-ink-800: 18 58 50;
-    --color-paper-50: 247 250 249;
-    --color-paper-100: 242 246 244;
-    --color-paper-200: 231 239 236;
+    --color-paper-50: 243 248 246;
+    --color-paper-100: 233 239 234;
+    --color-paper-200: 224 234 229;
     --color-paper-300: 211 224 219;
     --color-paper-400: 190 207 201;
     --color-paper-500: 119 143 135;
@@ -32,13 +32,13 @@
     --color-brand-100: 213 245 233;
     --color-brand-200: 174 235 215;
     --color-brand-300: 123 224 194;
-    --color-brand-400: 71 215 174;
-    --color-brand-500: 31 184 143;
-    --color-brand-600: 10 146 115;
-    --color-brand-700: 8 123 99;
-    --color-brand-800: 6 99 79;
-    --color-brand-900: 4 74 60;
-    --color-brand-text: 8 123 99;
+    --color-brand-400: 91 214 174;
+    --color-brand-500: 54 195 154;
+    --color-brand-600: 39 141 112;
+    --color-brand-700: 31 122 96;
+    --color-brand-800: 23 102 79;
+    --color-brand-900: 13 78 61;
+    --color-brand-text: 31 122 96;
     --color-signal-700: 185 62 52;
     --color-signal-800: 166 50 42;
     --color-signal-900: 135 38 32;
@@ -96,17 +96,17 @@
   }
 }
 
-.brand-mark-surface,
-.brand-mark-bubble {
+.brand-mark-stroke,
+.brand-mark-fill {
   transition: fill 160ms ease, stroke 160ms ease;
 }
 
-html[data-theme="dark"] .brand-mark-surface {
-  fill: #f2f7f5;
+html[data-theme="dark"] .brand-mark-stroke {
+  stroke: #5bd6ae;
 }
 
-html[data-theme="dark"] .brand-mark-bubble {
-  stroke: #0b1513;
+html[data-theme="dark"] .brand-mark-fill {
+  fill: #5bd6ae;
 }
 
 html[data-theme="dark"] {
@@ -135,9 +135,9 @@ html[data-theme="dark"] {
   --color-brand-100: 17 66 53;
   --color-brand-200: 23 87 69;
   --color-brand-300: 36 132 103;
-  --color-brand-400: 71 215 174;
+  --color-brand-400: 91 214 174;
   --color-brand-500: 54 195 154;
-  --color-brand-text: 71 215 174;
+  --color-brand-text: 91 214 174;
   --color-signal-text: 255 137 125;
   --theme-shadow: 0 0 0;
   --status-red-soft: 58 31 37;
@@ -344,7 +344,7 @@ html[data-theme="dark"] .text-purple-700 { color: rgb(var(--status-purple-text))
 }
 
 .product-sidebar {
-  background: #0b1513;
+  background: #071a15;
 }
 
 /* Sidebar do produto é sempre escura (claro ou dark mode do app) — thumb
@@ -455,14 +455,14 @@ html {
 .landing-highlight {
   display: inline;
   padding-inline: 0.055em;
-  color: #0b1513;
-  background: #47d7ae;
+  color: #071a15;
+  background: #5bd6ae;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
 
 .landing-mint-action {
-  color: #0b1513 !important;
+  color: #071a15 !important;
 }
 
 .landing-cta {
@@ -492,7 +492,7 @@ html {
   border: 1px solid #9fb4ad;
   border-radius: 12px;
   background: #f7faf9;
-  color: #0b1513;
+  color: #071a15;
   box-shadow: 0 6px 0 rgb(11 21 19 / 0.08);
 }
 
@@ -514,8 +514,8 @@ html {
   align-items: center;
   justify-content: center;
   border-radius: 6px;
-  background: #0b1513;
-  color: #47d7ae;
+  background: #071a15;
+  color: #5bd6ae;
   font-size: 11px;
   font-weight: 800;
 }
@@ -532,7 +532,7 @@ html {
   align-items: center;
   gap: 6px;
   padding-block: 10px;
-  background: #0b1513;
+  background: #071a15;
   color: #8ba099;
 }
 
@@ -547,7 +547,7 @@ html {
 
 .landing-product-rail > .is-active {
   background: #123a32;
-  color: #47d7ae;
+  color: #5bd6ae;
 }
 
 .landing-conversation-list,
@@ -585,7 +585,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 
 .landing-mock-primary {
   border-radius: 5px;
-  background: #087b63;
+  background: #1f7a60;
   padding: 4px 7px;
   color: white;
   font-size: 8px;
@@ -616,7 +616,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
   bottom: -22px;
   left: 8%;
   height: 1px;
-  background: #47d7ae;
+  background: #5bd6ae;
   content: "";
   opacity: 0.6;
 }
@@ -727,8 +727,8 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 }
 
 html[data-theme="dark"] .landing-steps > li > span {
-  background: #47d7ae;
-  color: #0b1513;
+  background: #5bd6ae;
+  color: #071a15;
 }
 
 .landing-steps h3 {
@@ -772,7 +772,7 @@ html[data-theme="dark"] .landing-steps h3 {
 }
 
 .landing-dark-input:focus {
-  border-color: #47d7ae;
+  border-color: #5bd6ae;
   background: #152520;
 }
 

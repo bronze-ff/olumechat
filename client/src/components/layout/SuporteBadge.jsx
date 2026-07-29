@@ -17,7 +17,7 @@ export default function SuporteBadge({ compact = false, className = 'inline-flex
       }`}
     >
       <Icon name="support" size={compact ? 13 : 14} />
-      Implantação Falatta · sair do cliente
+      Implantação Olume · sair do cliente
     </button>
   );
 }

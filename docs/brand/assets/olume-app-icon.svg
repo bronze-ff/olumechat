@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Olume Chat</title>
+  <rect width="512" height="512" rx="112" fill="#071A15"/>
+  <circle cx="256" cy="234" r="154" fill="none" stroke="#5BD6AE" stroke-width="66"/>
+  <path d="m145 342-30 105 106-55Z" fill="#5BD6AE"/>
+  <circle cx="256" cy="234" r="36" fill="#5BD6AE"/>
+</svg>

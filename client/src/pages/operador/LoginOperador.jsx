@@ -38,14 +38,14 @@ export default function LoginOperador() {
     <main className="relative min-h-screen bg-paper-100 grid lg:grid-cols-[minmax(340px,0.72fr)_1.28fr]">
       <div className="absolute top-4 right-4 z-20"><ThemeMenu /></div>
       <section className="hidden lg:flex bg-ink-950 text-white p-10 xl:p-12 flex-col">
-        <Brand inverse />
+        <Brand inverse product={false} />
         <div className="mt-auto mb-auto max-w-md">
-          <span className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-[#47D7AE]/35 bg-[#47D7AE]/10 text-xs font-semibold text-[#7BE0C2]">
+          <span className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-[#5BD6AE]/35 bg-[#5BD6AE]/10 text-xs font-semibold text-[#7BE0C2]">
             <Icon name="shield" size={15} />
             Acesso interno restrito
           </span>
           <h1 className="mt-6 text-[34px] leading-[1.15] tracking-[-0.035em] font-semibold text-balance">
-            Operação segura para toda a carteira Falatta.
+            Operação segura para toda a carteira Olume.
           </h1>
           <p className="mt-4 text-sm leading-relaxed text-white/50">
             Provisione empresas, acompanhe a adoção e configure canais em acessos de suporte auditados.
@@ -56,17 +56,17 @@ export default function LoginOperador() {
 
       <section className="flex items-center justify-center px-5 py-10 sm:px-8">
         <div className="w-full max-w-[400px] bg-white border border-paper-300 rounded-xl p-6 sm:p-8 animate-slide-up">
-          <div className="lg:hidden mb-9"><Brand /></div>
+          <div className="lg:hidden mb-9"><Brand product={false} /></div>
           <div className="w-10 h-10 rounded-xl bg-ink-950 text-white flex items-center justify-center">
             <Icon name="shield" size={19} />
           </div>
           <h2 className="mt-5 text-2xl font-semibold tracking-[-0.025em] text-ink-950">Central de operações</h2>
-          <p className="mt-2 text-sm text-stone-600">Entre com sua conta interna da Falatta.</p>
+          <p className="mt-2 text-sm text-stone-600">Entre com sua conta interna da Olume.</p>
 
           <form onSubmit={entrar} noValidate className="mt-7 space-y-5">
             <div>
               <label htmlFor="email" className="field-label">E-mail corporativo</label>
-              <input id="email" type="email" className="input-field" value={form.email} onChange={set('email')} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="voce@falatta.com" />
+              <input id="email" type="email" className="input-field" value={form.email} onChange={set('email')} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="voce@olume.com.br" />
             </div>
             <div>
               <label htmlFor="senha" className="field-label">Senha</label>

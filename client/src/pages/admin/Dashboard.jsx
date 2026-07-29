@@ -153,7 +153,7 @@ export default function Dashboard() {
                   <span className="font-display font-bold text-base tabular text-stone-800">{d.qtd}</span>
                 </div>
                 <div className="h-2 rounded-full bg-paper-200 overflow-hidden">
-                  <div className="h-full rounded-full" style={{ width: `${(d.qtd / maxDepto) * 100}%`, backgroundColor: d.cor || '#087B63' }} />
+                  <div className="h-full rounded-full" style={{ width: `${(d.qtd / maxDepto) * 100}%`, backgroundColor: d.cor || '#1F7A60' }} />
                 </div>
                 <p className="font-mono text-[10px] text-stone-400 mt-0.5">
                   {d.resolvidas} resolvidos · espera {fmtSeg(d.esperaMediaSeg)}

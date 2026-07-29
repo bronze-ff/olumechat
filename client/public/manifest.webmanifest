@@ -1,13 +1,13 @@
 {
-  "name": "Falatta",
-  "short_name": "Falatta",
+  "name": "Olume Chat",
+  "short_name": "Olume",
   "description": "Atendimento por WhatsApp para a sua empresa",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "theme_color": "#1B5E7B",
-  "background_color": "#FFFFFF",
+  "theme_color": "#071A15",
+  "background_color": "#F3F8F6",
   "icons": [
     {
       "src": "/icon-192x192.png",
@@ -23,6 +23,12 @@
     },
     {
       "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
