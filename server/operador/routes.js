@@ -334,7 +334,7 @@ router.post(
           tenantId: t.id,
           suporte: true,
           operadorId: req.operador.id,
-          nome: `Suporte Falatta (${req.operador.email})`,
+          nome: `Suporte Olume (${req.operador.email})`,
           email: req.operador.email,
         },
         SECRET_TENANT,

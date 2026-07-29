@@ -1,4 +1,4 @@
-// app.js — Entry do serviço (Falatta).
+// app.js — Entry do serviço (Olume Chat).
 // Inicializa o pool Postgres, monta o webhook e o healthcheck.
 // NÃO aplicamos express.json() global de propósito: o webhook precisa do
 // corpo bruto (rawBodyJson) para validar a assinatura.
@@ -56,7 +56,7 @@ app.get('/exclusao-de-dados', (req, res) =>
 
 // Healthcheck (para monitoramento de uptime do webhook — RNF-03).
 app.get('/health', (req, res) =>
-  res.json({ status: 'ok', service: 'mc-zap', ts: new Date().toISOString() })
+  res.json({ status: 'ok', service: 'olume-chat', ts: new Date().toISOString() })
 );
 
 // --- API REST (Fase 2 — inbox) ---

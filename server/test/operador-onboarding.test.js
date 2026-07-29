@@ -90,7 +90,7 @@ test('listarProgresso: separa corretamente as etapas de tenants diferentes', asy
 // ao GET/PUT de api/onboardingMeta.js, mas sem exigir sessão de suporte.
 // ===========================================================================
 
-const OPERADOR = { id: 9, email: 'op@falatta.com' };
+const OPERADOR = { id: 9, email: 'op@olume.com' };
 
 function conexaoEtapa({ tenantExiste = true, linhas = [] } = {}) {
   const cap = [];
@@ -141,7 +141,7 @@ test('listarEtapasDoTenant: 404 se o tenant não existe', async () => {
 
 test('listarEtapasDoTenant: mescla as 7 etapas fixas com o que existe no banco', async () => {
   db.getConnection = async () => conexaoEtapa({
-    linhas: [{ TENANT_ID: 5, ETAPA: 'conta_criada', STATUS: 'concluida', RESPONSAVEL: 'Ana', OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@falatta.com', ATUALIZADO_EM: new Date('2026-07-01T00:00:00Z') }],
+    linhas: [{ TENANT_ID: 5, ETAPA: 'conta_criada', STATUS: 'concluida', RESPONSAVEL: 'Ana', OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@olume.com', ATUALIZADO_EM: new Date('2026-07-01T00:00:00Z') }],
   });
   const r = await onboarding.listarEtapasDoTenant(5);
   assert.equal(r.length, 7);
@@ -208,7 +208,7 @@ test('atualizarEtapa: faz upsert e audita o ANTES e o DEPOIS de todo campo edit�
 
 test('atualizarEtapa: audita o ANTES real quando a etapa já tinha uma linha', async () => {
   const conn = conexaoEtapa({
-    linhas: [{ TENANT_ID: 5, ETAPA: 'conta_criada', STATUS: 'em_andamento', RESPONSAVEL: 'Ana Antiga', OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@falatta.com' }],
+    linhas: [{ TENANT_ID: 5, ETAPA: 'conta_criada', STATUS: 'em_andamento', RESPONSAVEL: 'Ana Antiga', OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@olume.com' }],
   });
   db.getConnection = async () => conn;
   await onboarding.atualizarEtapa({

@@ -19,7 +19,7 @@ process.env.WEBHOOK_VERIFY_TOKEN = 'verify123';
 process.env.WA_TOKEN = 'token_abc';
 process.env.WA_PHONE_NUMBER_ID = '1112223334';
 process.env.WA_BUSINESS_ACCOUNT_ID = '9998887776';
-process.env.APP_URL = 'https://painel.falatta.test';
+process.env.APP_URL = 'https://painel.olume.test';
 // O ciclo inteiro abaixo usa o banco transacional em memória. Impede que a
 // blacklist compartilhada tente acessar o banco real do ambiente de dev.
 process.env.DATABASE_URL = '';
@@ -306,7 +306,7 @@ function req(port, method, path, { body, tok, ip = '10.0.0.1' } = {}) {
 }
 
 function tokenOperador(operadorId = 1) {
-  return jwt.sign({ jti: `op-${operadorId}-${Math.random()}`, escopo: 'operador', operadorId, email: 'op@falatta.test' },
+  return jwt.sign({ jti: `op-${operadorId}-${Math.random()}`, escopo: 'operador', operadorId, email: 'op@olume.test' },
     SECRET_OPERADOR, { expiresIn: '1h' });
 }
 
@@ -327,7 +327,7 @@ test.before(async () => {
 test.after(() => ctx && ctx.server.close());
 test.beforeEach(() => {
   instalarBanco();
-  estado.operadores.push({ ID: 1, EMAIL: 'op@falatta.test', NOME: 'Operador', SENHA_HASH: HASH_OPERADOR, ATIVO: 'S' });
+  estado.operadores.push({ ID: 1, EMAIL: 'op@olume.test', NOME: 'Operador', SENHA_HASH: HASH_OPERADOR, ATIVO: 'S' });
   rbac.invalidar(); // o perfil tem cache de 30s e os testes reusam ids
 });
 
@@ -360,7 +360,7 @@ test('provisionar cria tenant + usuário ADMIN + atendente vinculado + convite',
   assert.equal(estado.tokensSenha[0].USUARIO_ID, u.ID);
 
   // O link volta na resposta (não há e-mail ainda) e aponta para a tela pública.
-  assert.match(r.body.convite.link, /^https:\/\/painel\.falatta\.test\/definir-senha\?empresa=sol&token=/);
+  assert.match(r.body.convite.link, /^https:\/\/painel\.olume\.test\/definir-senha\?empresa=sol&token=/);
   assert.ok(r.body.convite.expiraEm, 'convite sem expiração seria um link eterno');
 });
 
@@ -565,14 +565,14 @@ test('toda ação de operador gera auditoria com quem, quando, em qual tenant e 
     assert.equal(linha.ACAO, acao);
     assert.equal(Number(linha.TENANT_ID), id, 'a trilha precisa dizer EM QUAL tenant');
     assert.equal(linha.OPERADOR_ID, 1, 'a trilha precisa dizer QUEM');
-    assert.equal(linha.OPERADOR_EMAIL, 'op@falatta.test');
+    assert.equal(linha.OPERADOR_EMAIL, 'op@olume.test');
     assert.equal(linha.IP, '203.0.113.7');
     assert.ok(linha.CRIADO_EM instanceof Date, 'a trilha precisa dizer QUANDO');
   }
 
   // login e logout também entram na trilha (sem tenant — não têm alvo).
   const login = await req(ctx.port, 'POST', '/api/operador/login',
-    { body: { email: 'op@falatta.test', senha: SENHA_OPERADOR }, ip: '203.0.113.8' });
+    { body: { email: 'op@olume.test', senha: SENHA_OPERADOR }, ip: '203.0.113.8' });
   assert.equal(login.status, 200);
   assert.ok(estado.auditoriaOperador.some((a) => a.ACAO === 'login' && !a.TENANT_ID));
 
@@ -581,7 +581,7 @@ test('toda ação de operador gera auditoria com quem, quando, em qual tenant e 
 
   // Login recusado também fica registrado — é o painel mais sensível do sistema.
   await req(ctx.port, 'POST', '/api/operador/login',
-    { body: { email: 'op@falatta.test', senha: 'errada-de-proposito' }, ip: '203.0.113.9' });
+    { body: { email: 'op@olume.test', senha: 'errada-de-proposito' }, ip: '203.0.113.9' });
   assert.ok(estado.auditoriaOperador.some((a) => a.ACAO === 'login_recusado'));
 });
 
@@ -600,7 +600,7 @@ test('o acesso de suporte fica registrado TAMBÉM na auditoria do cliente', asyn
   assert.equal(doCliente.length, 1);
   assert.equal(Number(doCliente[0].TENANT_ID), id);
   assert.equal(doCliente[0].CTX, id, 'a gravação na trilha do cliente precisa rodar no contexto dele');
-  assert.match(String(doCliente[0].DETALHE), /op@falatta\.test/);
+  assert.match(String(doCliente[0].DETALHE), /op@olume\.test/);
   assert.match(String(doCliente[0].DETALHE), /chamado #12/);
 });
 

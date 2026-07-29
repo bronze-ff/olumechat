@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const db = require('../db/pool');
 const tenants = require('../operador/tenants');
 
-const OPERADOR = { id: 1, email: 'op@falatta.com' };
+const OPERADOR = { id: 1, email: 'op@olume.com' };
 
 /** comOperador roda tudo numa "transação" via db.getConnection — não passa
     por RLS de verdade (bypassrls), então o fake só precisa devolver linhas

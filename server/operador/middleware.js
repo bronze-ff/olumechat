@@ -33,7 +33,7 @@ const { SECRET: SECRET_TENANT } = require('../auth/secret');
 const contas = require('./contas');
 
 const MSG_401 = 'Sessão de operador inválida ou expirada.';
-const MSG_403 = 'Esta área é exclusiva do operador do Falatta. Sua sessão é de um cliente.';
+const MSG_403 = 'Esta área é exclusiva do operador do Olume. Sua sessão é de um cliente.';
 
 /** Aceita só inteiro positivo (o id vem de `bigint GENERATED ... IDENTITY`). */
 function idValido(v) {

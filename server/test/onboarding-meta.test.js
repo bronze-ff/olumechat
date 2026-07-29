@@ -25,7 +25,7 @@ function app() {
   a.use(express.json());
   a.use((req, _res, next) => {
     req.tenantId = 1;
-    req.user = { suporte: true, operadorId: 9, email: 'op@falatta.com' };
+    req.user = { suporte: true, operadorId: 9, email: 'op@olume.com' };
     next();
   });
   a.use('/api/onboarding-meta', router);
@@ -53,7 +53,7 @@ function req(instancia, metodo, path, corpo) {
 const TODAS_MENOS = (excluida) => [
   'conta_criada', 'verificacao_empresa', 'waba_criada', 'numero_verificado',
   'templates_submetidos', 'templates_aprovados', 'webhook_testado',
-].filter((e) => e !== excluida).map((etapa) => ({ ETAPA: etapa, STATUS: 'concluida', RESPONSAVEL: null, OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@falatta.com' }));
+].filter((e) => e !== excluida).map((etapa) => ({ ETAPA: etapa, STATUS: 'concluida', RESPONSAVEL: null, OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@olume.com' }));
 
 /**
  * "Banco" fake com estado mutável: o PUT de verdade faz SELECT (antes) →
@@ -93,7 +93,7 @@ function comTenantFake(conn) {
 
 test('GET / mescla as 7 etapas fixas com o que existe no banco', async () => {
   const conn = conexao({ linhas: [
-    { ETAPA: 'conta_criada', STATUS: 'concluida', RESPONSAVEL: 'Ana', OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@falatta.com', ATUALIZADO_EM: '2026-07-01T00:00:00.000Z' },
+    { ETAPA: 'conta_criada', STATUS: 'concluida', RESPONSAVEL: 'Ana', OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@olume.com', ATUALIZADO_EM: '2026-07-01T00:00:00.000Z' },
   ] });
   const old = db.comTenant;
   db.comTenant = comTenantFake(conn);
@@ -152,7 +152,7 @@ test('PUT /:etapa faz upsert e grava auditoria com quem, quando (automático) e 
     assert.equal(detalhe.antes.status, 'pendente');                // o quê (antes)
     assert.equal(detalhe.depois.status, 'em_andamento');           // o quê (depois)
     assert.equal(detalhe.operadorId, 9);                           // quem
-    assert.equal(detalhe.operador, 'op@falatta.com');              // quem
+    assert.equal(detalhe.operador, 'op@olume.com');              // quem
     // "quando" é automático (auditoria.criado_em = now(), coluna DEFAULT do
     // banco) — não há bind aqui de propósito, ver migração 001.
   } finally { db.comTenant = old; }
@@ -160,7 +160,7 @@ test('PUT /:etapa faz upsert e grava auditoria com quem, quando (automático) e 
 
 test('PUT /:etapa alterando só o responsável (status igual) audita o ANTES e o DEPOIS de responsável', async () => {
   const conn = conexao({ linhas: [
-    { ETAPA: 'conta_criada', STATUS: 'em_andamento', RESPONSAVEL: 'Ana Antiga', OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@falatta.com' },
+    { ETAPA: 'conta_criada', STATUS: 'em_andamento', RESPONSAVEL: 'Ana Antiga', OBSERVACAO: null, DATA_REFERENCIA: null, ATUALIZADO_POR: 'op@olume.com' },
   ] });
   const old = db.comTenant;
   db.comTenant = comTenantFake(conn);

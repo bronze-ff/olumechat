@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const db = require('../db/pool');
 const fatura = require('../operador/fatura');
 
-const OPERADOR = { id: 1, email: 'op@falatta.com' };
+const OPERADOR = { id: 1, email: 'op@olume.com' };
 
 function conexao({ tenantExiste = true, fatura: faturaFixture = null, itens = [], pagamentos = [] } = {}) {
   const cap = [];

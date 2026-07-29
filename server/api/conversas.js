@@ -557,7 +557,7 @@ router.post('/:id/sugestao-resposta', naoAuditor, sugestaoIaLimiter, async (req,
       // Teto mensal do add-on (FIL-78): bloqueia ANTES de chamar o provedor,
       // com mensagem clara e SEM expor custo/tokens (ver ia/limitePlano.js).
       if (await limitePlano.estourouTeto(conn, req.tenantId)) {
-        throw new RespostaHttp(400, { error: 'Limite mensal de uso de IA atingido para esta empresa. Fale com o Falatta para revisar o plano.' });
+        throw new RespostaHttp(400, { error: 'Limite mensal de uso de IA atingido para esta empresa. Fale com o Olume para revisar o plano.' });
       }
       const cfgRow = await conn.execute(`SELECT valor FROM config WHERE chave = 'ia_sugestao_ativa'`);
       if ((cfgRow.rows[0] || {}).VALOR !== 'S') {

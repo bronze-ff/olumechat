@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const db = require('../db/pool');
 const contrato = require('../operador/contrato');
 
-const OPERADOR = { id: 1, email: 'op@falatta.com' };
+const OPERADOR = { id: 1, email: 'op@olume.com' };
 
 const DADOS_VALIDOS = {
   planoNome: 'Plano Pro', valorRecorrenteCentavos: 150000, ciclo: 'mensal',

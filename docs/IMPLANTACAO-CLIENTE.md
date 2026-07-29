@@ -1,7 +1,7 @@
 # Implantação de cliente — checklist reutilizável
 
 Duas partes: o que o CLIENTE fornece/faz (seção 1 — texto pronto para enviar) e o que o
-OPERADOR Falatta executa (seção 2). A ordem importa: a verificação da Meta é o caminho
+OPERADOR Olume executa (seção 2). A ordem importa: a verificação da Meta é o caminho
 crítico (horas a dias) — dispare-a primeiro.
 
 ---

@@ -1,4 +1,4 @@
-// auth/routes.js — Login PRÓPRIO do Falatta (FIL-67): tabela `usuario` por
+// auth/routes.js — Login PRÓPRIO do Olume Chat (FIL-67): tabela `usuario` por
 // tenant, senha em argon2id. Substitui a autenticação contra a tabela de
 // senhas do ERP do cliente original (texto plano, comparada com UPPER()) —
 // era o último ponto do sistema que ainda dependia do fork.

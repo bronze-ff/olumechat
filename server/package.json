@@ -1,7 +1,7 @@
 {
-  "name": "falatta-server",
+  "name": "olume-chat-server",
   "version": "0.1.0",
-  "description": "Falatta — plataforma multi-tenant de atendimento por WhatsApp (Cloud API)",
+  "description": "Olume Chat — plataforma multi-tenant de atendimento por WhatsApp (Cloud API)",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",

@@ -2,7 +2,7 @@
 
 Este repo nasceu como fork do `mc-atendimentos` (single-tenant, Oracle, on-prem,
 acoplado ao ERP WinThor). O acoplamento com o cliente original já saiu. O que
-falta para virar **Falatta** está aqui, em ordem de dependência.
+falta para virar **Olume Chat** está aqui, em ordem de dependência.
 
 **Nada disso é opcional para vender o produto.** Enquanto estes itens não
 fecharem, o repo não roda em produção.
@@ -91,7 +91,7 @@ Caminhos:
 - **Barramento (FIL-72):** Postgres `LISTEN/NOTIFY`, sem Redis. O hub usa uma
   conexão `DATABASE_URL_DIRECT` dedicada em session mode, separada do pool
   `DATABASE_URL` pooled: o PgBouncer em transaction mode não suporta LISTEN.
-  Cada tenant tem seu próprio canal (`falatta_realtime_tenant_<id>`), e a
+  Cada tenant tem seu próprio canal (`olume_realtime_tenant_<id>`), e a
   ausência ou queda do barramento degrada as atualizações SSE e dispara
   reconexão automática; não derruba o processo.
 - **Workers:** eleição por `pg_advisory_xact_lock` (só uma instância roda o
@@ -180,7 +180,7 @@ Coisas que ficaram e devem sumir junto com a onda em que se encaixam:
 - **Identidade visual** — os arquivos de marca do cliente original foram
   removidos, mas `client/public/favicon*.{svg,png}`, `apple-touch-icon.png` e
   `icon-{192,512}.png` **ainda são a arte antiga**. Precisam ser refeitos com a
-  identidade do Falatta (estão referenciados no `index.html` e no manifest, então
+  identidade do Olume Chat (estão referenciados no `index.html` e no manifest, então
   não podem só ser deletados). A paleta no `tailwind.config.js` também é a do
   cliente original.
 - `server/telemetria/pulso-agent.js` — heartbeat de licença/uso que "liga pra

@@ -26,7 +26,7 @@ const authMiddleware = require('../auth/middleware');
 const conversasRoutes = require('../api/conversas');
 
 const TOKEN_SUPORTE = jwt.sign(
-  { jti: 's1', tenantId: 1, suporte: true, operadorId: 999, email: 'operador@falatta.dev' },
+  { jti: 's1', tenantId: 1, suporte: true, operadorId: 999, email: 'operador@olume.dev' },
   SECRET,
   { expiresIn: '1h' }
 );

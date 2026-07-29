@@ -109,12 +109,12 @@ test('hub: ao sair o ultimo assinante, o canal e desassinado', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   cancelar();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(queries, ['LISTEN falatta_realtime_tenant_7', 'UNLISTEN falatta_realtime_tenant_7']);
+  assert.deepEqual(queries, ['LISTEN olume_realtime_tenant_7', 'UNLISTEN olume_realtime_tenant_7']);
 
   queries.length = 0;
   const cancelarNovamente = hub.subscribe(() => {}, 7);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(queries, ['LISTEN falatta_realtime_tenant_7']);
+  assert.deepEqual(queries, ['LISTEN olume_realtime_tenant_7']);
   cancelarNovamente();
   await hub.stop();
 });

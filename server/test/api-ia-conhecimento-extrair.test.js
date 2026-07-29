@@ -53,7 +53,7 @@ function banco({ iaHabilitada = 'S', totalBlocos = 0 } = {}) {
 }
 
 function buildMultipart({ field = 'arquivo', filename, contentType, buffer, semArquivo = false }) {
-  const boundary = '----falattaTestBoundary123';
+  const boundary = '----olumeTestBoundary123';
   const parts = [];
   if (!semArquivo) {
     parts.push(Buffer.from(

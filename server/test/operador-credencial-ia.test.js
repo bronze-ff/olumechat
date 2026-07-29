@@ -12,7 +12,7 @@ const db = require('../db/pool');
 const credencialIa = require('../operador/credencialIa');
 const { chamar } = require('../ia/client');
 
-const OPERADOR = { id: 1, email: 'op@falatta.com' };
+const OPERADOR = { id: 1, email: 'op@olume.com' };
 
 function conexao({ chaveExistente = null, credenciais = [] } = {}) {
   const cap = [];
