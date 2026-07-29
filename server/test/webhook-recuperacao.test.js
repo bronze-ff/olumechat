@@ -93,11 +93,17 @@ function storeEmMemoria() {
     ev.estado = 'processando'; ev.tentativas += 1; ev.tentadoEm = Date.now();
     return true;
   };
+  // `concluido: true` porque neste arquivo o processPayload é um dublê e não
+  // gera efeito pós-commit nenhum — a guarda "não conclui com efeito pendente"
+  // (P1-1) é exercitada em webhook-outbox.test.js, com o outbox de verdade.
   store.concluir = async (id) => {
     const ev = eventos.get(id);
     if (ev) ev.estado = 'concluido';
-    return { atrasoMs: 10 };
+    return { atrasoMs: 10, concluido: true };
   };
+  store.finalizarEncalhados = async ({ maxTentativas }) => [...eventos.values()]
+    .filter((ev) => pendente(ev) && ev.tentativas >= maxTentativas)
+    .map((ev) => { ev.estado = 'falhou'; return ev.id; });
   store.falhar = async (id, erro, max) => {
     const ev = eventos.get(id);
     if (!ev) return { estado: null, tentativas: null, definitivo: false };

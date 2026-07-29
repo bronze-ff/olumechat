@@ -19,6 +19,7 @@ const assert = require('node:assert/strict');
 
 const db = require('../db/pool');
 const store = require('../webhook/eventoStore');
+const efeitoStore = require('../webhook/efeitoStore');
 
 // ---------------------------------------------------------------------------
 // Conexão falsa: registra o SQL executado e devolve o que o teste combinar.
@@ -159,8 +160,37 @@ test('concluir: fecha o evento e devolve o atraso medido no banco', async () => 
   const chamadas = usarFake((sql) => {
     if (sql.startsWith('UPDATE webhook_evento')) return { rows: [{ ATRASO_MS: 1234 }], rowsAffected: 1 };
   });
-  assert.deepEqual(await store.concluir(42), { atrasoMs: 1234 });
+  assert.deepEqual(await store.concluir(42), { atrasoMs: 1234, concluido: true });
   assert.match(chamadas[0].sql, /estado = 'concluido'/);
+});
+
+test('concluir: NÃO conclui evento com efeito pós-commit ainda não despachado', async () => {
+  // A guarda vive no SQL, não no fluxo do JS: é o que garante "evento só vira
+  // concluido quando os changes commitaram E os efeitos foram despachados"
+  // mesmo se algum caminho novo esquecer de checar.
+  const chamadas = usarFake((sql) => {
+    if (sql.startsWith('UPDATE webhook_evento')) return { rows: [], rowsAffected: 0 };
+  });
+  assert.deepEqual(await store.concluir(42), { atrasoMs: null, concluido: false });
+  assert.match(chamadas[0].sql, /NOT EXISTS[\s\S]*webhook_efeito[\s\S]*despachado_em IS NULL/);
+});
+
+test('finalizarEncalhados: evento no teto de tentativas não fica preso em processando', async () => {
+  // P2-3: `processando` com tentativas == max e falha transitória na finalização
+  // saía do alcance de candidatosOrfaos (tentativas < max) e nunca mais era
+  // elegível — nem retry, nem falha definitiva. Estado terminal implícito.
+  const chamadas = usarFake((sql) => {
+    if (sql.startsWith('UPDATE webhook_evento')) return { rows: [{ ID: 7 }, { ID: 9 }], rowsAffected: 2 };
+  });
+  const ids = await store.finalizarEncalhados({
+    orfaoMin: 2, maxTentativas: 5, limite: 50, motivo: 'tentativas esgotadas',
+  });
+  assert.deepEqual(ids, [7, 9]);
+  assert.match(chamadas[0].sql, /estado = 'falhou'/);
+  assert.match(chamadas[0].sql, /tentativas >= :max/, 'a finalização é o complemento do retry, não o mesmo filtro');
+  assert.match(chamadas[0].sql, /estado IN \('recebido', 'processando'\)/);
+  assert.match(chamadas[0].sql, /COALESCE\(tentado_em, recebido_em\)/, 'só finaliza o que está parado há tempo');
+  assert.match(String(chamadas[0].binds.motivo), /tentativas esgotadas/);
 });
 
 test('falhar: abaixo do limite volta para recebido (a recuperação tenta de novo)', async () => {
@@ -224,6 +254,69 @@ test('purgarConcluidos: retenção só apaga evento JÁ concluído', async () =>
     if (sql.startsWith('DELETE')) return { rowsAffected: 12 };
   });
   assert.equal(await store.purgarConcluidos(7), 12);
+  assert.match(chamadas[0].sql, /estado = 'concluido'/);
+  assert.equal(chamadas[0].binds.dias, 7);
+});
+
+// ===================== (3) outbox de efeitos pós-commit =====================
+test('gravar: um efeito por linha, na transação do change, com tenant_id vindo do DEFAULT', async () => {
+  const chamadas = usarFake(() => ({ rows: [], rowsAffected: 1 }));
+  const conn = await db.getConnection();
+  await efeitoStore.gravar(conn, {
+    eventoId: 42,
+    efeitos: [{ tipo: 'fila', conversaId: 7, departamentoId: 4 }, { tipo: 'bot_iniciar', conversaId: 7 }],
+  });
+  assert.equal(chamadas.length, 2, 'um INSERT por efeito');
+  assert.match(chamadas[0].sql, /INSERT INTO webhook_efeito/);
+  assert.equal(chamadas[0].binds.ev, 42);
+  assert.equal(chamadas[0].binds.tipo, 'fila');
+  assert.deepEqual(JSON.parse(chamadas[0].binds.payload), { tipo: 'fila', conversaId: 7, departamentoId: 4 });
+  // tenant_id NÃO é escrito pelo JS: quem manda é o tenant_atual() da
+  // transação do change — assim o efeito nunca nasce em tenant divergente.
+  assert.ok(!/tenant_id/.test(chamadas[0].sql), 'tenant_id tem que vir do DEFAULT tenant_atual()');
+});
+
+test('gravar: change sem efeito nenhum não faz round trip', async () => {
+  const chamadas = usarFake(() => ({ rows: [] }));
+  const conn = await db.getConnection();
+  await efeitoStore.gravar(conn, { eventoId: 42, efeitos: [] });
+  assert.equal(chamadas.length, 0);
+});
+
+test('pendentes: só efeito não despachado, em ordem de criação', async () => {
+  const chamadas = usarFake((sql) => {
+    if (sql.startsWith('SELECT')) {
+      return { rows: [{ ID: 5, TENANT_ID: 3, TIPO: 'bot_iniciar', PAYLOAD: '{"tipo":"bot_iniciar","conversaId":7}' }] };
+    }
+  });
+  const linhas = await efeitoStore.pendentes(42);
+  assert.deepEqual(linhas, [{ id: 5, tenantId: 3, tipo: 'bot_iniciar', payload: '{"tipo":"bot_iniciar","conversaId":7}' }]);
+  assert.match(chamadas[0].sql, /despachado_em IS NULL/);
+  assert.match(chamadas[0].sql, /ORDER BY id/, 'efeito fora de ordem muda o que o cliente recebe');
+  assert.equal(chamadas[0].binds.ev, 42);
+});
+
+test('marcarDespachado: marca uma vez só (segunda tentativa não afeta linha)', async () => {
+  let primeira = true;
+  const chamadas = usarFake((sql) => {
+    if (sql.startsWith('UPDATE webhook_efeito')) {
+      const rows = primeira ? [{ ID: 5 }] : [];
+      primeira = false;
+      return { rows, rowsAffected: rows.length };
+    }
+  });
+  assert.equal(await efeitoStore.marcarDespachado(5, 3), true);
+  assert.equal(await efeitoStore.marcarDespachado(5, 3), false);
+  assert.match(chamadas[0].sql, /despachado_em IS NULL/);
+  assert.equal(chamadas[0].binds.tid, 3, 'caminho de sistema nomeia tenant_id explicitamente');
+});
+
+test('purgarDeEventosConcluidos: efeito é apagado junto com o evento concluído (sem órfão)', async () => {
+  const chamadas = usarFake((sql) => {
+    if (sql.startsWith('DELETE')) return { rowsAffected: 4 };
+  });
+  assert.equal(await efeitoStore.purgarDeEventosConcluidos(7), 4);
+  assert.match(chamadas[0].sql, /DELETE FROM webhook_efeito/);
   assert.match(chamadas[0].sql, /estado = 'concluido'/);
   assert.equal(chamadas[0].binds.dias, 7);
 });

@@ -7,7 +7,7 @@
 | Pasta | Responsabilidade |
 |---|---|
 | `api/` | Rotas do painel do cliente (RBAC via `auth/rbac.js`) |
-| `webhook/` | Entrada da Meta — evento bruto **persistido antes do ACK** (`durabilidade.js` + `eventoStore.js`, FIL-94), tenant por `phone_number_id`, eventos pós-commit |
+| `webhook/` | Entrada da Meta — evento bruto **persistido antes do ACK** e efeitos pós-commit em **outbox transacional** (`durabilidade.js` + `eventoStore.js` + `efeitoStore.js`, FIL-94), tenant por `phone_number_id` |
 | `ia/` | Agente de IA: `runtime.js` (3 fases), `perfilStore` (prompt em camadas), `operacoes.js` (ferramentas nativas), `stt.js`, `anexos.js`, `handoff.js`, `historico.js` (janela 40 turnos) |
 | `bot/` | Chatbot de fluxos determinístico |
 | `fila/` | Distribuidor (least-loaded + round-robin, debounce, leader) |
@@ -31,5 +31,13 @@
 - **O webhook responde 200 só depois de gravar o evento** (`webhook/durabilidade.js`).
   Falha de persistência → 503 (a Meta reenvia). Nunca reintroduza "ACK e processa em
   memória": um restart perde a mensagem do cliente sem rastro.
+- **Efeito pós-commit do webhook nasce no outbox, na transação do change**
+  (`webhook/efeitoStore.js`). Devolver efeito só em memória volta a perder a resposta
+  automática do cliente quando o processo morre entre o commit e o dispatch — e o replay
+  não reproduz (o dedup por WAMID pula a mensagem). Efeito novo = mais um `tipo` tratado
+  em `processEvent::despachar`, nada além disso.
+- **Replay é normal aqui**: `processChange` consulta os WAMIDs já gravados ANTES de tocar
+  contato/conversa/consumo. Escrita nova no caminho da mensagem entra DEPOIS desse
+  pré-check, senão o reprocessamento rebobina a janela de 24h ou cobra duas vezes.
 - Testes: `npm test` (suite completa, sem rede); integração real com Postgres exige
   `TEST_DATABASE_URL` (senão são pulados — e isso é ok). Rode a suite ANTES do push.

@@ -10,7 +10,10 @@
 //   2. `processar()` reivindica o evento (estado `recebido` → `processando`),
 //      roda o pipeline de sempre e fecha em `concluido`/`falhou`.
 //   3. `varrer()` devolve ao trilho o que ficou órfão (processo morto no meio,
-//      ou tentativa que falhou), com teto de tentativas.
+//      ou tentativa que falhou), com teto de tentativas, E finaliza os
+//      ENCALHADOS — os que esgotaram as tentativas sem conclusão (P2-3): sem
+//      esse segundo passe eles ficavam fora do retry (que exige
+//      `tentativas < max`) e fora da falha definitiva, pendentes para sempre.
 //
 // ⚠️ ISTO É UMA CAMADA, NÃO UMA REESCRITA. Todas as garantias do
 // `processEvent` continuam onde estavam: dedup por WAMID (índice único
@@ -18,6 +21,14 @@
 // comTenant(), eventos de tempo real pós-commit e IA/bot fire-and-forget. É
 // isso que faz o reprocessamento ser seguro: rodar o mesmo payload duas vezes
 // não cria mensagem, conversa ou resposta em dobro.
+//
+// ⚠️ `concluido` SÓ VALE COM OS EFEITOS DESPACHADOS (achado P1-1 da review do
+// PR #40). Os efeitos pós-commit (saudação do bot, entrada da IA, fila, SSE)
+// são gravados no outbox DENTRO da transação do change (webhook/efeitoStore.js)
+// e despachados de lá; a guarda no SQL do `eventoStore::concluir` recusa fechar
+// um evento que ainda tem efeito pendente. Antes disso, morrer entre o commit e
+// o dispatch deixava o cliente sem resposta automática — e o replay, que pula a
+// mensagem já gravada, não reproduzia o efeito.
 //
 // ⚠️ `varrer()` NÃO tem guarda de reentrância de propósito — quem serializa é
 // a reivindicação atômica no banco (ver o cabeçalho do eventoStore). O guarda
@@ -29,6 +40,7 @@
 'use strict';
 
 const store = require('./eventoStore');
+const efeitoStore = require('./efeitoStore');
 // Referência ao MÓDULO (não à função): é o que permite a suíte trocar o
 // processPayload por um dublê, como o resto do repo faz com db.getConnection.
 const processEvent = require('./processEvent');
@@ -70,6 +82,8 @@ const contadores = {
   falhas: 0,             // tentativas que falharam (inclui as que serão retentadas)
   falhasDefinitivas: 0,  // esgotaram as tentativas (ou erro permanente)
   reprocessados: 0,      // reivindicados pela recuperação
+  encalhados: 0,         // finalizados por esgotar tentativas sem conclusão
+  efeitosDespachados: 0, // efeitos pós-commit que saíram do outbox
   purgados: 0,
   atrasoUltimoMs: 0,
   atrasoMaxMs: 0,
@@ -122,23 +136,33 @@ async function processar(id, payload) {
   return executar(id, payload);
 }
 
-/** Roda o pipeline de sempre e fecha o estado do evento. */
+/** Roda o pipeline de sempre e fecha o estado do evento. O `eventoId` vai para
+    o processPayload porque é ele que liga o outbox de efeitos (P1-1). */
 async function executar(id, payload) {
   const { maxTentativas } = cfg();
+  let resultado;
   try {
-    await processEvent.processPayload(payload);
+    resultado = await processEvent.processPayload(payload, { eventoId: id });
   } catch (err) {
     await registrarFalha(id, err, maxTentativas);
     return false;
   }
+  if (resultado && resultado.despachados) contadores.efeitosDespachados += resultado.despachados;
   try {
-    const { atrasoMs } = await store.concluir(id);
+    const { atrasoMs, concluido } = await store.concluir(id);
+    if (!concluido) {
+      // A guarda do SQL barrou: sobrou efeito pós-commit sem despachar (ver
+      // eventoStore::concluir). O evento continua pendente e a varredura tenta
+      // de novo — é justamente o que impede "concluído" de mentir.
+      console.error(`[webhook] evento ${id} não concluído: ${(resultado && resultado.pendentes) || '?'} efeito(s) pós-commit ainda pendente(s)`);
+      return false;
+    }
     contadores.concluidos += 1;
     registrarAtraso(atrasoMs);
     return true;
   } catch (err) {
     // Processou, mas não conseguiu marcar: fica pendente e a varredura roda de
-    // novo — seguro porque o pipeline é idempotente (dedup por WAMID).
+    // novo — seguro porque o pipeline é idempotente (dedup por WAMID + outbox).
     console.error(`[webhook] evento ${id} processado sem conseguir marcar conclusão:`, err.message);
     return false;
   }
@@ -157,8 +181,30 @@ async function registrarFalha(id, err, max) {
   if (r.definitivo) {
     contadores.falhasDefinitivas += 1;
     console.error(`[webhook] evento ${id} em FALHA DEFINITIVA após ${r.tentativas} tentativa(s): ${err.message}`);
+    // Efeito que já COMMITOU é fato do cliente (a mensagem está no inbox dele):
+    // tem que sair mesmo com o evento condenado. Sem esta última tentativa, um
+    // evento que morreu entre o commit e o dispatch no ÚLTIMO attempt deixaria o
+    // cliente sem resposta automática — o mesmo furo P1-1 pela porta dos fundos.
+    await despacharEfeitosCommitados(id);
   } else {
     console.error(`[webhook] evento ${id} falhou (tentativa ${r.tentativas}), será reprocessado: ${err.message}`);
+  }
+}
+
+/** Última tentativa de despachar o que já estava commitado num evento que vai
+    terminar em `falhou`. Nunca lança: o evento já está em estado terminal. */
+async function despacharEfeitosCommitados(id) {
+  try {
+    const r = await processEvent.despacharPendentes(id);
+    if (r.despachados) {
+      contadores.efeitosDespachados += r.despachados;
+      console.warn(`[webhook] evento ${id}: ${r.despachados} efeito(s) pós-commit despachado(s) apesar da falha`);
+    }
+    if (r.pendentes) {
+      console.error(`[webhook] evento ${id} terminou com ${r.pendentes} efeito(s) pós-commit NÃO despachado(s) — investigar (a linha fica no banco)`);
+    }
+  } catch (err) {
+    console.error(`[webhook] evento ${id}: efeitos pós-commit não despachados na falha:`, err.message);
   }
 }
 
@@ -196,8 +242,40 @@ async function varrer() {
     }
   }
 
+  await finalizarEncalhados(c);
   await atualizarGauges();
   await aplicarRetencao(c.retencaoDias);
+}
+
+/**
+ * Segundo passe: eventos que esgotaram as tentativas de PROCESSAMENTO e ficaram
+ * parados (P2-3). `candidatosOrfaos` só olha `tentativas < max`, então sem este
+ * passe um evento em `processando` com `tentativas == max` cujo UPDATE de
+ * finalização falhou por um motivo transitório nunca mais seria tocado: nem
+ * retry, nem falha definitiva — pendente para sempre no gauge.
+ *
+ * O UPDATE finaliza (e reclama) primeiro; depois tentamos despachar os efeitos
+ * que já estavam COMMITADOS. Ordem proposital: efeito commitado é fato do
+ * cliente e merece sair mesmo com o evento condenado, mas nenhum deles pode
+ * manter o evento vivo para sempre.
+ */
+async function finalizarEncalhados(c) {
+  let ids = [];
+  try {
+    ids = await store.finalizarEncalhados({
+      orfaoMin: c.orfaoMin, maxTentativas: c.maxTentativas, limite: c.lote,
+      motivo: `finalizado pela recuperacao: ${c.maxTentativas} tentativa(s) sem conclusao`,
+    });
+  } catch (err) {
+    console.error('[webhook] recuperação: falha ao finalizar eventos encalhados:', err.message);
+    return;
+  }
+  for (const id of ids) {
+    contadores.falhasDefinitivas += 1;
+    contadores.encalhados += 1;
+    console.error(`[webhook] evento ${id} FINALIZADO como falhou pela recuperação (tentativas esgotadas sem conclusão)`);
+    await despacharEfeitosCommitados(id);
+  }
 }
 
 /** Lê do banco o que os alertas precisam: pendente sem conclusão e falha
@@ -221,9 +299,18 @@ async function atualizarGauges() {
   }
 }
 
-/** Retenção do log bruto (contém mensagem de cliente — ver eventoStore). */
+/** Retenção do log bruto (contém mensagem de cliente — ver eventoStore). Os
+    EFEITOS saem primeiro: eles não têm FK para o evento (ver migração 024), e
+    apagar o evento antes deixaria efeito órfão. Se morrer no meio, o evento
+    continua concluído e o purge do próximo tick termina o serviço. */
 async function aplicarRetencao(dias) {
   if (!dias) return;
+  try {
+    await efeitoStore.purgarDeEventosConcluidos(dias);
+  } catch (err) {
+    console.error('[webhook] retenção de efeitos falhou:', err.message);
+    return; // sem apagar o evento: senão o efeito viraria órfão
+  }
   try {
     const apagados = await store.purgarConcluidos(dias);
     if (apagados) contadores.purgados += apagados;

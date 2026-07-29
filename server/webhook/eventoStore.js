@@ -163,18 +163,68 @@ async function reivindicarOrfao(id, orfaoMin) {
   return Boolean((r.rows || []).length);
 }
 
-/** Fecha o evento e devolve o ATRASO total (chegada → conclusão), medido pelo
-    banco — é a base do alerta de "atraso no webhook" (§9 do plano). */
+/**
+ * Fecha o evento e devolve o ATRASO total (chegada → conclusão), medido pelo
+ * banco — é a base do alerta de "atraso no webhook" (§9 do plano).
+ *
+ * ⚠️ A guarda `NOT EXISTS (efeito pendente)` é o que dá sentido ao estado
+ * `concluido` (achado P1-1 da review): não basta os changes terem commitado, os
+ * efeitos pós-commit (saudação do bot, entrada da IA, fila, SSE) precisam ter
+ * sido despachados. Sem ela, um evento cujo dispatch morreu no meio seria
+ * fechado como sucesso e o cliente ficaria sem resposta automática. Fica no SQL,
+ * e não no fluxo do JS, para valer também para o caminho novo que esquecer disso.
+ * @returns {Promise<{atrasoMs: number|null, concluido: boolean}>}
+ */
 async function concluir(id) {
   const r = await executar(
     `UPDATE webhook_evento
         SET estado = 'concluido', concluido_em = now(), erro = NULL
       WHERE id = :id
+        AND NOT EXISTS (
+          SELECT 1 FROM webhook_efeito e
+           WHERE e.evento_id = webhook_evento.id AND e.despachado_em IS NULL
+        )
       RETURNING (EXTRACT(EPOCH FROM (now() - recebido_em)) * 1000)::bigint AS atraso_ms`,
     { id }
   );
   const linha = (r.rows || [])[0];
-  return { atrasoMs: linha ? Number(linha.ATRASO_MS) : null };
+  return { atrasoMs: linha ? Number(linha.ATRASO_MS) : null, concluido: Boolean(linha) };
+}
+
+/**
+ * Finaliza os ENCALHADOS: eventos parados que já esgotaram as tentativas de
+ * PROCESSAMENTO. Complemento (não sobreposição) de `candidatosOrfaos`, que só
+ * pega `tentativas < max`.
+ *
+ * ⚠️ Achado P2-3 da review: sem isto, `processando` com `tentativas == max` +
+ * uma falha transitória na FINALIZAÇÃO (o UPDATE de concluir/falhar caiu) ficava
+ * fora dos dois caminhos — nem retry, nem falha definitiva. Era um estado
+ * terminal implícito: a linha ficava pendente para sempre, contando no gauge de
+ * "evento sem conclusão" sem ninguém nunca resolvê-la. A finalização tem que ser
+ * independente do limite de tentativas de processamento.
+ *
+ * O UPDATE também RECLAMA os eventos (viram `falhou` na mesma passada), então
+ * outra instância não os pega em paralelo — e os efeitos já commitados que
+ * sobrarem ainda podem ser despachados depois (ver webhook/durabilidade.js).
+ * @returns {Promise<number[]>} ids finalizados
+ */
+async function finalizarEncalhados({ orfaoMin, maxTentativas, limite, motivo }) {
+  const r = await executar(
+    `UPDATE webhook_evento
+        SET estado = 'falhou',
+            erro = left(COALESCE(erro || ' | ', '') || :motivo, ${MAX_ERRO})
+      WHERE id IN (
+        SELECT id FROM webhook_evento
+         WHERE estado IN ('recebido', 'processando')
+           AND tentativas >= :max
+           AND COALESCE(tentado_em, recebido_em) <= now() - make_interval(mins => :orfaoMin)
+         ORDER BY recebido_em
+         LIMIT :limite
+      )
+      RETURNING id`,
+    { orfaoMin, max: maxTentativas, limite, motivo: String(motivo || 'finalizado pela recuperação').slice(0, 200) }
+  );
+  return (r.rows || []).map((l) => l.ID);
 }
 
 /**
@@ -257,6 +307,7 @@ module.exports = {
   reivindicarOrfao,
   concluir,
   falhar,
+  finalizarEncalhados,
   candidatosOrfaos,
   pendentes,
   purgarConcluidos,
