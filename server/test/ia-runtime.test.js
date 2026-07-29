@@ -21,7 +21,7 @@ function connConversa(fields = {}) {
     // FIL-84: a fase 1 exige fila_status='ia' (a conversa pode ter sido
     // assumida por um atendente) e lê o modo teste do canal.
     if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111', FILA_STATUS: 'ia', IA_MODO_TESTE: 'S' }] };
-    if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
+    if (/^INSERT INTO ia_turno/i.test(sql.trim())) { this._ins.push({ sql, binds }); return { rows: [], rowsAffected: 1 }; }
     if (sql.includes('FROM ia_turno')) return { rows: [] };
     this._ins.push({ sql, binds }); return { rows: [] };
   }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} };
@@ -205,7 +205,7 @@ function connCanal({ modoTeste = 'S', filaStatus = 'ia' } = {}) {
       return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000',
         PHONE_NUMBER_ID: '111', FILA_STATUS: filaStatus, IA_MODO_TESTE: modoTeste }] };
     }
-    if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
+    if (/^INSERT INTO ia_turno/i.test(sql.trim())) { this._ins.push({ sql, binds }); return { rows: [], rowsAffected: 1 }; }
     if (sql.includes('FROM ia_turno')) return { rows: [] };
     this._ins.push({ sql, binds }); return { rows: [] };
   }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} };

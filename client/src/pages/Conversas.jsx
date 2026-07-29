@@ -6,6 +6,7 @@ import Header from '../components/layout/Header';
 import Spinner from '../components/ui/Spinner';
 import Anexo from '../components/ui/Anexo';
 import TagsConversa from '../components/TagsConversa';
+import PedidosIa from '../components/PedidosIa';
 import { AtalhosDropdown, AtalhosModal } from '../components/Atalhos';
 import useEventStream from '../hooks/useEventStream';
 import { useAuth } from '../context/AuthContext';
@@ -150,8 +151,12 @@ function Bolha({ m }) {
     return (
       <div className="flex justify-center my-2">
         <div className="max-w-md text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          {/* FIL-85: a IA passou a AGIR (ficha, etiqueta, pedido) e cada ação
+              vira nota com origem='ia'. Chamar isso de "nota interna" faria o
+              atendente achar que um colega escreveu aquilo. */}
           <span className="font-mono uppercase text-[10px] tracking-wide text-amber-600">
-            {m.origem === 'sistema' ? 'evento do sistema' : 'nota interna'}
+            {m.origem === 'ia' ? 'ação do agente de IA'
+              : m.origem === 'sistema' ? 'evento do sistema' : 'nota interna'}
           </span>
           <p className="mt-0.5 whitespace-pre-wrap">{m.conteudo}</p>
         </div>
@@ -777,6 +782,9 @@ function AtendimentoRail({ isGestor, suporte, user, secao, onSelect }) {
   const itens = [
     { id: 'conversas', nome: 'Conversas', icon: 'inbox' },
     ...(!suporte ? [{ id: 'historico', nome: 'Meus atendimentos', icon: 'history' }] : []),
+    // FIL-85: só existe com o add-on de IA — sem agente não há pedido nenhum
+    // para conferir, e a seção vazia só ocuparia espaço.
+    ...(user?.iaHabilitada ? [{ id: 'pedidos', nome: 'Pedidos da IA', icon: 'contract' }] : []),
     { id: 'equipe', nome: 'Equipe online', icon: 'users' },
   ];
 
@@ -830,10 +838,11 @@ function AtendimentoRail({ isGestor, suporte, user, secao, onSelect }) {
   );
 }
 
-function AtendimentoMobileNav({ secao, onSelect, suporte }) {
+function AtendimentoMobileNav({ secao, onSelect, suporte, iaHabilitada }) {
   const itens = [
     { id: 'conversas', nome: 'Conversas', icon: 'inbox' },
     ...(!suporte ? [{ id: 'historico', nome: 'Histórico', icon: 'history' }] : []),
+    ...(iaHabilitada ? [{ id: 'pedidos', nome: 'Pedidos', icon: 'contract' }] : []),
     { id: 'equipe', nome: 'Online', icon: 'users' },
   ];
   return (
@@ -1165,6 +1174,7 @@ export default function Conversas() {
   const [transferindo, setTransferindo] = useState(false);
   const [encerrando, setEncerrando] = useState(false);
   const [editandoContato, setEditandoContato] = useState(false);
+  const [vendoPedidos, setVendoPedidos] = useState(false);
   const { user, isGestor } = useAuth();
   const qc = useQueryClient();
 
@@ -1247,9 +1257,26 @@ export default function Conversas() {
     refetchInterval: 60000, // fallback; o tempo-real vem do SSE
   });
 
+  // FIL-85 — pedidos EM RASCUNHO desta conversa: é o atalho a partir do
+  // atendimento (a lista completa mora na seção "Pedidos da IA"). A queryKey
+  // fica sob o prefixo ['ia-pedidos'] para a invalidação do SSE pegar os dois,
+  // mas com um segmento PRÓPRIO ('badge'): o PedidosIa é uma infinite query, e
+  // duas queries de tipos diferentes na mesma chave brigariam pelo cache.
+  const pedidosDaConversa = useQuery({
+    queryKey: ['ia-pedidos', 'badge', sel?.id],
+    queryFn: () => api.get('/ia-pedidos', {
+      params: { status: 'rascunho', conversaId: sel.id, limite: 20 },
+    }).then((r) => r.data),
+    enabled: !!sel?.id && !!user?.iaHabilitada,
+  });
+  const rascunhosDaConversa = pedidosDaConversa.data?.itens?.length || 0;
+
   // Tempo-real: eventos do SSE (mensagem/status/fila/atribuicao/transferencia).
   useEventStream((evt) => {
     qc.invalidateQueries({ queryKey: ['conversas'] });
+    // Pedido registrado pela IA (ou conferido por um colega) — o badge e a
+    // lista têm que mudar na hora, não no refetch de 60s.
+    if (evt.tipo === 'pedido') qc.invalidateQueries({ queryKey: ['ia-pedidos'] });
     if (isGestor) qc.invalidateQueries({ queryKey: ['conversas', 'contagens'] });
     if (sel && evt.conversaId === sel.id) {
       qc.invalidateQueries({ queryKey: ['mensagens', sel.id] });
@@ -1303,11 +1330,14 @@ export default function Conversas() {
       />
       <div className="flex-1 min-w-0 flex flex-col">
         <Header
-          title={secao === 'historico' ? 'Meus atendimentos' : secao === 'equipe' ? 'Equipe online' : 'Conversas'}
+          title={secao === 'historico' ? 'Meus atendimentos'
+            : secao === 'equipe' ? 'Equipe online'
+              : secao === 'pedidos' ? 'Pedidos da IA' : 'Conversas'}
           embedded
         />
         {!(secao === 'conversas' && sel) && (
-          <AtendimentoMobileNav suporte={user?.suporte} secao={secao} onSelect={(novaSecao) => { setSecao(novaSecao); setSel(null); }} />
+          <AtendimentoMobileNav suporte={user?.suporte} iaHabilitada={user?.iaHabilitada}
+            secao={secao} onSelect={(novaSecao) => { setSecao(novaSecao); setSel(null); }} />
         )}
         <div className="flex-1 min-h-0 flex">
         {secao === 'conversas' ? (
@@ -1437,6 +1467,16 @@ export default function Conversas() {
                     </svg>
                   </button>
                 )}
+                {rascunhosDaConversa > 0 && (
+                  <button onClick={() => setVendoPedidos(true)}
+                    title="Pedidos registrados pela IA nesta conversa, aguardando conferência"
+                    className="relative p-1.5 rounded-lg text-amber-700 hover:bg-amber-50" aria-label="Pedidos a conferir">
+                    <Icon name="contract" size={19} />
+                    <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      {rascunhosDaConversa}
+                    </span>
+                  </button>
+                )}
                 <TagsConversa conversaId={sel.id} tags={sel.tags || []} />
                 <JanelaBadge expiraIso={sel.janelaExpiraEm} />
                 {sel.filaStatus !== 'resolvida' && sel.filaStatus !== 'ia' && (
@@ -1524,6 +1564,18 @@ export default function Conversas() {
           </>
         ) : secao === 'historico' ? (
           <MeuHistorico />
+        ) : secao === 'pedidos' ? (
+          <div className="flex-1 min-h-0 overflow-y-auto bg-paper-100">
+            <div className="max-w-screen-sm mx-auto p-4 space-y-3">
+              <div>
+                <h2 className="text-sm font-semibold text-ink-950">Pedidos registrados pela IA</h2>
+                <p className="text-[11px] text-stone-500">
+                  Confira o que o agente anotou durante o atendimento. Nada é enviado a outro sistema.
+                </p>
+              </div>
+              <PedidosIa />
+            </div>
+          </div>
         ) : (
           <EquipeOnline deptos={deptos} />
         )}
@@ -1539,6 +1591,22 @@ export default function Conversas() {
           onClose={() => setEncerrando(false)}
           onDone={() => { setEncerrando(false); setSel(null); qc.invalidateQueries({ queryKey: ['conversas'] }); }} />
       )}
+      {vendoPedidos && sel && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setVendoPedidos(false)} />
+          <div className="relative w-full sm:max-w-lg bg-white rounded-t-2xl sm:rounded-2xl overflow-hidden">
+            <div className="navy-gradient text-white px-4 py-3 flex items-center gap-2">
+              <span className="section-bar" />
+              <h2 className="font-display font-bold text-base flex-1">Pedidos desta conversa</h2>
+              <button onClick={() => setVendoPedidos(false)} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
+            </div>
+            <div className="modal-body max-h-[70vh] overflow-y-auto">
+              <PedidosIa conversaId={sel.id} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {editandoContato && sel && sel.contatoId && (
         <ContatoModal conversa={sel}
           onClose={() => setEditandoContato(false)}
