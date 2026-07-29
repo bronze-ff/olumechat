@@ -66,6 +66,34 @@
   button, a, input, select, textarea { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-offset-2; }
   button, a { @apply transition-colors duration-150; }
   ::selection { @apply bg-brand-200 text-ink-950; }
+
+  /* Scrollbar fina no tema, padrão GLOBAL (FIL-89): a nativa do Windows é
+     larga e clara, briga com qualquer superfície do produto. Vale por
+     default em QUALQUER elemento com overflow (vertical ou horizontal) —
+     de propósito não é uma classe opt-in, pra ninguém esquecer de aplicar
+     num contêiner novo. `.product-sidebar` (sempre escura, nos dois temas
+     do app) sobrescreve pra thumb claro — ver override fora de @layer perto
+     da definição de `.product-sidebar`. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-paper-500) / 0.5) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--color-paper-500) / 0.5);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--color-paper-500) / 0.75);
+  }
 }
 
 .brand-mark-surface,
@@ -317,6 +345,23 @@ html[data-theme="dark"] .text-purple-700 { color: rgb(var(--status-purple-text))
 
 .product-sidebar {
   background: #0b1513;
+}
+
+/* Sidebar do produto é sempre escura (claro ou dark mode do app) — thumb
+   claro translúcido em vez de seguir os tokens de tema do default global
+   (ver @layer base em cima). Fora de @layer de propósito: styles sem layer
+   vencem qualquer regra do Tailwind na cascata, sem depender de especificidade. */
+.product-sidebar,
+.product-sidebar * {
+  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+}
+.product-sidebar::-webkit-scrollbar-thumb,
+.product-sidebar *::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.18);
+}
+.product-sidebar::-webkit-scrollbar-thumb:hover,
+.product-sidebar *::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(255 255 255 / 0.32);
 }
 
 .conversation-shell {
