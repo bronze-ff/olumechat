@@ -208,7 +208,7 @@ test` em todo push para `main` e em todo pull request.
 
 ### Proteção do GitHub
 
-No repositório `bronze-ff/falatta`, o administrador deve proteger `main`, exigir
+No repositório `bronze-ff/olumechat`, o administrador deve proteger `main`, exigir
 pull request, exigir o check `test` deste workflow e bloquear push direto. O
 merge continua sendo feito manualmente após o CI verde.
 

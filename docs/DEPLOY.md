@@ -28,7 +28,7 @@ O disco do Render é efêmero — mídia de WhatsApp precisa do driver s3.
 
 ## 3. Render (backend)
 
-1. New → Web Service → conectar o repo `bronze-ff/falatta`.
+1. New → Web Service → conectar o repo `bronze-ff/olumechat`.
 2. **Root Directory:** `server` · **Build:** `npm ci` · **Start:** `npm start`.
 3. **Pre-Deploy Command:** `npm run migrar` (usa `MIGRATION_DATABASE_URL`; roda a cada deploy —
    as migrações são idempotentes por contrato).
@@ -84,7 +84,7 @@ Não usar em produção: `WA_TOKEN`, `WA_PHONE_NUMBER_ID`, `WA_BUSINESS_ACCOUNT_
 
 ## 4. Vercel (front)
 
-1. New Project → importar o repo `bronze-ff/falatta`.
+1. New Project → importar o repo `bronze-ff/olumechat`.
 2. **Root Directory:** `client` · Framework preset: **Vite** (build `npm run build`, output `dist`).
 3. Editar `client/vercel.json`: trocar `https://SEU-BACKEND.onrender.com` pela URL real do
    Render (o rewrite mantém `/api` na mesma origem — sem CORS, e o SSE passa junto).
