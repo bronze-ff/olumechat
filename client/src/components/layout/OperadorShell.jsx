@@ -111,8 +111,8 @@ export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titul
             </nav>
             {/* Sinaliza que a barra continua além da borda (sem isso, no
                 celular parece que só existem as primeiras seções visíveis). */}
-            <div className={`pointer-events-none absolute inset-y-0 bottom-2 left-0 w-6 bg-gradient-to-r from-white to-transparent transition-opacity ${navMobile.atStart ? 'opacity-0' : 'opacity-100'}`} aria-hidden="true" />
-            <div className={`pointer-events-none absolute inset-y-0 bottom-2 right-0 w-6 bg-gradient-to-l from-white to-transparent transition-opacity ${navMobile.atEnd ? 'opacity-0' : 'opacity-100'}`} aria-hidden="true" />
+            <div className={`pointer-events-none absolute inset-y-0 bottom-2 left-0 w-6 bg-gradient-to-r from-[rgb(var(--color-surface))] to-transparent transition-opacity ${navMobile.atStart ? 'opacity-0' : 'opacity-100'}`} aria-hidden="true" />
+            <div className={`pointer-events-none absolute inset-y-0 bottom-2 right-0 w-6 bg-gradient-to-l from-[rgb(var(--color-surface))] to-transparent transition-opacity ${navMobile.atEnd ? 'opacity-0' : 'opacity-100'}`} aria-hidden="true" />
           </div>
         </header>
 
