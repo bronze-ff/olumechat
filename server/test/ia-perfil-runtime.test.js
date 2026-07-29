@@ -35,7 +35,7 @@ function conn({ instrucoes = null, blocos = [] } = {}) {
     async execute(sql, binds = {}) {
       if (/^(SET|SELECT set_config|SAVEPOINT|RELEASE|ROLLBACK TO)/.test(sql)) return { rows: [] };
       if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'S' }] };
-      if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
+      if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111', FILA_STATUS: 'ia', IA_MODO_TESTE: 'S' }] };
       if (sql.includes('FROM ia_perfil')) return { rows: instrucoes === null ? [] : [{ INSTRUCOES: instrucoes, FICHA: { endereco: 'Rua das Flores, 100' } }] };
       if (sql.includes('FROM ia_conhecimento')) return { rows: blocos };
       if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };

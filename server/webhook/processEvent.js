@@ -24,6 +24,8 @@ const { lerConfig } = require('../utils/configCache');
 const { acharContato, variantes, normalizar: normTel } = require('../utils/telefone');
 const { acharClientePorTelefone } = require('../utils/clienteLookup');
 const { foraDeHorario } = require('../utils/horario');
+const { iaAtivaNoInstante } = require('../ia/ativacao');
+const entradaIa = require('../ia/entrada');
 const { descreverMensagem } = require('../utils/descreverMensagem');
 const { gerarProtocolo } = require('../fila/protocolo');
 const distribuidor = require('../fila/distribuidor');
@@ -48,7 +50,8 @@ async function resolverNumero(phoneNumberId) {
   const conn = await db.getConnection();
   try {
     const r = await conn.execute(
-      `SELECT n.id, n.tenant_id, n.departamento_padrao_id, n.modo, f.id AS fluxo_id
+      `SELECT n.id, n.tenant_id, n.departamento_padrao_id, n.modo, n.ia_regra, n.ia_modo_teste,
+              f.id AS fluxo_id
          FROM numero n
          LEFT JOIN fluxo f ON f.tenant_id = n.tenant_id AND f.numero_id = n.id AND f.ativo = 'S'
         WHERE n.phone_number_id = :p`,
@@ -62,6 +65,9 @@ async function resolverNumero(phoneNumberId) {
       departamentoPadraoId: row.DEPARTAMENTO_PADRAO_ID || null,
       fluxoAtivoId: row.FLUXO_ID || null,
       modo: row.MODO || 'padrao',
+      // FIL-84: a ativação da IA deixou de ser só o `modo` — ver ia/ativacao.js.
+      iaRegra: row.IA_REGRA || 'sempre',
+      iaModoTeste: row.IA_MODO_TESTE || 'S',
     };
   } finally {
     await conn.close().catch(() => {});
@@ -163,8 +169,8 @@ async function migrarNumeroContato(conn, { telefoneAntigo, telefoneNovo }) {
     const ids = [];
     for (const cv of cvs.rows) {
       await conn.execute(
-        `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, ts)
-         VALUES (:cv, :ct, 'nota', 'text', :txt, now())`,
+        `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, origem, ts)
+         VALUES (:cv, :ct, 'nota', 'text', :txt, 'sistema', now())`,
         { cv: cv.ID, ct: antigo.ID, txt }
       );
       ids.push(cv.ID);
@@ -181,9 +187,11 @@ async function migrarNumeroContato(conn, { telefoneAntigo, telefoneNovo }) {
  * IMPORTANTE: a RENOVAÇÃO nunca toca FILA_STATUS/DEPARTAMENTO (ciclo de vida do
  * atendimento é ortogonal à janela). Conversa NOVA entra na fila do
  * departamento padrão do número (se houver) com protocolo gerado.
+ * @param {boolean} iaAtiva FIL-84 — a IA cobre ESTE canal NESTE instante?
+ *   (ia/ativacao.js: depende da regra de horário, não só de numero.modo)
  * @returns {Promise<{id, criada, departamentoId, protocolo}>}
  */
-async function openOrRenewConversa(conn, contatoId, numero, ts) {
+async function openOrRenewConversa(conn, contatoId, numero, ts, iaAtiva) {
   const expira = new Date(ts.getTime() + 24 * 60 * 60 * 1000);
 
   // Uma conversa por CONTATO + NÚMERO: o mesmo cliente falando no 1061 e no 1090
@@ -213,18 +221,18 @@ async function openOrRenewConversa(conn, contatoId, numero, ts) {
     };
   }
 
-  // Conversa nova: número em MODO='ia' → bot de IA; senão, número com FLUXO
-  // ativo → autoatendimento (bot determinístico); senão, com depto padrão →
-  // fila (aguardando); senão → inbox geral.
+  // Conversa nova: IA ativa NESTE instante (modo + regra de horário) → bot de
+  // IA; senão, número com FLUXO ativo → autoatendimento (bot determinístico);
+  // senão, com depto padrão → fila (aguardando); senão → inbox geral.
   let fluxoId, departamentoId, filaStatus;
-  if (numero.modo === 'ia') {
+  if (iaAtiva) {
     fluxoId = null; departamentoId = null; filaStatus = 'ia';
   } else {
     fluxoId = numero.fluxoAtivoId || null;
     departamentoId = fluxoId ? null : (numero.departamentoPadraoId || null);
     filaStatus = fluxoId ? 'bot' : (departamentoId ? 'aguardando' : 'em_atendimento');
   }
-  const protocolo = (fluxoId || departamentoId || numero.modo === 'ia') ? await gerarProtocolo(conn) : null;
+  const protocolo = (fluxoId || departamentoId || iaAtiva) ? await gerarProtocolo(conn) : null;
 
   const ins = await conn.execute(
     `INSERT INTO conversa
@@ -265,9 +273,9 @@ async function insertInbound(conn, m) {
   const media = m.media || {};
   const r = await conn.execute(
     `INSERT INTO mensagem
-       (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, ts,
+       (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, origem, ts,
         media_id, mime_type, nome_arquivo, midia_caminho, midia_tamanho, midia_sha256)
-     VALUES (:cv, :ct, :num, :wamid, 'in', :tipo, :cont, :ts,
+     VALUES (:cv, :ct, :num, :wamid, 'in', :tipo, :cont, 'cliente', :ts,
         :mediaId, :mime, :nome, :cam, :tam, :sha)
      ON CONFLICT (tenant_id, wamid) DO NOTHING`,
     {
@@ -329,8 +337,8 @@ async function confirmarEncerramento(evt) {
     await db.comTenant(evt.tenantId, async (conn) => {
       await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', now())`,
+           (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+         VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sistema', 'sent', now())`,
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: texto }
       );
       // Medição de consumo (FIL-76/FIL-77): achado de review — confirmação de
@@ -365,8 +373,8 @@ async function enviarAvisoForaHorario(evt) {
     await db.comTenant(evt.tenantId, async (conn) => {
       await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sent', now())`,
+           (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+         VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'sistema', 'sent', now())`,
         { cv: evt.conversaId, ct: evt.contatoId, num: evt.numeroId, wamid, txt: evt.texto }
       );
       // Medição de consumo (FIL-76/FIL-77): achado de review — aviso de fora
@@ -417,8 +425,8 @@ async function anotarRespostaCampanha(conn, { conversaId, contatoId, telefone })
       + (row.TEMPLATE_NOME ? ` (template ${row.TEMPLATE_NOME})` : '')
       + (quando ? ` enviado em ${quando}.` : '.') + dados;
     await conn.execute(
-      `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, ts)
-       VALUES (:cv, :ct, 'nota', 'text', :txt, :ts)`,
+      `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, origem, ts)
+       VALUES (:cv, :ct, 'nota', 'text', :txt, 'sistema', :ts)`,
       { cv: conversaId, ct: contatoId, txt: texto, ts: row.ENVIADO_EM || new Date() }
     );
   } catch (err) {
@@ -475,7 +483,14 @@ async function processChange(conn, numero, value) {
       waId: contact.wa_id,
       nome: contact.profile && contact.profile.name,
     });
-    const conversa = await openOrRenewConversa(conn, contatoId, numero, ts);
+    // FIL-84: a IA cobre este canal NESTE instante? A regra 'fora_horario' lê o
+    // expediente já configurado do tenant (lerConfig tem cache de 60s, então
+    // não é uma ida ao banco por mensagem).
+    let iaAtiva = numero.modo === 'ia';
+    if (iaAtiva && numero.iaRegra === 'fora_horario') {
+      iaAtiva = iaAtivaNoInstante(numero, await lerConfig(numero.tenantId, conn), ts);
+    }
+    const conversa = await openOrRenewConversa(conn, contatoId, numero, ts, iaAtiva);
     const conversaId = conversa.id;
     // Medição de consumo (FIL-76/FIL-77): conversa NOVA é evento cobrável —
     // achado de review, não tinha produtor nenhum antes.
@@ -595,9 +610,14 @@ async function processChange(conn, numero, value) {
       // Conversa em atendimento pelo bot de IA: runtime próprio. Diferente do
       // 'bot' (que na 1ª msg só saúda), a IA responde JÁ NA PRIMEIRA mensagem
       // (ela é a própria pergunta) — por isso NÃO exige !conversa.criada.
-      if (!optAcao && conversa.filaStatus === 'ia'
-          && msg.type === 'text' && msg.text) {
-        eventos.push({ tipo: 'ia_entrada', conversaId, texto: msg.text.body });
+      // FIL-84: deixou de ser só texto. Áudio, imagem, botão e localização
+      // chegam nela agora; o que ela ainda não compreende gera resposta
+      // educada, nunca silêncio (ver ia/entrada.js).
+      if (!optAcao && conversa.filaStatus === 'ia') {
+        const entrada = entradaIa.classificar(msg, conteudo, media);
+        if (entrada.tipo !== 'ignorar') {
+          eventos.push({ tipo: 'ia_entrada', conversaId, entrada });
+        }
       }
     }
 
@@ -661,7 +681,7 @@ async function processPayload(payload) {
   for (const evt of eventosGlobais) {
     if (evt.tipo === 'bot_iniciar') { runtime.iniciarFluxo(evt.tenantId, evt.conversaId); continue; }
     if (evt.tipo === 'bot_entrada') { runtime.processarEntrada(evt.tenantId, evt.conversaId, evt.texto); continue; }
-    if (evt.tipo === 'ia_entrada') { require('../ia/runtime').processarEntrada(evt.tenantId, evt.conversaId, evt.texto); continue; }
+    if (evt.tipo === 'ia_entrada') { require('../ia/runtime').processarEntrada(evt.tenantId, evt.conversaId, evt.entrada); continue; }
     if (evt.tipo === 'encerrar_cliente') {
       confirmarEncerramento(evt); // envia a confirmação fora da tx (isolado)
       publish({ tipo: 'conversa', conversaId: evt.conversaId, departamentoId: evt.departamentoId, tenantId: evt.tenantId });

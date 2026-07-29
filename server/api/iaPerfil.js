@@ -42,18 +42,10 @@ const testarIaLimiter = limiterPorUsuario({
   mensagem: 'Muitos testes do agente nesta hora. Aguarde antes de testar de novo.',
 });
 
-/** Gate do add-on de IA. Roda em transação própria e TERMINA antes de o handler
- *  abrir a dele — nunca duas conexões do pool presas pela mesma requisição. */
-async function exigirIaHabilitada(req, res, next) {
-  try {
-    const habilitada = await db.comTenant(req.tenantId, async (conn) => {
-      const t = await conn.execute(`SELECT ia_habilitada FROM tenant WHERE id = :tenantId`, { tenantId: req.tenantId });
-      return (t.rows[0] || {}).IA_HABILITADA === 'S';
-    });
-    if (!habilitada) return res.status(400).json({ error: 'Recurso de IA não incluído no plano desta empresa.' });
-    next();
-  } catch (err) { next(err); }
-}
+// Gate do add-on de IA. FIL-84: extraído para ia/gate.js quando api/numeros.js
+// passou a precisar do mesmo gate (a rota de IA do canal). Roda em transação
+// própria e TERMINA antes de o handler abrir a dele.
+const { exigirIaHabilitada } = require('../ia/gate');
 
 async function auditar(conn, req, { acao, entidade, entidadeId = null, detalhe = null }) {
   await conn.execute(

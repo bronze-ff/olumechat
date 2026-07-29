@@ -45,10 +45,22 @@ test('schemasParaProvedor devolve um schema por tool, com obrigatórios', () => 
   });
   try {
     const s = schemasParaProvedor();
-    assert.equal(s.length, TOOLS.length);
+    // FIL-84: a saída é a UNIÃO — tools de SQL primeiro, operações nomeadas
+    // depois (ia/operacoes.js). O modelo recebe as duas coisas do mesmo jeito.
+    const deSql = s.filter((x) => TOOLS.some((t) => t.nome === x.nome));
+    assert.equal(deSql.length, TOOLS.length);
     assert.deepEqual(s[0].obrigatorios, ['data_ini']);
     assert.ok('filtro' in s[0].propriedades);
   } finally {
     TOOLS.length = 0;
   }
+});
+
+// FIL-84 — as operações NOMEADAS entram no MESMO schema que vai ao provedor.
+// Sem isto o modelo nunca fica sabendo que pode transferir, e a ferramenta
+// existe só no papel.
+test('schemasParaProvedor inclui as operações nomeadas junto das tools de SQL', () => {
+  const nomes = schemasParaProvedor().map((s) => s.nome);
+  assert.ok(nomes.includes('transferir_para_humano'),
+    'transferir_para_humano tem que ser oferecida ao provedor');
 });

@@ -96,8 +96,8 @@ async function enviarMensagens(conn, tenantId, cv, mensagens) {
     }
     await conn.execute(
       `INSERT INTO mensagem
-         (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, status, ts)
-       VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, :st, now())`,
+         (conversa_id, contato_id, numero_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+       VALUES (:cv, :ct, :num, :wamid, 'out', 'text', :txt, 'bot', :st, now())`,
       { cv: cv.conversaId, ct: cv.contatoId, num: cv.numeroId, wamid, txt, st: status }
     );
     // Medição de consumo (FIL-76/FIL-77): achado de review — envio do bot
@@ -151,8 +151,8 @@ async function aplicar(conn, tenantId, cv, resultado) {
       ? `Bot: dados capturados — ${Object.entries(vars).map(([k, v]) => `${k}: ${v}`).join(' · ')}`
       : 'Bot: cliente encaminhado pelo autoatendimento.';
     await conn.execute(
-      `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, ts)
-       VALUES (:cv, :ct, 'nota', 'text', :txt, now())`,
+      `INSERT INTO mensagem (conversa_id, contato_id, direcao, tipo, conteudo, origem, ts)
+       VALUES (:cv, :ct, 'nota', 'text', :txt, 'bot', now())`,
       { cv: cv.conversaId, ct: cv.contatoId, txt: resumo }
     );
     await conn.execute(

@@ -26,7 +26,7 @@ function connConversa({ falharNoConsumo = false } = {}) {
     ins,
     async execute(sql, binds) {
       if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'S' }] };
-      if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
+      if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111', FILA_STATUS: 'ia', IA_MODO_TESTE: 'S' }] };
       if (sql.includes('ia_teto_tokens_mes')) return { rows: [{ IA_TETO_TOKENS_MES: null }] };
       if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
       if (sql.includes('FROM ia_turno')) return { rows: [] };

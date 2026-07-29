@@ -135,22 +135,41 @@ function DiaSeparador({ label }) {
   );
 }
 
+// FIL-84: a timeline distingue QUEM escreveu (mensagem.origem). Antes o único
+// sinal era "sem atendente_id", que valia igual para o bot de fluxo, para a IA
+// e para o aviso automático — e sem isso o atendente que assume uma conversa
+// não tem como saber o que foi a IA que disse em nome da empresa.
+const ROTULO_ORIGEM = {
+  ia: { texto: 'agente de IA', classe: 'bg-brand-800' },
+  bot: { texto: 'autoatendimento', classe: 'bg-stone-600' },
+  sistema: { texto: 'automático', classe: 'bg-stone-500' },
+};
+
 function Bolha({ m }) {
   if (m.direcao === 'nota') {
     return (
       <div className="flex justify-center my-2">
         <div className="max-w-md text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          <span className="font-mono uppercase text-[10px] tracking-wide text-amber-600">nota interna</span>
+          <span className="font-mono uppercase text-[10px] tracking-wide text-amber-600">
+            {m.origem === 'sistema' ? 'evento do sistema' : 'nota interna'}
+          </span>
           <p className="mt-0.5 whitespace-pre-wrap">{m.conteudo}</p>
         </div>
       </div>
     );
   }
   const out = m.direcao === 'out';
+  const marca = out ? ROTULO_ORIGEM[m.origem] : null;
   return (
     <div className={`flex my-1 ${out ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm
-        ${out ? 'bg-brand-700 text-white rounded-br-sm' : 'bg-white border border-black/[0.07] text-stone-800 rounded-bl-sm'}`}>
+        ${out ? `${marca ? marca.classe : 'bg-brand-700'} text-white rounded-br-sm` : 'bg-white border border-black/[0.07] text-stone-800 rounded-bl-sm'}`}>
+        {marca && (
+          <div className="flex items-center gap-1 mb-0.5 text-[10px] font-mono uppercase tracking-wide text-white/75">
+            {m.origem === 'ia' && <Icon name="bot" size={11} />}
+            {marca.texto}
+          </div>
+        )}
         {m.mediaId && <div className="mb-1"><Anexo m={m} out={out} /></div>}
         {m.conteudo && <p className="whitespace-pre-wrap break-words">{m.conteudo}</p>}
         <div className={`text-[10px] mt-1 text-right ${out ? 'text-white/85' : 'text-stone-400'}`} title={formatDateTime(m.ts)}>
@@ -1244,6 +1263,24 @@ export default function Conversas() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['conversas'] }),
   });
 
+  // FIL-84 — handoff nos dois sentidos. Rotas separadas do /atribuir: sair da
+  // IA precisa da guarda de fila_status='ia' (corrida com a própria IA
+  // transferindo) e resolve o departamento pela cascata do canal.
+  const assumirIa = useMutation({
+    mutationFn: (id) => api.post(`/conversas/${id}/assumir-ia`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['conversas'] });
+      if (sel) qc.invalidateQueries({ queryKey: ['mensagens', sel.id] });
+    },
+  });
+  const devolverIa = useMutation({
+    mutationFn: (id) => api.post(`/conversas/${id}/devolver-ia`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['conversas'] });
+      if (sel) qc.invalidateQueries({ queryKey: ['mensagens', sel.id] });
+    },
+  });
+
   // Mantém a conversa selecionada em sincronia com a lista (tags/última msg).
   useEffect(() => {
     if (!sel || !conversas.data) return;
@@ -1404,6 +1441,17 @@ export default function Conversas() {
                 <JanelaBadge expiraIso={sel.janelaExpiraEm} />
                 {sel.filaStatus !== 'resolvida' && sel.filaStatus !== 'ia' && (
                   <>
+                    {/* FIL-84: só faz sentido em canal com a IA ligada — devolver
+                        num canal sem IA deixaria a conversa presa sem ninguém. */}
+                    {sel.numeroModo === 'ia' && (
+                      <button onClick={() => devolverIa.mutate(sel.id, { onSuccess: () => setSel({ ...sel, filaStatus: 'ia' }) })}
+                        disabled={devolverIa.isPending}
+                        title="Devolver o atendimento para o agente de IA"
+                        className="p-1.5 rounded-lg text-stone-400 hover:text-brand-700 hover:bg-brand-50 disabled:opacity-40"
+                        aria-label="Devolver para a IA">
+                        <Icon name="bot" size={19} />
+                      </button>
+                    )}
                     <button onClick={() => setTransferindo(true)} title="Transferir"
                       className="p-1.5 rounded-lg text-stone-400 hover:text-brand-700 hover:bg-brand-50" aria-label="Transferir">
                       <svg className="w-4.5 h-4.5 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1429,10 +1477,23 @@ export default function Conversas() {
                   </Fragment>
                 ))}
               </div>
+              {(assumirIa.isError || devolverIa.isError) && (
+                <p className="shrink-0 px-4 py-2 text-xs text-red-700 bg-red-50 border-t border-red-200">
+                  {(assumirIa.error || devolverIa.error)?.response?.data?.error || 'Falha na ação.'}
+                </p>
+              )}
               {sel.filaStatus === 'ia' ? (
-                <div className="shrink-0 bg-brand-50 border-t border-brand-100 px-4 py-3 flex items-center justify-center gap-2 text-center text-xs text-brand-800 safe-bottom">
-                  <Icon name="bot" size={15} className="shrink-0" />
-                  Conversa conduzida pelo <b>agente de IA</b> — somente leitura. As respostas saem automaticamente.
+                <div className="shrink-0 bg-brand-50 border-t border-brand-100 px-4 py-3 flex items-center gap-3 safe-bottom">
+                  <Icon name="bot" size={15} className="shrink-0 text-brand-800" />
+                  <p className="text-xs text-brand-800 flex-1">
+                    Conversa conduzida pelo <b>agente de IA</b>. Assuma para responder você — a IA cala na hora.
+                  </p>
+                  <button
+                    onClick={() => assumirIa.mutate(sel.id, { onSuccess: () => setSel({ ...sel, filaStatus: 'em_atendimento' }) })}
+                    disabled={assumirIa.isPending}
+                    className="shrink-0 px-4 py-2 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-40">
+                    {assumirIa.isPending ? 'Assumindo…' : 'Assumir'}
+                  </button>
                 </div>
               ) : sel.filaStatus === 'aguardando' ? (
                 <div className="shrink-0 bg-amber-50 border-t border-amber-200 px-4 py-3 flex items-center gap-3 safe-bottom">

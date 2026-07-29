@@ -75,3 +75,52 @@ test('SEGURANÇA: turno gravado pelo tenant A não aparece no histórico lido pe
   const vistoPeloA = await hist.carregar(conn, TENANT_A, 1);
   assert.equal(vistoPeloA[0].texto, 'segredo do tenant A');
 });
+
+// ---------------------------------------------------------------------------
+// FIL-84 — o turno passa a carregar o que chegou (mídia) e a marca de aviso.
+// ---------------------------------------------------------------------------
+test('salvar guarda o CAMINHO da mídia, nunca os bytes', async () => {
+  const capturas = [];
+  const conn = { async execute(sql, binds) {
+    capturas.push({ sql, binds });
+    if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
+    return { rows: [] };
+  } };
+  await hist.salvar(conn, 1, 88, 'user', { texto: 'olha isso', midiaCaminho: '1/88/a.jpg', midiaMime: 'image/jpeg' });
+  const ins = capturas.find((c) => /INSERT INTO ia_turno/i.test(c.sql));
+  assert.equal(ins.binds.cam, '1/88/a.jpg');
+  assert.equal(ins.binds.mime, 'image/jpeg');
+  assert.ok(!/bytea|buffer/i.test(ins.sql), 'o turno não guarda binário');
+});
+
+test('carregar devolve midiaCaminho e midiaMime no turno', async () => {
+  const conn = { async execute() {
+    return { rows: [{ PAPEL: 'user', CONTEUDO: 'olha', TOOL_JSON: null, MIDIA_CAMINHO: '1/88/a.jpg', MIDIA_MIME: 'image/jpeg' }] };
+  } };
+  const msgs = await hist.carregar(conn, 1, 88);
+  assert.equal(msgs[0].midiaCaminho, '1/88/a.jpg');
+  assert.equal(msgs[0].midiaMime, 'image/jpeg');
+});
+
+test('turno de AVISO não vira tool-call ao recarregar (envenenaria o payload do provedor)', async () => {
+  const conn = { async execute() {
+    return { rows: [{ PAPEL: 'assistant', CONTEUDO: 'me manda por texto', TOOL_JSON: JSON.stringify({ aviso: 'video' }),
+      MIDIA_CAMINHO: null, MIDIA_MIME: null }] };
+  } };
+  const msgs = await hist.carregar(conn, 1, 88);
+  assert.equal(msgs[0].toolCallId, undefined, 'sem tool_use_id, o provedor rejeitaria o turno');
+  assert.equal(msgs[0].texto, 'me manda por texto');
+});
+
+test('jaAvisou: a resposta educada de tipo não suportado sai UMA vez por conversa', async () => {
+  let temMarca = false;
+  const conn = { async execute(sql, binds) {
+    if (/tool_json->>'aviso'/i.test(sql)) return { rows: temMarca ? [{ N: 1 }] : [] };
+    if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
+    if (/INSERT INTO ia_turno/i.test(sql) && binds.tj && binds.tj.includes('"aviso"')) temMarca = true;
+    return { rows: [] };
+  } };
+  assert.equal(await hist.jaAvisou(conn, 1, 88, 'video'), false);
+  await hist.salvar(conn, 1, 88, 'assistant', { texto: 'me manda por texto', aviso: 'video' });
+  assert.equal(await hist.jaAvisou(conn, 1, 88, 'video'), true);
+});

@@ -18,7 +18,9 @@ function connConversa(fields = {}) {
     // IA é add-on de plano (ia_habilitada em `tenant`) — habilitado por padrão
     // nos testes de runtime, que cobrem o comportamento do BOT em si.
     if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'S' }] };
-    if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
+    // FIL-84: a fase 1 exige fila_status='ia' (a conversa pode ter sido
+    // assumida por um atendente) e lê o modo teste do canal.
+    if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111', FILA_STATUS: 'ia', IA_MODO_TESTE: 'S' }] };
     if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
     if (sql.includes('FROM ia_turno')) return { rows: [] };
     this._ins.push({ sql, binds }); return { rows: [] };
@@ -78,7 +80,9 @@ test('plano sem IA (ia_habilitada=N): não responde mesmo com provedor configura
   const conn = {
     _ins: [], async execute(sql, binds) {
       if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'N' }] };
-      if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
+      // FIL-84: a fase 1 exige fila_status='ia' (a conversa pode ter sido
+    // assumida por um atendente) e lê o modo teste do canal.
+    if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111', FILA_STATUS: 'ia', IA_MODO_TESTE: 'S' }] };
       this._ins.push({ sql, binds }); return { rows: [] };
     }, commit: async () => {}, rollback: async () => {}, close: async () => {},
   };
@@ -103,7 +107,9 @@ test('FIL-78: tenant que estourou o teto do plano recebe recado genérico e NÃO
   const conn = {
     _ins: [], async execute(sql, binds) {
       if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'S' }] };
-      if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111' }] };
+      // FIL-84: a fase 1 exige fila_status='ia' (a conversa pode ter sido
+    // assumida por um atendente) e lê o modo teste do canal.
+    if (sql.includes('FROM conversa')) return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000', PHONE_NUMBER_ID: '111', FILA_STATUS: 'ia', IA_MODO_TESTE: 'S' }] };
       if (sql.includes('ia_teto_tokens_mes')) return { rows: [{ IA_TETO_TOKENS_MES: 1000 }] };
       if (sql.includes('FROM ia_consumo_mensal')) return { rows: [{ TOKENS_USADOS: 1000 }] }; // já bateu o teto
       this._ins.push({ sql, binds }); return { rows: [] };
@@ -182,4 +188,66 @@ test('SEGURANÇA: toda leitura/gravação da conversa leva o tenant_id do chamad
   const comBind = conn._ins.filter((i) => 'tenantId' in (i.binds || {}));
   assert.ok(comBind.length > 0);
   assert.ok(comBind.every((i) => i.binds.tenantId === TENANT_B), 'alguma query do runtime não levou o tenant_id do chamador');
+});
+
+// ---------------------------------------------------------------------------
+// FIL-84 — a allowlist (ia_autorizado) virou um MODO do canal.
+//
+// Antes: modo='ia' implicava fail-closed — quem não estava na allowlist recebia
+// "canal restrito". Isso era certo enquanto a IA era piloto; agora o canal pode
+// ser PÚBLICO. A migração 021 nasce com o modo teste LIGADO nos números que já
+// estavam em modo='ia' — abrir é ação explícita do admin, nunca efeito de deploy.
+// ---------------------------------------------------------------------------
+function connCanal({ modoTeste = 'S', filaStatus = 'ia' } = {}) {
+  return { _ins: [], async execute(sql, binds) {
+    if (sql.includes('ia_habilitada')) return { rows: [{ IA_HABILITADA: 'S' }] };
+    if (sql.includes('FROM conversa')) {
+      return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000',
+        PHONE_NUMBER_ID: '111', FILA_STATUS: filaStatus, IA_MODO_TESTE: modoTeste }] };
+    }
+    if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
+    if (sql.includes('FROM ia_turno')) return { rows: [] };
+    this._ins.push({ sql, binds }); return { rows: [] };
+  }, commit: async()=>{}, rollback: async()=>{}, close: async()=>{} };
+}
+
+test('modo teste DESLIGADO: a IA atende qualquer cliente do canal, sem consultar a allowlist', async () => {
+  const conn = connCanal({ modoTeste: 'N' }); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  let consultouAllowlist = false;
+  auth.autorizado = async () => { consultouAllowlist = true; return false; };
+  client.chamar = async () => ({ texto: 'Claro, posso ajudar!', toolCalls: [] });
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
+  assert.equal(consultouAllowlist, false, 'canal aberto não pode consultar a allowlist');
+  assert.ok(enviados.some((e) => /posso ajudar/i.test(e.text.body)), 'a IA tem que responder');
+  assert.ok(!enviados.some((e) => /restrito/i.test(e.text.body)), 'nunca a mensagem de canal restrito no modo aberto');
+});
+
+test('modo teste LIGADO: quem não está na allowlist continua recebendo o recado de canal restrito', async () => {
+  const conn = connCanal({ modoTeste: 'S' }); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => false;
+  let chamouModelo = false; client.chamar = async () => { chamouModelo = true; return {}; };
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
+  assert.equal(chamouModelo, false);
+  assert.ok(enviados.some((e) => /restrito/i.test(e.text.body)));
+});
+
+test('conversa que já saiu da IA (atendente assumiu antes) não é processada nem responde', async () => {
+  const conn = connCanal({ filaStatus: 'em_atendimento' }); db.getConnection = async () => conn;
+  store.carregar = async () => ({ provider: 'anthropic', modelo: 'm', apiKey: 'k' });
+  auth.autorizado = async () => true;
+  let chamouModelo = false; client.chamar = async () => { chamouModelo = true; return {}; };
+  const enviados = [];
+  global.fetch = async (u, o) => { enviados.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ messages: [{ id: 'w' }] }) }; };
+
+  await runtime.processarEntrada(TENANT_A, 88, 'oi');
+  assert.equal(chamouModelo, false, 'a IA não fala em conversa que já é de humano');
+  assert.equal(enviados.length, 0, 'e não manda recado nenhum — o atendente está no comando');
 });

@@ -14,6 +14,7 @@ const { publish } = require('../realtime/hub');
 const { normalizar: normalizePhone, acharContato } = require('../utils/telefone');
 const { acharClientePorTelefone } = require('../utils/clienteLookup');
 const { exigirPapel } = require('../auth/rbac');
+const handoff = require('../ia/handoff');
 const iaConfigStore = require('../ia/iaConfigStore');
 const sugestaoResposta = require('../ia/sugestaoResposta');
 const limitePlano = require('../ia/limitePlano');
@@ -297,8 +298,8 @@ router.post('/', naoAuditor, async (req, res, next) => {
       const conteudo = b.preview ? String(b.preview) : `[template: ${templateName}]`;
       const ins = await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'sent', now())
+           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'template', :txt, 'atendente', 'sent', now())
          RETURNING id INTO :id`,
         { cv: conversaId, ct: contatoId, num: numeroId, atd: atendenteId, wamid: wamid || null, txt: conteudo,
           id: { type: tipos.NUMBER, dir: tipos.BIND_OUT } }
@@ -424,7 +425,7 @@ router.get('/', async (req, res, next) => {
                 ct.id AS contato_id, ct.telefone, ct.nome_perfil, ct.nome_interno, ct.documento, ct.codigo_externo,
                 a.nome AS atendente_nome,
                 d.nome AS departamento_nome, d.cor AS departamento_cor,
-                n.nome_exibicao AS numero_nome, n.display_phone AS numero_fone,
+                n.nome_exibicao AS numero_nome, n.display_phone AS numero_fone, n.modo AS numero_modo,
                 (SELECT mm.conteudo FROM mensagem mm
                    WHERE mm.tenant_id = c.tenant_id AND mm.conversa_id = c.id
                    ORDER BY mm.ts DESC NULLS LAST, mm.id DESC
@@ -502,7 +503,7 @@ router.get('/:id/mensagens', async (req, res, next) => {
         throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
       }
       const result = await conn.execute(
-        `SELECT id, direcao, tipo, conteudo, status, ts,
+        `SELECT id, direcao, tipo, conteudo, status, ts, origem,
                 media_id, mime_type, nome_arquivo,
                 CASE WHEN midia_caminho IS NOT NULL THEN 1 ELSE 0 END AS tem_arquivo
            FROM mensagem
@@ -661,8 +662,8 @@ router.post('/:id/mensagens', naoAuditor, envioLimiter, async (req, res, next) =
       const { tipos } = db;
       const ins = await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sent', now())
+           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'atendente', 'sent', now())
          RETURNING id INTO :id`,
         {
           cv: cv.ID, ct: cv.CONTATO_ID, num: cv.NUMERO_ID, atd: atendenteId,
@@ -794,9 +795,9 @@ router.post('/:id/arquivos', naoAuditor, envioLimiter, (req, res, next) => {
       const { tipos } = db;
       const ins = await conn.execute(
         `INSERT INTO mensagem
-           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, status, ts,
+           (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, origem, status, ts,
             media_id, mime_type, nome_arquivo, midia_caminho, midia_tamanho)
-         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', :tipo, 'sent', now(),
+         VALUES (:cv, :ct, :num, :atd, :wamid, 'out', :tipo, 'atendente', 'sent', now(),
             :mid, :mime, :nome, :cam, :tam)
          RETURNING id INTO :id`,
         {
@@ -865,8 +866,8 @@ router.post('/:id/notas', naoAuditor, async (req, res, next) => {
       const atendenteId = await getOrCreateAtendente(conn, req.user);
       const { tipos } = db;
       const ins = await conn.execute(
-        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, ts)
-         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, now())
+        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, origem, ts)
+         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, 'atendente', now())
          RETURNING id INTO :id`,
         {
           cv: id, ct: cv.rows[0].CONTATO_ID, atd: atendenteId, txt: texto,
@@ -970,8 +971,8 @@ router.post('/forcar-transferir', exigirPapel('ADMIN'), async (req, res, next) =
                 { a: paraAtendente, id });
             }
             await conn.execute(
-              `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, ts)
-               VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, now())`,
+              `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, origem, ts)
+               VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, 'atendente', now())`,
               { cv: id, ct: atual.CONTATO_ID, atd: autorId, txt: `Transferência forçada para ${destinoTxt} por ${(req.user && req.user.nome) || 'admin'}.` });
             await conn.execute(
               `INSERT INTO auditoria (atendente_id, matricula, acao, entidade, entidade_id, detalhe)
@@ -1093,6 +1094,146 @@ router.post('/:id/atribuir', naoAuditor, async (req, res, next) => {
   }
 });
 
+// POST /api/conversas/:id/assumir-ia — o atendente ASSUME uma conversa que
+// estava com o bot de IA. A IA cala na hora: o turno em andamento recheca
+// `fila_status` antes de enviar e descarta a resposta (ia/runtime.js).
+//
+// Diferença deliberada em relação à cascata da ferramenta: a cascata resolve o
+// DEPARTAMENTO (padrão do canal, ou inbox geral); o STATUS é sempre
+// 'em_atendimento' com `atendente_id` = quem clicou. Um atendente que clica em
+// "Assumir" e não fica dono da conversa seria um bug, não uma transferência.
+router.post('/:id/assumir-ia', naoAuditor, async (req, res, next) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
+
+  const { gerarProtocolo } = require('../fila/protocolo');
+  try {
+    const resultado = await db.comTenant(req.tenantId, async (conn) => {
+      if (!(await conversaNoEscopo(conn, id, req.perfil))) {
+        throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
+      }
+      const sel = await conn.execute(
+        `SELECT fila_status, contato_id, numero_id, protocolo FROM conversa WHERE id = :id`, { id });
+      if (!sel.rows.length) throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
+      const atual = sel.rows[0];
+      if (atual.FILA_STATUS !== 'ia') {
+        throw new RespostaHttp(409, { error: 'Esta conversa não está mais com o agente de IA.' });
+      }
+
+      const atendenteId = await getOrCreateAtendente(conn, req.user);
+      if (!atendenteId) throw new RespostaHttp(400, { error: 'Atendente não identificado' });
+      // Só o DEPARTAMENTO vem da cascata compartilhada. permitirFluxo=false:
+      // quem assume é gente, não o bot de fluxo.
+      const destino = await handoff.resolverDestino(conn, req.tenantId, atual.NUMERO_ID, {});
+      const protocolo = atual.PROTOCOLO || await gerarProtocolo(conn);
+
+      const upd = await conn.execute(
+        `UPDATE conversa
+            SET fila_status = 'em_atendimento',
+                atendente_id = :atd,
+                departamento_id = :dep,
+                protocolo = :prot,
+                atribuida_em = now()
+          WHERE id = :id AND fila_status = 'ia'`,
+        { atd: atendenteId, dep: destino.departamentoId, prot: protocolo, id }
+      );
+      // rowsAffected=0 ⇒ outro atendente (ou a própria IA, transferindo) chegou
+      // primeiro entre o SELECT e o UPDATE.
+      if (!upd.rowsAffected) {
+        throw new RespostaHttp(409, { error: 'Esta conversa não está mais com o agente de IA.' });
+      }
+
+      await conn.execute(
+        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, origem, ts)
+         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, 'sistema', now())`,
+        { cv: id, ct: atual.CONTATO_ID, atd: atendenteId,
+          txt: `${(req.user && req.user.nome) || 'O atendente'} assumiu a conversa que estava com o agente de IA.` }
+      );
+      await conn.execute(
+        `INSERT INTO auditoria (atendente_id, matricula, acao, entidade, entidade_id, detalhe)
+         VALUES (:atd, :m, 'ia_assumida', 'conversa', :id, :det)`,
+        { atd: atendenteId, m: req.user && req.user.matricula, id,
+          det: JSON.stringify({ departamentoId: destino.departamentoId }) }
+      );
+      return { atendenteId, departamentoId: destino.departamentoId };
+    });
+
+    publish({ tipo: 'atribuicao', conversaId: id, atendenteId: resultado.atendenteId,
+      departamentoId: resultado.departamentoId, tenantId: req.tenantId });
+    res.json({ ok: true, atendenteId: resultado.atendenteId });
+  } catch (err) {
+    if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
+    next(err);
+  }
+});
+
+// POST /api/conversas/:id/devolver-ia — devolve o atendimento para o agente de
+// IA. NUNCA automático (decisão da spec): é sempre ação explícita do atendente.
+// Limpa o estado de fila por completo — senão a conversa volta para a IA ainda
+// "pertencendo" a um departamento e reaparece na fila dele.
+router.post('/:id/devolver-ia', naoAuditor, async (req, res, next) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
+
+  try {
+    const resultado = await db.comTenant(req.tenantId, async (conn) => {
+      if (!(await conversaNoEscopo(conn, id, req.perfil))) {
+        throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
+      }
+      const sel = await conn.execute(
+        `SELECT c.fila_status, c.contato_id, c.departamento_id, n.modo
+           FROM conversa c
+           LEFT JOIN numero n ON n.tenant_id = c.tenant_id AND n.id = c.numero_id
+          WHERE c.id = :id`, { id });
+      if (!sel.rows.length) throw new RespostaHttp(404, { error: 'Conversa não encontrada' });
+      const atual = sel.rows[0];
+
+      // Canal sem IA ligada: devolver deixaria a conversa em fila_status='ia'
+      // sem ninguém para responder — o cliente ficaria no vácuo.
+      if (atual.MODO !== 'ia') {
+        throw new RespostaHttp(400, { error: 'O agente de IA não está ligado neste canal.' });
+      }
+      // Achado de review (P1, PR #32): o canal pode estar em modo='ia' com o
+      // ADD-ON do tenant desligado pelo operador. Nesse caso o runtime da IA
+      // desiste logo na fase 1 (gate de `ia_habilitada`): devolver tiraria o
+      // dono humano e a próxima mensagem do cliente morreria em silêncio.
+      const addon = await conn.execute(
+        `SELECT ia_habilitada FROM tenant WHERE id = :tenantId`, { tenantId: req.tenantId });
+      if ((addon.rows[0] || {}).IA_HABILITADA !== 'S') {
+        throw new RespostaHttp(400, {
+          error: 'O recurso de IA não está ativo para esta empresa — a conversa ficaria sem ninguém para responder.',
+        });
+      }
+      if (!(await handoff.devolverParaIa(conn, req.tenantId, id))) {
+        throw new RespostaHttp(409, { error: 'Só é possível devolver uma conversa que está em atendimento humano.' });
+      }
+
+      const atendenteId = await getOrCreateAtendente(conn, req.user);
+      await conn.execute(
+        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, origem, ts)
+         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, 'sistema', now())`,
+        { cv: id, ct: atual.CONTATO_ID, atd: atendenteId,
+          txt: `${(req.user && req.user.nome) || 'O atendente'} devolveu a conversa para o agente de IA.` }
+      );
+      await conn.execute(
+        `INSERT INTO auditoria (atendente_id, matricula, acao, entidade, entidade_id)
+         VALUES (:atd, :m, 'ia_devolvida', 'conversa', :id)`,
+        { atd: atendenteId, m: req.user && req.user.matricula, id }
+      );
+      return { departamentoAnterior: atual.DEPARTAMENTO_ID || null };
+    });
+
+    // Notifica os DOIS lados: a fila de origem (a conversa saiu de lá) e a
+    // conversa em si (agora sem departamento).
+    publish({ tipo: 'conversa', conversaId: id, departamentoId: resultado.departamentoAnterior, tenantId: req.tenantId });
+    publish({ tipo: 'conversa', conversaId: id, departamentoId: null, tenantId: req.tenantId });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof RespostaHttp) return res.status(err.status).json(err.body);
+    next(err);
+  }
+});
+
 // POST /api/conversas/:id/transferir — { departamentoId } volta pra fila do
 // novo depto (e o distribuidor age); { atendenteId } transfere direto.
 router.post('/:id/transferir', naoAuditor, async (req, res, next) => {
@@ -1165,8 +1306,8 @@ router.post('/:id/transferir', naoAuditor, async (req, res, next) => {
       // Nota interna automática (contexto pro próximo atendente).
       const autorId = await getOrCreateAtendente(conn, req.user);
       await conn.execute(
-        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, ts)
-         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, now())`,
+        `INSERT INTO mensagem (conversa_id, contato_id, atendente_id, direcao, tipo, conteudo, origem, ts)
+         VALUES (:cv, :ct, :atd, 'nota', 'text', :txt, 'atendente', now())`,
         {
           cv: id, ct: atual.CONTATO_ID, atd: autorId,
           txt: `Transferida para ${destinoTxt} por ${(req.user && req.user.nome) || 'sistema'}.`,
@@ -1244,8 +1385,8 @@ router.post('/:id/encerrar', naoAuditor, async (req, res, next) => {
           const wamid = resp && resp.messages && resp.messages[0] && resp.messages[0].id;
           await conn.execute(
             `INSERT INTO mensagem
-               (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, status, ts)
-             VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'sent', now())`,
+               (conversa_id, contato_id, numero_id, atendente_id, wamid, direcao, tipo, conteudo, origem, status, ts)
+             VALUES (:cv, :ct, :num, :atd, :wamid, 'out', 'text', :txt, 'atendente', 'sent', now())`,
             {
               cv: id,
               ct: cv.CONTATO_ID,
