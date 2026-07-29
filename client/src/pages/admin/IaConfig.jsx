@@ -206,6 +206,68 @@ function Bloco({ bloco, posicao, total, limiteConteudo, editavel, onSalvar, onMo
   );
 }
 
+// FIL-85 — o formulário de pedido da empresa. É um FORMULÁRIO, não um
+// form-builder: campo tem rótulo, tipo e "obrigatório", e nada mais. Sem lógica
+// condicional, sem múltiplas páginas — a spec fecha o escopo de propósito,
+// porque o que precisa ficar simples é a conferência do atendente depois.
+function CampoPedido({ campo, posicao, total, tipos, editavel, onMudar, onMover, onRemover }) {
+  return (
+    <div className="rounded-xl border border-black/[0.08] p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[10px] w-5 text-stone-400 shrink-0">{posicao + 1}</span>
+        <input value={campo.rotulo} disabled={!editavel} maxLength={60}
+          placeholder="Pergunta/rótulo (ex.: Sabor da pizza)"
+          onChange={(e) => onMudar({ ...campo, rotulo: e.target.value })}
+          className="input-field flex-1 disabled:opacity-60" />
+        <select value={campo.tipo} disabled={!editavel}
+          onChange={(e) => onMudar({ ...campo, tipo: e.target.value })}
+          aria-label="Tipo do campo"
+          className="input-field w-32 shrink-0 disabled:opacity-60">
+          {tipos.map((t) => <option key={t} value={t}>{ROTULO_TIPO_CAMPO[t] || t}</option>)}
+        </select>
+        {editavel && (
+          <>
+            <button type="button" onClick={() => onMover(-1)} disabled={posicao === 0} title="Subir"
+              className="w-6 h-6 rounded text-stone-400 hover:text-stone-700 hover:bg-paper-200 disabled:opacity-30">↑</button>
+            <button type="button" onClick={() => onMover(1)} disabled={posicao === total - 1} title="Descer"
+              className="w-6 h-6 rounded text-stone-400 hover:text-stone-700 hover:bg-paper-200 disabled:opacity-30">↓</button>
+            <button type="button" onClick={onRemover} title="Remover campo"
+              className="w-6 h-6 rounded text-stone-400 hover:text-red-600 hover:bg-red-50">×</button>
+          </>
+        )}
+      </div>
+      <div className="flex items-center gap-4 pl-7">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" checked={!!campo.obrigatorio} disabled={!editavel}
+            onChange={(e) => onMudar({ ...campo, obrigatorio: e.target.checked })}
+            className="w-4 h-4 accent-brand-700" />
+          <span className="text-[11px] text-stone-600">obrigatório</span>
+        </label>
+        <span className="text-[11px] text-stone-400">
+          {campo.obrigatorio
+            ? 'o agente pergunta até o cliente responder'
+            : 'o agente preenche só se o cliente disser'}
+        </span>
+      </div>
+      {campo.tipo === 'opcoes' && (
+        <div className="pl-7">
+          <input value={campo.opcoesTexto ?? (campo.opcoes || []).join(', ')} disabled={!editavel}
+            placeholder="Opções separadas por vírgula (ex.: Calabresa, Marguerita, Portuguesa)"
+            onChange={(e) => onMudar({ ...campo, opcoesTexto: e.target.value })}
+            className="input-field text-xs disabled:opacity-60" />
+          <p className="mt-1 text-[11px] text-stone-400">O agente só pode escolher uma destas — nada fora da lista.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ROTULO_TIPO_CAMPO = {
+  texto: 'Texto', numero: 'Número', data: 'Data', hora: 'Hora', opcoes: 'Opções',
+};
+
+const CAMPO_NOVO = { rotulo: '', tipo: 'texto', obrigatorio: false, opcoesTexto: '' };
+
 export default function IaConfig() {
   const { user, isAdmin } = useAuth();
   const [sugestaoAtiva, setSugestaoAtiva] = useState(false);
@@ -223,6 +285,13 @@ export default function IaConfig() {
   const [pergunta, setPergunta] = useState('');
   const [resposta, setResposta] = useState('');
   const [erroTeste, setErroTeste] = useState('');
+  // FIL-85 — formulário de pedido em edição local (o rascunho da tela só vai
+  // pro servidor no "Salvar formulário").
+  const [tituloPedido, setTituloPedido] = useState('');
+  const [camposPedido, setCamposPedido] = useState([]);
+  const [erroPedido, setErroPedido] = useState('');
+  const [salvoPedido, setSalvoPedido] = useState(false);
+  const [erroFerramenta, setErroFerramenta] = useState('');
   const qc = useQueryClient();
 
   const config = useQuery({
@@ -240,6 +309,12 @@ export default function IaConfig() {
     queryFn: () => api.get('/ia-perfil').then((r) => r.data),
     enabled: !!user?.iaHabilitada,
   });
+  // FIL-85: o que o agente pode FAZER (liga/desliga) + o formulário de pedido.
+  const ferramentas = useQuery({
+    queryKey: ['ia-ferramentas'],
+    queryFn: () => api.get('/ia-ferramentas').then((r) => r.data),
+    enabled: !!user?.iaHabilitada,
+  });
 
   useEffect(() => {
     if (geral.data) setSugestaoAtiva(geral.data.ia_sugestao_ativa === 'S');
@@ -255,6 +330,56 @@ export default function IaConfig() {
     setFicha(perfil.data.ficha || {});
     formInicializado.current = true;
   }, [perfil.data]);
+
+  // Mesma ideia do formulário de perfil: preenche UMA vez, na primeira carga —
+  // um refetch no meio da edição jogaria fora os campos ainda não salvos.
+  const pedidoInicializado = useRef(false);
+  useEffect(() => {
+    if (!ferramentas.data || pedidoInicializado.current) return;
+    const t = ferramentas.data.template;
+    setTituloPedido(t?.titulo || '');
+    setCamposPedido((t?.campos || []).map((c) => ({ ...c, opcoesTexto: (c.opcoes || []).join(', ') })));
+    pedidoInicializado.current = true;
+  }, [ferramentas.data]);
+
+  const alternarFerramenta = useMutation({
+    mutationFn: ({ nome, ativo }) => api.put(`/ia-ferramentas/${nome}`, { ativo }),
+    onSuccess: () => { setErroFerramenta(''); qc.invalidateQueries({ queryKey: ['ia-ferramentas'] }); },
+    onError: (e) => {
+      setErroFerramenta(e.response?.data?.error || 'Falha ao mudar a ferramenta.');
+      qc.invalidateQueries({ queryKey: ['ia-ferramentas'] });
+    },
+  });
+
+  const salvarTemplate = useMutation({
+    mutationFn: () => api.put('/ia-ferramentas/template', {
+      titulo: tituloPedido,
+      campos: camposPedido.map((c) => ({
+        rotulo: c.rotulo,
+        tipo: c.tipo,
+        obrigatorio: !!c.obrigatorio,
+        // A tela edita as opções como uma linha de texto; o servidor recebe lista.
+        opcoes: c.tipo === 'opcoes'
+          ? String(c.opcoesTexto ?? '').split(',').map((o) => o.trim()).filter(Boolean)
+          : undefined,
+      })),
+    }),
+    onSuccess: () => {
+      setErroPedido(''); setSalvoPedido(true);
+      qc.invalidateQueries({ queryKey: ['ia-ferramentas'] });
+      setTimeout(() => setSalvoPedido(false), 2500);
+    },
+    onError: (e) => setErroPedido(e.response?.data?.error || 'Falha ao salvar o formulário.'),
+  });
+
+  const removerTemplate = useMutation({
+    mutationFn: () => api.delete('/ia-ferramentas/template'),
+    onSuccess: () => {
+      setErroPedido(''); setTituloPedido(''); setCamposPedido([]);
+      qc.invalidateQueries({ queryKey: ['ia-ferramentas'] });
+    },
+    onError: (e) => setErroPedido(e.response?.data?.error || 'Falha ao remover o formulário.'),
+  });
 
   const salvarRecursos = useMutation({
     mutationFn: (ativo) => api.put('/config', { ia_sugestao_ativa: ativo ? 'S' : 'N' }),
@@ -328,6 +453,11 @@ export default function IaConfig() {
   const limites = { ...LIMITES_PADRAO, ...(dados.limites || {}) };
   const medidor = { ...MEDIDOR_VAZIO, ...(dados.medidor || {}) };
   const blocos = dados.blocos || [];
+  // Espelho dos limites/tipos do servidor (server/ia/pedidoTemplate.js). Como
+  // no medidor, os defaults só cobrem o intervalo entre a falha do GET e o
+  // retry — sem eles a página inteira cairia num `.map` de undefined.
+  const limitesPedido = ferramentas.data?.limites || { campos: 20, titulo: 80 };
+  const tiposPedido = ferramentas.data?.tipos || ['texto', 'numero', 'data', 'hora', 'opcoes'];
   const salvandoBloco = criarBloco.isPending || editarBloco.isPending
     || removerBloco.isPending || reordenarBlocos.isPending;
 
@@ -595,10 +725,114 @@ export default function IaConfig() {
         </p>
       </Secao>
 
-      {/* 5 — Medidor -------------------------------------------------------- */}
+      {/* 5 — Ações do agente (FIL-85) --------------------------------------- */}
+      <Secao titulo="Ações do agente">
+        <p className="text-xs leading-relaxed text-stone-500">
+          Além de responder, o agente pode agir dentro da conversa. Ele nunca cria etiqueta nova nem apaga
+          informação: preenche o cadastro com o que o cliente informar, classifica a conversa com as etiquetas
+          que você já cadastrou e registra pedidos que a equipe confere depois. Passar o atendimento para uma
+          pessoa está sempre disponível e não pode ser desligado.
+        </p>
+        <div className="space-y-2">
+          {(ferramentas.data?.ferramentas || []).map((f) => {
+            const semFormulario = f.exigeTemplate && !ferramentas.data?.template;
+            return (
+              <label key={f.nome} className="flex items-start gap-3 rounded-xl border border-black/[0.07] px-3.5 py-3 cursor-pointer">
+                <input type="checkbox" checked={f.ativo} disabled={!isAdmin || alternarFerramenta.isPending}
+                  onChange={(e) => alternarFerramenta.mutate({ nome: f.nome, ativo: e.target.checked })}
+                  className="w-4 h-4 mt-0.5 accent-brand-700 disabled:opacity-60" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-stone-800">{f.rotulo}</span>
+                  <span className="block text-xs leading-relaxed text-stone-500 mt-0.5">{f.ajuda}</span>
+                  {f.ativo && semFormulario && (
+                    <span className="mt-1.5 inline-block text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
+                      Configure o formulário abaixo — sem ele o agente não registra pedido.
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        {erroFerramenta && <p className="text-xs text-red-600">{erroFerramenta}</p>}
+        {!isAdmin && <p className="font-mono text-[10px] text-stone-400">somente ADMIN edita</p>}
+      </Secao>
+
+      {/* 6 — Formulário de pedido (FIL-85) ---------------------------------- */}
+      <Secao
+        titulo="Formulário de pedido"
+        acao={isAdmin && camposPedido.length < (limitesPedido.campos || 20) && (
+          <button type="button" onClick={() => setCamposPedido((c) => [...c, { ...CAMPO_NOVO }])}
+            className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-800">
+            <Icon name="plus" size={14} /> Adicionar campo
+          </button>
+        )}
+      >
+        <p className="text-xs leading-relaxed text-stone-500">
+          O que o agente precisa perguntar para registrar um pedido ou agendamento. Cada pedido entra como
+          <b> rascunho</b> e aparece para a equipe conferir no atendimento — nada é enviado para outro sistema.
+          Um formulário por empresa.
+        </p>
+
+        <div>
+          <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1">Título</label>
+          <input value={tituloPedido} disabled={!isAdmin} maxLength={limitesPedido.titulo || 80}
+            placeholder="Ex.: Pedido de delivery · Agendamento de consulta"
+            onChange={(e) => setTituloPedido(e.target.value)}
+            className="input-field disabled:opacity-60" />
+        </div>
+
+        {camposPedido.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-black/[0.12] p-4 text-center">
+            <p className="text-sm font-medium text-stone-700">Nenhum campo ainda</p>
+            <p className="mt-1 text-xs text-stone-500">
+              Comece pelo que a sua equipe precisa saber para atender: item, quantidade, data, endereço.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {camposPedido.map((campo, i) => (
+              <CampoPedido key={i} campo={campo} posicao={i} total={camposPedido.length}
+                tipos={tiposPedido} editavel={isAdmin}
+                onMudar={(novo) => setCamposPedido((lista) => lista.map((c, j) => (j === i ? novo : c)))}
+                onMover={(delta) => setCamposPedido((lista) => {
+                  const destino = i + delta;
+                  if (destino < 0 || destino >= lista.length) return lista;
+                  const copia = [...lista];
+                  [copia[i], copia[destino]] = [copia[destino], copia[i]];
+                  return copia;
+                })}
+                onRemover={() => setCamposPedido((lista) => lista.filter((_, j) => j !== i))} />
+            ))}
+          </div>
+        )}
+
+        {erroPedido && <p className="text-xs text-red-600">{erroPedido}</p>}
+        {isAdmin && (
+          <div className="flex items-center gap-3 flex-wrap">
+            <button type="button" onClick={() => salvarTemplate.mutate()}
+              disabled={salvarTemplate.isPending || !tituloPedido.trim() || !camposPedido.length}
+              className="px-6 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-sm font-semibold disabled:opacity-40">
+              {salvarTemplate.isPending ? 'Salvando…' : 'Salvar formulário'}
+            </button>
+            {salvoPedido && <span className="text-xs text-emerald-600 font-medium">✓ Salvo — vale na hora</span>}
+            {ferramentas.data?.template && (
+              <button type="button" onClick={() => removerTemplate.mutate()} disabled={removerTemplate.isPending}
+                className="text-xs text-stone-500 hover:text-red-600 disabled:opacity-40">
+                Remover formulário
+              </button>
+            )}
+            <span className="font-mono text-[10px] text-stone-400 ml-auto">
+              {camposPedido.length}/{limitesPedido.campos || 20} campos
+            </span>
+          </div>
+        )}
+      </Secao>
+
+      {/* 7 — Medidor -------------------------------------------------------- */}
       <Medidor medidor={medidor} />
 
-      {/* 6 — Testar --------------------------------------------------------- */}
+      {/* 8 — Testar --------------------------------------------------------- */}
       {isAdmin && (
         <Secao titulo="Testar o agente">
           <p className="text-xs text-stone-500">
@@ -627,7 +861,7 @@ export default function IaConfig() {
         </Secao>
       )}
 
-      {/* 7 — Recursos ------------------------------------------------------- */}
+      {/* 9 — Recursos ------------------------------------------------------- */}
       <Secao titulo="Recursos para o atendente">
         <label className="flex items-start gap-3 cursor-pointer">
           <input type="checkbox" checked={sugestaoAtiva} disabled={!config.data?.ativo || !isAdmin}
