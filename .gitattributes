@@ -1,0 +1,5 @@
+# Scripts que rodam dentro de containers Linux (shebang #!/bin/sh) precisam
+# de LF mesmo quando o checkout é feito em Windows com core.autocrlf=true —
+# senão o build local do Dockerfile falha com "no such file or directory"
+# porque o \r vira parte do caminho do interpretador.
+*.sh text eol=lf

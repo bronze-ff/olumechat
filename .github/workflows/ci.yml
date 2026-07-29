@@ -18,10 +18,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Use Node.js 20
+      - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: server/package-lock.json
       - name: Install dependencies
@@ -37,13 +37,111 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Use Node.js 20
+      - name: Use Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: client/package-lock.json
       - name: Install dependencies
         run: npm ci
       - name: Build client
         run: npm run build
+
+  # FIL-92 (P0.8): bloqueia merge com vulnerabilidade high/critical conhecida
+  # nas dependências declaradas (server e client).
+  npm-audit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [server, client]
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: npm audit (bloqueia high/critical)
+        run: npm audit --audit-level=high
+
+  # FIL-92 (P0.8): a imagem candidata a produção precisa construir a partir de
+  # um clone limpo e, de fato, subir — migração + boot completo — antes que o
+  # Coolify receba o gatilho de deploy (docs/DEPLOY_VPS.md, P0.1 e P0.4).
+  backend-image:
+    runs-on: ubuntu-latest
+    needs: server-test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: olume
+          POSTGRES_PASSWORD: olume
+          POSTGRES_DB: olume_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U olume"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build imagem do backend
+        run: docker build -t olume-chat-server:ci -f Dockerfile .
+      - name: Subir o container (roda a migração no entrypoint)
+        run: |
+          docker run -d --name backend-ci --network host \
+            -e NODE_ENV=production \
+            -e PORT=10000 \
+            -e DATABASE_URL="postgres://olume:olume@127.0.0.1:5432/olume_ci" \
+            -e META_APP_SECRET=ci-smoke-secret \
+            -e WEBHOOK_VERIFY_TOKEN=ci-smoke-token \
+            -e APP_URL=http://127.0.0.1:10000 \
+            olume-chat-server:ci
+      - name: Smoke de /health/live
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:10000/health/live; then
+              echo "[smoke] container respondeu ok"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "[smoke] container não respondeu em tempo hábil"
+          exit 1
+      - name: Logs do container (diagnóstico)
+        if: always()
+        run: docker logs backend-ci || true
+      - name: Encerrar o container
+        if: always()
+        run: docker rm -f backend-ci || true
+
+  # FIL-92 (P0.8): build reproduzível do frontend (P0.3) — mesma origem que o
+  # Coolify vai construir/publicar.
+  frontend-image:
+    runs-on: ubuntu-latest
+    needs: client-build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build imagem do frontend
+        run: |
+          docker build -t olume-chat-client:ci -f client/Dockerfile client \
+            --build-arg VITE_API_URL=https://api.olumechat.com.br/api
+
+# TODO (FIL-92, fora deste PR — dependem de credencial de CI):
+# - teste de RLS contra uma branch Neon de CI/homologação descartável;
+# - scan de secrets (ex.: gitleaks) e scan de vulnerabilidade de imagem
+#   (ex.: trivy) nas imagens de backend/frontend;
+# - validação das migrations numa branch Neon descartável (não no Postgres
+#   efêmero do job acima, que não reproduz extensões/config do Neon).
+# Ver docs/DEPLOY_VPS.md §5 (P0.8) para o escopo completo.
