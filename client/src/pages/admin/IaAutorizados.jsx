@@ -34,7 +34,7 @@ export default function IaAutorizados() {
   // Lista completa (com modo/iaModoTeste) só para o estado contextual do topo —
   // a /numeros/lista acima não devolve essas colunas.
   const canais = useQuery({
-    queryKey: ['numeros-canais-ia'],
+    queryKey: ['numeros', 'canais-ia'],
     queryFn: () => api.get('/numeros').then((r) => r.data),
     staleTime: 60_000,
     enabled: !!user?.iaHabilitada,
@@ -85,11 +85,15 @@ export default function IaAutorizados() {
 
         {canais.isLoading && <div className="flex justify-center py-1"><Spinner /></div>}
 
-        {!canais.isLoading && canaisComIa.length === 0 && (
+        {canais.isError && (
+          <p className="text-xs text-red-600">Não foi possível carregar o estado dos canais.</p>
+        )}
+
+        {!canais.isLoading && !canais.isError && canaisComIa.length === 0 && (
           <p className="text-xs text-stone-400">Nenhum canal tem o agente de IA ligado ainda.</p>
         )}
 
-        {!canais.isLoading && canaisComIa.length > 0 && (
+        {!canais.isLoading && !canais.isError && canaisComIa.length > 0 && (
           <>
             <div className="flex flex-wrap gap-2">
               {canaisComIa.map((n) => (
