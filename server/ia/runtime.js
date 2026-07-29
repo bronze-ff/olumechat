@@ -23,6 +23,8 @@ const precos = require('../consumo/precos');
 const { partirTexto } = require('./chunk');
 const { publish } = require('../realtime/hub');
 const operacoes = require('./operacoes');
+const tools = require('./tools');
+const ferramentasStore = require('./ferramentasStore');
 const distribuidor = require('../fila/distribuidor');
 const stt = require('./stt');
 const anexos = require('./anexos');
@@ -322,6 +324,14 @@ async function processarEntrada(tenantId, conversaId, entrada) {
       // `conn` DESTA fase de propósito: o conteúdo é 100% do tenant e não pode
       // custar uma segunda conexão do pool (ver o comentário das 3 fases acima).
       const sistema = perfilStore.montarSistema(await perfilStore.carregar(conn, tenantId));
+      // FIL-85: o schema de ferramentas deixou de ser global. O que este tenant
+      // pode fazer AGORA (ferramenta ligada, tags dele como enum, campos do
+      // template de pedido dele) sai daqui — mesmo `conn` desta fase, mesmo
+      // cache de 60s do perfil, pelo mesmo motivo: não custar uma segunda
+      // conexão do pool. Ferramenta desligada nem chega a ser descrita ao
+      // provedor (não é só guarda na execução: é token que não se gasta).
+      const ferramentasTenant = await ferramentasStore.carregar(conn, tenantId);
+      const ferramentas = tools.schemasParaProvedor(ferramentasTenant);
       // A chamada ao provedor (client.chamar) é o ponto mais provável de falhar
       // (chave, cota, modelo inexistente, rede, timeout). Um throw aqui NÃO pode
       // virar silêncio: capturamos, logamos com detalhe e caímos no fallback
@@ -340,7 +350,7 @@ async function processarEntrada(tenantId, conversaId, entrada) {
             tetoEstourouNoMeio = true;
             break;
           }
-          const out = await client.chamar({ config, sistema, mensagens });
+          const out = await client.chamar({ config, sistema, mensagens, ferramentas });
           // Mede a CADA chamada ao provedor (FIL-77): tokens reais que ele
           // devolveu, nunca estimados. Best-effort — nunca derruba o turno.
           // `preco` já foi resolvido na fase 2 (fora desta conexão) — não faz
@@ -361,10 +371,29 @@ async function processarEntrada(tenantId, conversaId, entrada) {
               let transferencia = null;
               try {
                 if (op) {
+                  // FIL-85: o interruptor do tenant vale TAMBÉM na execução. O
+                  // histórico da conversa guarda chamadas antigas e o modelo
+                  // repete nome que já viu — uma ferramenta que o admin acabou
+                  // de desligar não pode continuar agindo por causa disso.
+                  if (!operacoes.permitida(tc.nome, ferramentasTenant)) {
+                    throw new Error('Esta ferramenta não está disponível para esta empresa.');
+                  }
                   const r = await op.executar(conn, tenantId,
                     { conversaId, contatoId: cv.contatoId, numeroId: cv.numeroId }, tc.args || {});
                   if (r.transferido) transferencia = r;
-                  resultado = JSON.stringify(r);
+                  // Toda ação da IA que mexe em dado do tenant devolve eventos
+                  // de tempo real (nota nova na timeline, pedido em rascunho) —
+                  // publicados só DEPOIS do commit, como todo efeito daqui. A
+                  // transferência tem tratamento próprio logo abaixo (ela ainda
+                  // aciona o distribuidor da fila).
+                  if (!r.transferido) {
+                    for (const evt of r.eventos || []) posCommit.push(() => publish({ ...evt, tenantId }));
+                  }
+                  // O modelo não vê `eventos`: é encanamento interno (SSE), não
+                  // resultado da ferramenta — e todo campo daqui volta ao
+                  // provedor como token pago no turno seguinte.
+                  const { eventos: _ignorado, ...paraOModelo } = r;
+                  resultado = JSON.stringify(paraOModelo);
                 } else {
                   const r = await toolExec.executar(conn, tc.nome, tc.args);
                   resultado = JSON.stringify(r.linhas);

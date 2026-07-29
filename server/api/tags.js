@@ -6,6 +6,10 @@ const express = require('express');
 const db = require('../db/pool');
 const { mapRows } = require('../utils/linhas');
 const { exigirPapel } = require('../auth/rbac');
+// FIL-85: as tags do tenant viraram o ENUM da ferramenta `aplicar_tag` da IA,
+// com cache de 60s. Criar tag sem invalidar deixaria a IA um minuto sem
+// conseguir usar a etiqueta que o gestor acabou de cadastrar.
+const ferramentasStore = require('../ia/ferramentasStore');
 
 const router = express.Router();
 
@@ -37,6 +41,7 @@ router.post('/', exigirPapel('ADMIN', 'SUPERVISOR'), async (req, res, next) => {
       );
       return ins.rows[0].ID;
     });
+    ferramentasStore.invalidar(req.tenantId);
     res.status(201).json({ id, nome, cor });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Já existe uma tag com esse nome' });

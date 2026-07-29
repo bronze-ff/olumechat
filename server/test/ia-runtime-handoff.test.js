@@ -47,7 +47,7 @@ function connComFila(sequenciaFilaStatus) {
         return { rows: [{ ID: 88, CONTATO_ID: 3, NUMERO_ID: 2, TELEFONE: '5562999990000',
           PHONE_NUMBER_ID: '111', FILA_STATUS: proximo(), IA_MODO_TESTE: 'N' }] };
       }
-      if (sql.includes('MAX(NUMERO_TURNO)')) return { rows: [{ N: 0 }] };
+      if (/^INSERT INTO ia_turno/i.test(sql.trim())) { this._ins.push({ sql, binds }); return { rows: [], rowsAffected: 1 }; }
       if (sql.includes('FROM ia_turno')) return { rows: [] };
       this._ins.push({ sql, binds });
       return { rows: [] };
@@ -344,7 +344,9 @@ test('imagem: o turno guarda o caminho e o provedor recebe os bytes', async () =
     if (/INSERT INTO ia_turno/i.test(sql)) {
       turnos.push(binds);
       conn._ins.push({ sql, binds });
-      return { rows: [] };
+      // FIL-85: o INSERT do turno usa ON CONFLICT DO NOTHING + retry — sem
+      // rowsAffected o runtime acha que perdeu a corrida e regrava o turno.
+      return { rows: [], rowsAffected: 1 };
     }
     if (/SELECT PAPEL, CONTEUDO/i.test(sql)) {
       return { rows: turnos.map((t) => ({ PAPEL: t.papel, CONTEUDO: t.conteudo, TOOL_JSON: t.tj,

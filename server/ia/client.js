@@ -4,14 +4,22 @@
 'use strict';
 const { schemasParaProvedor } = require('./tools');
 
-function toolsAnthropic() {
-  return schemasParaProvedor().map((s) => ({
+// FIL-85: o schema deixou de ser global. `ferramentas` chega PRONTO do runtime
+// (montado por tenant em ia/ferramentasStore + ia/operacoes: ferramenta ligada,
+// tags da empresa como enum, campos do template do pedido). Sem o argumento cai
+// no registro estático — é o que os chamadores antigos e os testes recebem.
+function schemasOu(ferramentas) {
+  return Array.isArray(ferramentas) ? ferramentas : schemasParaProvedor();
+}
+
+function toolsAnthropic(ferramentas) {
+  return schemasOu(ferramentas).map((s) => ({
     name: s.nome, description: s.descricao,
     input_schema: { type: 'object', properties: s.propriedades, required: s.obrigatorios },
   }));
 }
-function toolsOpenAI() {
-  return schemasParaProvedor().map((s) => ({
+function toolsOpenAI(ferramentas) {
+  return schemasOu(ferramentas).map((s) => ({
     type: 'function',
     function: { name: s.nome, description: s.descricao,
       parameters: { type: 'object', properties: s.propriedades, required: s.obrigatorios } },
@@ -94,10 +102,10 @@ async function fetchComTimeout(url, opts) {
 // `semFerramentas`: usos leves (sugestão de resposta, sentimento, correção de
 // texto) não devem ganhar acesso às tools do bot (consulta de cliente/cobrança)
 // nem pagar o custo de descrevê-las a cada chamada — só o runtime do bot precisa.
-async function chamar({ config, sistema, mensagens, semFerramentas = false }) {
+async function chamar({ config, sistema, mensagens, semFerramentas = false, ferramentas }) {
   if (config.provider === 'anthropic') {
     const body = { model: config.modelo, max_tokens: 1024, system: sistema, messages: msgsAnthropic(mensagens) };
-    if (!semFerramentas) body.tools = toolsAnthropic();
+    if (!semFerramentas) body.tools = toolsAnthropic(ferramentas);
     const res = await fetchComTimeout('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -112,7 +120,7 @@ async function chamar({ config, sistema, mensagens, semFerramentas = false }) {
   // OpenAI-compatível
   const base = (config.baseUrl || '').replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
   const body = { model: config.modelo, messages: msgsOpenAI(sistema, mensagens) };
-  if (!semFerramentas) body.tools = toolsOpenAI();
+  if (!semFerramentas) body.tools = toolsOpenAI(ferramentas);
   const res = await fetchComTimeout(`${base}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },

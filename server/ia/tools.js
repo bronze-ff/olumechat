@@ -24,15 +24,20 @@ function porNome(nome) {
 }
 
 /** Schema neutro (nome/descrição/propriedades) — o client traduz por provedor.
- *  União: tools de SQL + operações nomeadas. */
-function schemasParaProvedor() {
+ *  União: tools de SQL + operações nomeadas.
+ *
+ *  FIL-85: recebe o ESTADO das ferramentas do tenant (ia/ferramentasStore.js) e
+ *  repassa — as operações nomeadas passaram a depender dele (ferramenta
+ *  desligada some do schema; tags e template viram enum/parâmetros daquela
+ *  empresa). Sem estado, sobra o que não depende de dado do tenant. */
+function schemasParaProvedor(estado) {
   const deSql = TOOLS.map((t) => ({
     nome: t.nome,
     descricao: t.descricao,
     propriedades: Object.fromEntries(t.parametros.map((p) => [p.nome, { type: p.tipo, description: p.descricao }])),
     obrigatorios: t.parametros.filter((p) => p.obrigatorio).map((p) => p.nome),
   }));
-  return [...deSql, ...operacoes.schemasParaProvedor()];
+  return [...deSql, ...operacoes.schemasParaProvedor(estado)];
 }
 
 module.exports = { TOOLS, porNome, schemasParaProvedor };

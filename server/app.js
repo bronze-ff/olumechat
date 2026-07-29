@@ -105,6 +105,10 @@ app.use('/api/ia-autorizados', authMiddleware, anexarPerfil, require('./api/iaAu
 // um arquivo em disco global para o processo.
 app.use('/api/ia-perfil', authMiddleware, anexarPerfil, require('./api/iaPerfil').perfil);
 app.use('/api/ia-conhecimento', authMiddleware, anexarPerfil, require('./api/iaPerfil').conhecimento);
+// FIL-85: o que a IA PODE FAZER nesta empresa (liga/desliga + formulário de
+// pedido) e a tela de conferência dos pedidos que ela registrou.
+app.use('/api/ia-ferramentas', authMiddleware, anexarPerfil, require('./api/iaFerramentas'));
+app.use('/api/ia-pedidos', authMiddleware, anexarPerfil, require('./api/iaPedidos'));
 app.use('/api/onboarding-meta', authMiddleware, anexarPerfil, require('./api/onboardingMeta'));
 
 // --- SPA (frontend) em produção, se o build do client existir ---
