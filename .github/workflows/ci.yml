@@ -97,14 +97,34 @@ jobs:
         uses: actions/checkout@v4
       - name: Build imagem do backend
         run: docker build -t olume-chat-server:ci -f Dockerfile .
+      # Segredos dummy DISTINTOS (32+ chars): sem eles, auth/secret.js e
+      # operador/segredo.js tentam GERAR e gravar um segredo em
+      # /app/server/.env — e a pasta pertence a root (0755), então o node
+      # não-root morre com EACCES antes de abrir a porta. São descartáveis,
+      # gerados a cada run — nunca usados fora deste smoke.
+      - name: Gerar segredos dummy do smoke
+        id: dummy
+        run: |
+          {
+            echo "jwt=$(openssl rand -hex 32)"
+            echo "operador_jwt=$(openssl rand -hex 32)"
+            echo "ia_crypto=$(openssl rand -hex 32)"
+            echo "storage_signing=$(openssl rand -hex 32)"
+            echo "webhook_verify=$(openssl rand -hex 32)"
+            echo "meta_app_secret=$(openssl rand -hex 32)"
+          } >> "$GITHUB_OUTPUT"
       - name: Subir o container (roda a migração no entrypoint)
         run: |
           docker run -d --name backend-ci --network host \
             -e NODE_ENV=production \
             -e PORT=10000 \
             -e DATABASE_URL="postgres://olume:olume@127.0.0.1:5432/olume_ci" \
-            -e META_APP_SECRET=ci-smoke-secret \
-            -e WEBHOOK_VERIFY_TOKEN=ci-smoke-token \
+            -e META_APP_SECRET="${{ steps.dummy.outputs.meta_app_secret }}" \
+            -e WEBHOOK_VERIFY_TOKEN="${{ steps.dummy.outputs.webhook_verify }}" \
+            -e JWT_SECRET="${{ steps.dummy.outputs.jwt }}" \
+            -e OPERADOR_JWT_SECRET="${{ steps.dummy.outputs.operador_jwt }}" \
+            -e IA_CRYPTO_KEY="${{ steps.dummy.outputs.ia_crypto }}" \
+            -e STORAGE_SIGNING_SECRET="${{ steps.dummy.outputs.storage_signing }}" \
             -e APP_URL=http://127.0.0.1:10000 \
             olume-chat-server:ci
       - name: Smoke de /health/live
@@ -136,7 +156,8 @@ jobs:
       - name: Build imagem do frontend
         run: |
           docker build -t olume-chat-client:ci -f client/Dockerfile client \
-            --build-arg VITE_API_URL=https://api.olumechat.com.br/api
+            --build-arg VITE_API_URL=https://api.olumechat.com.br/api \
+            --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br
 
 # TODO (FIL-92, fora deste PR — dependem de credencial de CI):
 # - teste de RLS contra uma branch Neon de CI/homologação descartável;

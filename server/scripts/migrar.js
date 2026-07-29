@@ -27,14 +27,39 @@ const DIR = path.join(__dirname, '..', 'db', 'migrations');
 
 // Lock consultivo DE SESSÃO (pg_advisory_lock, não o _xact_): precisa que
 // todas as queries deste script rodem na MESMA conexão física — verdadeiro
-// para MIGRATION_DATABASE_URL/DATABASE_URL_DIRECT (conexão direta), mas não
-// garantido atrás de um pooler em transaction mode.
+// para MIGRATION_DATABASE_URL/DATABASE_URL_DIRECT (conexão direta), mas NÃO
+// garantido atrás de um pooler em transaction mode (PgBouncer troca a
+// conexão física a cada transação — o lock pode "vazar" preso num backend
+// que a aplicação nunca mais reusa, ou simplesmente não serializar nada
+// porque BEGIN/COMMIT de cada arquivo já pode cair em backends diferentes).
+// Por isso apontaParaPooler() abaixo BLOQUEIA rodar isto contra um host
+// "-pooler" — é sempre a URL DIRETA, nunca a pooled.
 const LOCK_KEY_SQL = "hashtext('olume-chat:migrar')::bigint";
 
+function apontaParaPooler(url) {
+  try {
+    return /-pooler(\.|$)/i.test(new URL(url).hostname);
+  } catch {
+    return false; // URL malformada — deixa o pg.Client acusar o erro real
+  }
+}
+
 async function main() {
+  const usandoMigrationUrl = Boolean(process.env.MIGRATION_DATABASE_URL);
   const url = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
   if (!url) {
     console.error('[migrar] defina MIGRATION_DATABASE_URL (ou DATABASE_URL) no .env');
+    process.exit(1);
+  }
+  if (apontaParaPooler(url)) {
+    const origem = usandoMigrationUrl ? 'MIGRATION_DATABASE_URL' : 'DATABASE_URL';
+    console.error(
+      `[migrar] ${origem} aponta para o pooler (host com "-pooler") — o lock de migração é `
+      + 'de SESSÃO e exige a MESMA conexão física do início ao fim do script. Atrás de um pooler '
+      + 'em transaction mode isso não é garantido: o lock não serializa DDL entre containers e '
+      + 'pode até ficar preso num backend que a aplicação nunca mais usa. Defina '
+      + 'MIGRATION_DATABASE_URL com a connection string DIRETA do Neon (host SEM "-pooler").'
+    );
     process.exit(1);
   }
   const arquivos = fs.readdirSync(DIR).filter((f) => f.endsWith('.sql')).sort();

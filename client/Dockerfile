@@ -3,11 +3,13 @@
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
 
-# VITE_API_URL só existe embutido no bundle (variável pública, sem segredo) —
-# precisa ser build arg porque o Vite resolve import.meta.env em build time,
-# não em runtime.
+# VITE_* só existem embutidas no bundle (variáveis públicas, sem segredo) —
+# precisam ser build arg porque o Vite resolve import.meta.env em build
+# time, não em runtime.
 ARG VITE_API_URL
+ARG VITE_COMERCIAL_EMAIL
 ENV VITE_API_URL=${VITE_API_URL}
+ENV VITE_COMERCIAL_EMAIL=${VITE_COMERCIAL_EMAIL}
 
 COPY package*.json ./
 RUN npm ci
