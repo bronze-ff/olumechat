@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { TOOLS, porNome, schemasParaProvedor } = require('../ia/tools');
 
-// No Falatta o registro nasce VAZIO e é preenchido por tenant. Estes testes
+// No Olume Chat o registro nasce VAZIO e é preenchido por tenant. Estes testes
 // cobrem o contrato do registro, não um conjunto fixo de tools do cliente.
 
 test('registro nasce vazio (nenhuma tool embutida no produto)', () => {

@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const db = require('../db/pool');
 const precos = require('../consumo/precos');
 
-const OPERADOR = { id: 1, email: 'op@falatta.com' };
+const OPERADOR = { id: 1, email: 'op@olume.com' };
 
 function conexao({ linhas = [] } = {}) {
   const cap = [];

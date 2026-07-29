@@ -20,7 +20,7 @@ const AUTH_SECRET_MODULE = path.join(__dirname, '..', 'auth', 'secret.js');
 const OPERADOR_SECRET_MODULE = path.join(__dirname, '..', 'operador', 'segredo.js');
 
 function cwdComEnvDirTrap() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'falatta-jwt-secret-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'olume-jwt-secret-'));
   fs.mkdirSync(path.join(dir, '.env')); // ".env" é uma PASTA — writeFileSync nela dá EISDIR
   return dir;
 }

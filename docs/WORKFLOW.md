@@ -1,6 +1,6 @@
 # WORKFLOW — como se trabalha neste repo
 
-Regras de branch, commit, teste, PR e merge do **Falatta**. Vale para humano e
+Regras de branch, commit, teste, PR e merge do **Olume**. Vale para humano e
 para agente. Se você é um agente autônomo tocando um ticket, este arquivo é
 contrato — leia §1, §2, §3 e §4 **antes** de criar qualquer branch.
 

@@ -5,7 +5,7 @@
 ## Resumo executivo
 
 O Meta Business Agent Platform (aberto a parceiros em 01/07/2026) é **arquiteturalmente
-compatível** com o Falatta — melhor do que o estimado no primeiro levantamento. O modelo é o
+compatível** com o Olume Chat — melhor do que o estimado no primeiro levantamento. O modelo é o
 de *handover* que a Meta já usava no Messenger: o agente da Meta é o respondente primário, mas
 **o app do integrador recebe cópia de tudo via webhook `standby`** e pode assumir a conversa a
 qualquer momento. Um futuro `numero.modo='meta_agent'` é viável sem quebrar a arquitetura.
@@ -19,11 +19,11 @@ um POC ao vivo em ~3 meses.** Motivos no fim; nenhum bloqueio é técnico — s�
 - **Quem responde:** o agente da Meta é o *primary responder*. Enquanto ele controla a thread,
   as mensagens do cliente chegam ao integrador no campo de webhook **`standby`** (cópia); as
   respostas do agente e recibos também chegam — o app fica sincronizado. Quando o app controla,
-  chegam em **`messages`** (fluxo atual do Falatta).
+  chegam em **`messages`** (fluxo atual do Olume Chat).
 - **Takeover:** o app **assume enviando uma mensagem** (o controle vem junto) e **devolve** com
   a Thread Control API (ação `pass`). Campos de webhook exigidos: `messages`, `standby`,
   `messaging_handovers`.
-- **Configuração por número** (API, com paralelos exatos ao que o Falatta construiu):
+- **Configuração por número** (API, com paralelos exatos ao que o Olume Chat construiu):
   *Skills* (instruções de sistema) ≈ nossas instruções; *Business info* ≈ nossa ficha;
   *FAQs/Files/Websites* ≈ nossa base de conhecimento (com upload e crawling); *Connectors* ≈
   nossas operações nomeadas (o agente chama APIs do integrador); *Settings* (persona, idioma,
@@ -47,7 +47,7 @@ um POC ao vivo em ~3 meses.** Motivos no fim; nenhum bloqueio é técnico — s�
 | Custo real vs. IA própria | ~US$ 0,04-0,05/msg. Comparável a rodar modelo classe Sonnet na nossa IA; ~10x mais caro que classe mini/Haiku. **Sem margem nossa: cobrado direto na WABA do cliente.** | pricing (mercado + oficial) |
 | Qualidade (português, áudio, alucinação com a base) | **Só o teste ao vivo responde.** Áudio nativo é provável (Meta AI processa áudio no consumidor) mas não documentado para o Business Agent. | pendente |
 
-## O que um modo `meta_agent` exigiria no Falatta (esboço, sem compromisso)
+## O que um modo `meta_agent` exigiria no Olume Chat (esboço, sem compromisso)
 
 1. Assinar `standby` e `messaging_handovers` no webhook e persistir as cópias na `mensagem`
    (com `origem='ia'` — infra da FIL-84 serve inteira).
@@ -61,7 +61,7 @@ um POC ao vivo em ~3 meses.** Motivos no fim; nenhum bloqueio é técnico — s�
 ## Por que ainda não
 
 1. **Margem e cobrança** — o token é cobrado na WABA, fora do nosso medidor/teto; o add-on de
-   IA do Falatta perde o controle de custo e a margem nesses números.
+   IA do Olume Chat perde o controle de custo e a margem nesses números.
 2. **Verticais** — clientes fora das 5 verticais ficam de fora; nossa IA atende qualquer um.
 3. **Maturidade** — a plataforma tem semanas; docs boas no fluxo principal, mas sem detalhes de
    limites, SLA, idiomas e áudio. Primeiro reajuste de preço já marcado (01/10/2026).

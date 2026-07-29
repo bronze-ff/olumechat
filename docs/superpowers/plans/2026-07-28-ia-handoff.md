@@ -2006,7 +2006,7 @@ Em `server/ia/tools.js`:
 // O modelo escolhe a tool + parâmetros; NUNCA gera SQL. O SQL de cada tool vive
 // num .sql curado, fora do código.
 //
-// No Falatta o registro é POR TENANT e nasce vazio: cada empresa cadastra as suas
+// No Olume Chat o registro é POR TENANT e nasce vazio: cada empresa cadastra as suas
 // consultas no painel. Enquanto o CRUD de tools não existe, TOOLS fica vazio e o
 // bot de IA responde só com conhecimento textual — sem acesso a dados.
 //
@@ -2016,7 +2016,7 @@ Em `server/ia/tools.js`:
 // saber a diferença: recebe a união dos schemas; quem roteia na execução é o
 // loop do ia/runtime.js.
 //
-// TODO(falatta): trocar o array fixo por leitura do banco, com escopo de tenant.
+// TODO(olume): trocar o array fixo por leitura do banco, com escopo de tenant.
 'use strict';
 
 const operacoes = require('./operacoes');

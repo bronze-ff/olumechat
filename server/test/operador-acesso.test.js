@@ -168,7 +168,7 @@ const tokenTenant = (extra = {}) => jwt.sign(
   { jti: `t-${Math.random()}`, tenantId: TENANT_ID, usuarioId: 10, matricula: 10, nome: 'Ana', ...extra },
   SECRET_TENANT, { expiresIn: '1h' });
 const tokenOperador = (extra = {}) => jwt.sign(
-  { jti: `o-${Math.random()}`, escopo: 'operador', operadorId: 1, email: 'op@falatta.test', ...extra },
+  { jti: `o-${Math.random()}`, escopo: 'operador', operadorId: 1, email: 'op@olume.test', ...extra },
   SECRET_OPERADOR, { expiresIn: '1h' });
 
 /**
@@ -196,7 +196,7 @@ test.beforeEach(() => {
   instalarBanco();
   rbac.invalidar(); // o perfil tem cache de 30s e os testes reusam a matrícula
   mutacoesExecutadas = [];
-  estado.operadores.push({ ID: 1, EMAIL: 'op@falatta.test', NOME: 'Operador', SENHA_HASH: HASH, ATIVO: 'S' });
+  estado.operadores.push({ ID: 1, EMAIL: 'op@olume.test', NOME: 'Operador', SENHA_HASH: HASH, ATIVO: 'S' });
 });
 
 /** Abre uma sessão de suporte no tenant e devolve o token dela. */
@@ -427,7 +427,7 @@ test('no SSE, a sessão de suporte não vira atendente nem entra na presença do
 // ===========================================================================
 test('login de operador devolve token com escopo próprio e SEM tenantId', async () => {
   const r = await req(ctx.port, 'POST', '/api/operador/login',
-    { body: { email: 'op@falatta.test', senha: SENHA_OPERADOR }, ip: '10.1.0.1' });
+    { body: { email: 'op@olume.test', senha: SENHA_OPERADOR }, ip: '10.1.0.1' });
   assert.equal(r.status, 200, r.texto);
   const p = jwt.decode(r.body.token);
   assert.equal(p.escopo, 'operador');
@@ -440,11 +440,11 @@ test('login de operador devolve token com escopo próprio e SEM tenantId', async
 });
 
 test('401 uniforme: e-mail inexistente, conta desativada e senha errada respondem igual', async () => {
-  estado.operadores.push({ ID: 2, EMAIL: 'ex@falatta.test', NOME: 'Ex', SENHA_HASH: HASH, ATIVO: 'N' });
+  estado.operadores.push({ ID: 2, EMAIL: 'ex@olume.test', NOME: 'Ex', SENHA_HASH: HASH, ATIVO: 'N' });
   const casos = {
-    'e-mail inexistente': { email: 'ninguem@falatta.test', senha: SENHA_OPERADOR },
-    'conta desativada': { email: 'ex@falatta.test', senha: SENHA_OPERADOR },
-    'senha errada': { email: 'op@falatta.test', senha: 'errada-de-proposito' },
+    'e-mail inexistente': { email: 'ninguem@olume.test', senha: SENHA_OPERADOR },
+    'conta desativada': { email: 'ex@olume.test', senha: SENHA_OPERADOR },
+    'senha errada': { email: 'op@olume.test', senha: 'errada-de-proposito' },
   };
   const respostas = [];
   let i = 0;
@@ -466,9 +466,9 @@ test('a senha do operador não aparece na resposta nem no console', async () => 
   let respostas;
   try {
     respostas = [
-      await req(ctx.port, 'POST', '/api/operador/login', { body: { email: 'op@falatta.test', senha: SENHA_OPERADOR }, ip: '10.3.0.1' }),
-      await req(ctx.port, 'POST', '/api/operador/login', { body: { email: 'op@falatta.test', senha: SEGREDO }, ip: '10.3.0.2' }),
-      await req(ctx.port, 'POST', '/api/operador/login', { body: { email: 'op@falatta.test', senha: SEGREDO.repeat(20) }, ip: '10.3.0.3' }),
+      await req(ctx.port, 'POST', '/api/operador/login', { body: { email: 'op@olume.test', senha: SENHA_OPERADOR }, ip: '10.3.0.1' }),
+      await req(ctx.port, 'POST', '/api/operador/login', { body: { email: 'op@olume.test', senha: SEGREDO }, ip: '10.3.0.2' }),
+      await req(ctx.port, 'POST', '/api/operador/login', { body: { email: 'op@olume.test', senha: SEGREDO.repeat(20) }, ip: '10.3.0.3' }),
     ];
   } finally { Object.assign(console, orig); }
 
@@ -488,7 +488,7 @@ test('rate-limit do login de operador (11ª tentativa do mesmo IP → 429)', asy
   let ultima;
   for (let i = 0; i < 11; i++) {
     ultima = await req(ctx.port, 'POST', '/api/operador/login',
-      { body: { email: 'op@falatta.test', senha: 'errada-de-proposito' }, ip: IP });
+      { body: { email: 'op@olume.test', senha: 'errada-de-proposito' }, ip: IP });
   }
   assert.equal(ultima.status, 429);
   assert.ok(ultima.body.error, 'o 429 precisa vir em JSON com `error`');
@@ -496,7 +496,7 @@ test('rate-limit do login de operador (11ª tentativa do mesmo IP → 429)', asy
 
 test('logout revoga o jti: o mesmo token não vale mais', async () => {
   const login = await req(ctx.port, 'POST', '/api/operador/login',
-    { body: { email: 'op@falatta.test', senha: SENHA_OPERADOR }, ip: '10.4.0.1' });
+    { body: { email: 'op@olume.test', senha: SENHA_OPERADOR }, ip: '10.4.0.1' });
   const tok = login.body.token;
   assert.equal((await req(ctx.port, 'GET', '/api/operador/eu', { tok })).status, 200);
   assert.equal((await req(ctx.port, 'POST', '/api/operador/logout', { tok })).status, 200);

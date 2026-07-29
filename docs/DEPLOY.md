@@ -5,7 +5,7 @@ de fila, IA fire-and-forget pós-webhook) e por isso **não roda em serverless d
 desenho de produção é:
 
 ```
-app.falatta.com.br  → Vercel (client/ estático, Vite)
+app.olumechat.com.br  → Vercel (client/ estático, Vite)
                        └─ rewrite /api/* → Render (mesma origem, sem CORS)
 api → Render (server/, Node persistente)  ← webhook da Meta aponta DIRETO aqui
 Neon (Postgres)  ·  Cloudflare R2 (mídia, driver s3)
@@ -22,20 +22,20 @@ Já existente. Separe as três connection strings no painel do Neon:
 
 O disco do Render é efêmero — mídia de WhatsApp precisa do driver s3.
 
-1. R2 → Create bucket (ex.: `falatta-media`).
+1. R2 → Create bucket (ex.: `olumechat-media`).
 2. R2 → Manage API Tokens → token com Object Read & Write no bucket.
 3. Anote: endpoint `https://<account-id>.r2.cloudflarestorage.com`, access key e secret.
 
 ## 3. Render (backend)
 
-1. New → Web Service → conectar o repo `bronze-ff/falatta`.
+1. New → Web Service → conectar o repo `bronze-ff/olumechat`.
 2. **Root Directory:** `server` · **Build:** `npm ci` · **Start:** `npm start`.
 3. **Pre-Deploy Command:** `npm run migrar` (usa `MIGRATION_DATABASE_URL`; roda a cada deploy —
    as migrações são idempotentes por contrato).
 4. **Health Check Path:** `/health`.
 5. Cadastrar as variáveis de ambiente (tabela abaixo) e fazer o deploy.
 6. Primeiro acesso do painel do operador: Shell do serviço → `npm run criar-operador`.
-7. Anotar a URL pública (ex.: `https://falatta.onrender.com`).
+7. Anotar a URL pública (ex.: `https://olumechat.onrender.com`).
 
 ### Variáveis de ambiente do backend (Render)
 
@@ -54,7 +54,7 @@ Obrigatórias:
 | `JWT_SECRET` | `openssl rand -hex 48` |
 | `OPERADOR_JWT_SECRET` | `openssl rand -hex 48` — **diferente** do `JWT_SECRET` |
 | `IA_CRYPTO_KEY` | `openssl rand -hex 32` — dedicada e ESTÁVEL (cifra as API keys de IA; sem ela cai no JWT_SECRET, que não pode mais rotacionar) |
-| `APP_URL` | URL pública do front na Vercel (ex.: `https://app.falatta.com.br`) — monta links de convite |
+| `APP_URL` | URL pública do front na Vercel (ex.: `https://app.olumechat.com.br`) — monta links de convite |
 | `STORAGE_DRIVER` | `s3` |
 | `STORAGE_BUCKET` | nome do bucket R2 |
 | `STORAGE_REGION` | `auto` |
@@ -84,7 +84,7 @@ Não usar em produção: `WA_TOKEN`, `WA_PHONE_NUMBER_ID`, `WA_BUSINESS_ACCOUNT_
 
 ## 4. Vercel (front)
 
-1. New Project → importar o repo `bronze-ff/falatta`.
+1. New Project → importar o repo `bronze-ff/olumechat`.
 2. **Root Directory:** `client` · Framework preset: **Vite** (build `npm run build`, output `dist`).
 3. Editar `client/vercel.json`: trocar `https://SEU-BACKEND.onrender.com` pela URL real do
    Render (o rewrite mantém `/api` na mesma origem — sem CORS, e o SSE passa junto).
@@ -110,8 +110,8 @@ No app da Meta → WhatsApp → Configuration:
 
 ## 6. Domínios (opcional)
 
-- `app.falatta.com.br` → Vercel (Settings → Domains; atualizar `APP_URL` no Render).
-- `api.falatta.com.br` → Render (Custom Domain; atualizar o destino no `client/vercel.json` e o
+- `app.olumechat.com.br` → Vercel (Settings → Domains; atualizar `APP_URL` no Render).
+- `api.olumechat.com.br` → Render (Custom Domain; atualizar o destino no `client/vercel.json` e o
   callback na Meta).
 
 ## Ordem de subida

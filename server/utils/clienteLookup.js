@@ -1,6 +1,6 @@
 // utils/clienteLookup.js — Ponto de extensão: telefone -> cliente no sistema do tenant.
 //
-// No Falatta cada tenant tem (ou não tem) um ERP/CRM próprio. Este módulo é o SEAM
+// No Olume Chat cada tenant tem (ou não tem) um ERP/CRM próprio. Este módulo é o SEAM
 // onde essa integração entra: o núcleo do produto chama estas funções na chegada da
 // mensagem (webhook) e na ficha do contato, e segue normalmente quando elas devolvem
 // null — identificar o cliente é SEMPRE best-effort e nunca pode derrubar a ingestão.
@@ -61,6 +61,6 @@ async function dadosClienteWinthor(_conn, codigo) {
 module.exports = {
   acharClientePorTelefone,
   partesTelefone,
-  dadosClienteWinthor, // TODO(falatta): renomear p/ dadosDoCliente junto com os call sites
+  dadosClienteWinthor, // TODO(olume): renomear p/ dadosDoCliente junto com os call sites
   registrarProvedor,
 };

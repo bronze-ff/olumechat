@@ -1,13 +1,13 @@
 // scripts/criar-operador.js — Cria a conta de OPERADOR (super-admin) do
-// Falatta. É o bootstrap do painel do FIL-70.
+// Olume. É o bootstrap do painel do FIL-70.
 //
 //   cd server
-//   npm run criar-operador -- --email=voce@falatta.com --nome="Seu Nome" --senha='...'
+//   npm run criar-operador -- --email=voce@olumechat.com.br --nome="Seu Nome" --senha='...'
 //
 // Ou sem --senha, lendo de variável de ambiente (não fica no histórico do
 // shell nem na lista de processos):
 //
-//   OPERADOR_SENHA='...' npm run criar-operador -- --email=voce@falatta.com
+//   OPERADOR_SENHA='...' npm run criar-operador -- --email=voce@olumechat.com.br
 //
 // POR QUE UM SCRIPT, E NÃO UM ENDPOINT: um "criar operador" exposto em HTTP
 // seria a porta dos fundos do sistema inteiro — o operador enxerga todos os
@@ -28,7 +28,7 @@ async function main() {
   const senha = arg('senha') || process.env.OPERADOR_SENHA;
 
   if (!email || !senha) {
-    console.error('uso: npm run criar-operador -- --email=voce@falatta.com [--nome="Seu Nome"] --senha=...');
+    console.error('uso: npm run criar-operador -- --email=voce@olumechat.com.br [--nome="Seu Nome"] --senha=...');
     console.error('     (ou defina OPERADOR_SENHA no ambiente em vez de --senha)');
     process.exit(1);
   }

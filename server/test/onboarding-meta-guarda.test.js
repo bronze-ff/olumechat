@@ -17,7 +17,7 @@ function app({ papel, suporte } = {}) {
   a.use(express.json());
   a.use((req, _res, next) => {
     req.tenantId = 1;
-    req.user = suporte ? { suporte: true, operadorId: 9, email: 'op@falatta.com' } : { matricula: 10 };
+    req.user = suporte ? { suporte: true, operadorId: 9, email: 'op@olume.com' } : { matricula: 10 };
     req.perfil = { atendenteId: 1, papel: papel || 'ATENDENTE' };
     next();
   });

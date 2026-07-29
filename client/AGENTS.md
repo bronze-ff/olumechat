@@ -8,7 +8,7 @@
 |---|---|
 | `src/pages/` | Landing, Login, Conversas (app do atendente) |
 | `src/pages/admin/` | Painel do cliente (`Admin.jsx` = shell de abas; uma page por aba) |
-| `src/pages/operador/` | Painel interno Falatta (`nav.js` = seções; `OperadorShell` = layout) |
+| `src/pages/operador/` | Painel interno Olume (`nav.js` = seções; `OperadorShell` = layout) |
 | `src/components/layout/` | Shells, Header, ProtectedRoute/RotaOperador, SuporteBadge |
 | `src/services/` | `api.js` (sessão do CLIENTE) e `apiOperador.js` (sessão do OPERADOR) — **nunca misture** |
 | `src/context/AuthContext.jsx` | login/logout/encerrarSuporte — leia os comentários de corrida antes de mexer |

@@ -1,4 +1,4 @@
-# AGENTS.md — guia de agentes do Falatta
+# AGENTS.md — guia de agentes do Olume Chat
 
 > **Fonte de verdade única.** `CLAUDE.md` contém apenas `@AGENTS.md` (import nativo do
 > Claude Code) — edite SEMPRE este arquivo; o Claude importa e os demais agentes (Codex,
@@ -64,6 +64,9 @@ cd client && npm run dev                        # http://localhost:5173
    `PRODUCT.md`), e sem expor jargão de implementação na UI.
 9. Camada 1 do prompt da IA (`BASE_SISTEMA` em `ia/perfilStore.js`) é **intocável por
    admin**: anti-alucinação, guarda de escopo, anti-injeção e sigilo — não enfraqueça.
+10. Identificadores internos `falatta_*` (role do banco, migrações) são legado pré-rebrand
+    (FIL-91: empresa Olume / produto Olume Chat) e **não devem ser renomeados** — troca de
+    role é mudança de infra sem valor de marca e quebraria o banco existente.
 
 ## Mapas por nível (padrão do repo)
 

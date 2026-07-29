@@ -5,7 +5,7 @@
 const { Client } = require('pg');
 const { EventEmitter } = require('node:events');
 
-const PREFIXO_CANAL = 'falatta_realtime_tenant_';
+const PREFIXO_CANAL = 'olume_realtime_tenant_';
 const RETRY_MS = 5_000;
 
 function tenantValido(tenantId) {

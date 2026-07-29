@@ -1,4 +1,4 @@
-# Falatta
+# Olume Chat
 
 Plataforma **multi-tenant** de atendimento por WhatsApp, integrada direto na
 **WhatsApp Cloud API da Meta** (sem BSP). Inbox multi-atendente com filas,
@@ -141,7 +141,7 @@ acompanha o uso e entra num tenant para dar suporte. Não é um `ADMIN` com flag
 ```bash
 cd server
 npm run migrar                                   # aplica a 005_operador.sql
-OPERADOR_SENHA='...' npm run criar-operador -- --email=voce@falatta.com --nome="Seu Nome"
+OPERADOR_SENHA='...' npm run criar-operador -- --email=voce@olumechat.com.br --nome="Seu Nome"
 ```
 
 Não há auto-cadastro de operador: a primeira conta nasce por esse script, rodado
@@ -208,7 +208,7 @@ test` em todo push para `main` e em todo pull request.
 
 ### Proteção do GitHub
 
-No repositório `bronze-ff/falatta`, o administrador deve proteger `main`, exigir
+No repositório `bronze-ff/olumechat`, o administrador deve proteger `main`, exigir
 pull request, exigir o check `test` deste workflow e bloquear push direto. O
 merge continua sendo feito manualmente após o CI verde.
 

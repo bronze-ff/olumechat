@@ -156,7 +156,7 @@ perfil.post('/testar', exigirPapel('ADMIN'), testarIaLimiter, async (req, res, n
     const sistema = await db.comTenant(req.tenantId, async (conn) => {
       if (await limitePlano.estourouTeto(conn, req.tenantId)) {
         const e = new Error('teto'); e.http = 400;
-        e.body = { error: 'Limite mensal de uso de IA atingido para esta empresa. Fale com o Falatta para revisar o plano.' };
+        e.body = { error: 'Limite mensal de uso de IA atingido para esta empresa. Fale com o Olume para revisar o plano.' };
         throw e;
       }
       return perfilStore.montarSistema(await perfilStore.carregar(conn, req.tenantId));
@@ -165,7 +165,7 @@ perfil.post('/testar', exigirPapel('ADMIN'), testarIaLimiter, async (req, res, n
     // Fase 2 — nenhuma conexão aberta: credencial e preço abrem transação de
     // OPERADOR por baixo dos panos (ver ia/iaConfigStore.js).
     const config = await iaConfigStore.carregar(req.tenantId);
-    if (!config) return res.status(400).json({ error: 'Nenhum provedor de IA configurado. Fale com o time Falatta.' });
+    if (!config) return res.status(400).json({ error: 'Nenhum provedor de IA configurado. Fale com o time Olume.' });
     const preco = await precos.carregarPreco(config.provider, config.modelo);
 
     const out = await client.chamar({

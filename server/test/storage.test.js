@@ -13,7 +13,7 @@ test('storage: chave sempre começa pelo tenant do dono', () => {
 });
 
 test('storage local: tenant diferente não valida URL assinada', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'falatta-storage-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'olume-storage-'));
   const s = new LocalStorage({ dir });
   const key = storageKey(1, 9, 'foto.jpg');
   await s.salvar(Buffer.from('ok'), key, 'image/jpeg');

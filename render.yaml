@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: falatta
+    name: olume-chat-server
     runtime: docker
     plan: starter
     dockerfilePath: ./Dockerfile

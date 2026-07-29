@@ -1,4 +1,4 @@
-# SEGURANÇA — padrão do Falatta
+# SEGURANÇA — padrão do Olume
 
 Este bloco é obrigatório em todo ticket, PR e worker deste projeto. Foi
 derivado de (a) uma auditoria real feita neste repo e (b) das 15 perguntas de
