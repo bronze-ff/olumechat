@@ -89,6 +89,10 @@ function Summary({ totais, mensagens }) {
   );
 }
 
+// Domínio de produção definitivo (FIL-93/P0.9) — configurável por ambiente
+// em vez do prefixo legado "app.olume.com.br" hardcoded.
+const DOMINIO_APP = import.meta.env.VITE_APP_DOMAIN || 'olumechat.com.br';
+
 function Provisionamento({ form, setForm, podeProvisionar, provisionar }) {
   return (
     <section className="app-panel overflow-hidden">
@@ -125,7 +129,7 @@ function Provisionamento({ form, setForm, podeProvisionar, provisionar }) {
           <label htmlFor="empresa-slug" className="field-label">Identificador de acesso</label>
           <div className="flex rounded-lg focus-within:ring-2 focus-within:ring-brand-200">
             <span className="min-h-11 px-3 flex items-center rounded-l-lg border border-r-0 border-paper-400 bg-paper-100 text-xs text-stone-500">
-              app.olume.com.br/
+              {DOMINIO_APP}/
             </span>
             <input
               id="empresa-slug"

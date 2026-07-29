@@ -68,7 +68,7 @@ const seguranca = [
   ['Ações rastreáveis', 'Histórico e auditoria registram decisões e acessos de suporte.'],
 ];
 
-const emailComercial = import.meta.env.VITE_COMERCIAL_EMAIL || 'comercial@olume.com.br';
+const emailComercial = import.meta.env.VITE_COMERCIAL_EMAIL || 'comercial@olumechat.com.br';
 
 function ProductPreview() {
   const conversas = [

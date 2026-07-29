@@ -16,8 +16,9 @@ serviço para empresas de qualquer segmento (farmácia, RH, clínica, varejo).
 > A arquitetura para Redis, filas, workers, cache, load balancer e escala
 > horizontal está em
 > [`docs/ESCALABILIDADE.md`](docs/ESCALABILIDADE.md).
-> A configuração de deploy está em [`docs/DEPLOY.md`](docs/DEPLOY.md), mas a
-> liberação para clientes depende do smoke test e da homologação descritos lá.
+> A configuração de deploy está em [`docs/DEPLOY_VPS.md`](docs/DEPLOY_VPS.md)
+> (caminho oficial: VPS + Coolify), mas a liberação para clientes depende dos
+> P0 do próprio documento e do smoke test descrito lá.
 
 ---
 
@@ -180,31 +181,17 @@ cd client && npm install && npm run dev
 Os testes de RLS contra Postgres real só rodam com `TEST_DATABASE_URL` no
 ambiente; sem ela são pulados e a suíte segue verde.
 
-## Deploy (Vercel + Render + Neon + R2)
+## Deploy
 
-O frontend estático roda na Vercel e chama diretamente a API persistente no
-Render. O Blueprint está em [`render.yaml`](render.yaml), usa
-`/health/ready`, executa migrações no pre-deploy e mantém deliberadamente
-**uma única instância**. Presença, tickets SSE e rate limits precisam ser
-distribuídos antes de aumentar esse limite; o plano está em
-[`docs/ESCALABILIDADE.md`](docs/ESCALABILIDADE.md).
+> **Caminho oficial: [`docs/DEPLOY_VPS.md`](docs/DEPLOY_VPS.md)** — VPS própria
+> administrada pelo Coolify (frontend + backend), com Neon (Postgres) e
+> Cloudflare R2 (mídia) fora da VPS. `render.yaml` e `client/vercel.json`
+> continuam no repositório só como histórico do desenho anterior (Vercel +
+> Render) — não use `docs/DEPLOY.md` para o próximo deploy; ele descreve esse
+> desenho anterior e está marcado como tal.
 
-### Subir do zero
-
-1. Prepare Neon, R2, aplicativo Meta e os segredos.
-2. Reserve a origem do frontend na Vercel.
-3. No Render, crie um Blueprint a partir da raiz deste repositório e preencha
-   os valores `sync: false`.
-4. O `preDeployCommand` aplica as migrações uma única vez; uma falha impede a
-   publicação da nova versão.
-5. Configure `VITE_API_URL` na Vercel apontando diretamente para
-   `https://SEU_HOST/api`.
-6. Valide `https://SEU_HOST/health/live` e
-   `https://SEU_HOST/health/ready`.
-
-O procedimento completo, as variáveis e o smoke test obrigatório estão em
-[`docs/DEPLOY.md`](docs/DEPLOY.md). Para desenvolvimento local, copie
-`server/.env.example` para `server/.env` e use uma branch Neon descartável.
+Para desenvolvimento local, copie `server/.env.example` para `server/.env` e
+use uma branch Neon descartável.
 
 ### Proteção do GitHub
 

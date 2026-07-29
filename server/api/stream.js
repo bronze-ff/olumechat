@@ -35,6 +35,20 @@ const { carregarPerfil, PERFIL_SUPORTE } = require('../auth/rbac');
 
 const router = express.Router();
 
+// Conexões SSE abertas (FIL-93/P0.7): server.close() (app.js) só chama seu
+// callback quando TODAS as conexões existentes terminam — uma SSE fica aberta
+// indefinidamente até o cliente reconectar, então sem encerrar essas
+// conexões no SIGTERM o shutdown travaria até o prazo máximo (ou para
+// sempre, se não houvesse um).
+const conexoesAbertas = new Set();
+
+/** Fecha toda conexão SSE aberta agora. O client reconecta sozinho (`retry: 5000` já escrito no stream). */
+function encerrarTodas() {
+  for (const res of conexoesAbertas) {
+    try { res.end(); } catch { /* já fechada */ }
+  }
+}
+
 // Emite um ticket de uso único (cliente já autenticado por JWT).
 router.post('/ticket', authMiddleware, (req, res) => {
   res.json({ ticket: criarTicket(req.user || {}) });
@@ -92,6 +106,7 @@ router.get('/', async (req, res) => {
   });
   res.write('retry: 5000\n\n');            // o navegador reconecta em 5s se cair
   res.write('event: ready\ndata: {}\n\n'); // sinaliza conexão pronta
+  conexoesAbertas.add(res);
 
   const enviar = (evt) => {
     if (evt.tenantId === undefined) {
@@ -124,6 +139,7 @@ router.get('/', async (req, res) => {
   if (hb.unref) hb.unref();
 
   req.on('close', () => {
+    conexoesAbertas.delete(res);
     clearInterval(hb);
     cancelar();
     if (!ehSuporte) presence.desconectar(perfil.atendenteId);
@@ -132,3 +148,4 @@ router.get('/', async (req, res) => {
 
 module.exports = router;
 module.exports.podeReceber = podeReceber; // uso em teste
+module.exports.encerrarTodas = encerrarTodas; // uso no shutdown (app.js) e em teste

@@ -66,7 +66,7 @@ export default function LoginOperador() {
           <form onSubmit={entrar} noValidate className="mt-7 space-y-5">
             <div>
               <label htmlFor="email" className="field-label">E-mail corporativo</label>
-              <input id="email" type="email" className="input-field" value={form.email} onChange={set('email')} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="voce@olume.com.br" />
+              <input id="email" type="email" className="input-field" value={form.email} onChange={set('email')} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="voce@olumechat.com.br" />
             </div>
             <div>
               <label htmlFor="senha" className="field-label">Senha</label>

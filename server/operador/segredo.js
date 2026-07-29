@@ -10,14 +10,12 @@
 // `escopo: 'operador'` e recusa token com `tenantId`), mas com segredos
 // distintos nem um bug de claim reaproveita um token do outro lado.
 //
-// Como em auth/secret.js: sem OPERADOR_JWT_SECRET (ou com um fraco), geramos
-// um forte. Em produção ele é persistido no .env; em dev/teste não (senão a
-// suíte reescreveria o .env real).
+// Como em auth/secret.js: em produção o boot EXIGE OPERADOR_JWT_SECRET pronto
+// no ambiente (aqui é ainda mais sensível — é a credencial de super-admin);
+// em dev/teste geramos um forte só em memória, nunca gravado no .env.
 'use strict';
 require('dotenv').config();
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 
 const { SECRET: SECRET_TENANT } = require('../auth/secret');
 
@@ -25,46 +23,18 @@ function gerarForte() {
   return crypto.randomBytes(48).toString('hex'); // 96 chars, 384 bits
 }
 
-/** Grava (ou substitui) a linha OPERADOR_JWT_SECRET no .env, com modo 0600. */
-function persistir(valor) {
-  try {
-    const envPath = path.resolve(process.cwd(), '.env');
-    let txt = '';
-    try { txt = fs.readFileSync(envPath, 'utf8'); } catch { /* .env ainda não existe */ }
-    if (/^OPERADOR_JWT_SECRET=.*$/m.test(txt)) {
-      txt = txt.replace(/^OPERADOR_JWT_SECRET=.*$/m, `OPERADOR_JWT_SECRET=${valor}`);
-    } else {
-      txt += (txt && !txt.endsWith('\n') ? '\n' : '') + `OPERADOR_JWT_SECRET=${valor}\n`;
-    }
-    fs.writeFileSync(envPath, txt);
-    try { fs.chmodSync(envPath, 0o600); } catch { /* fs sem suporte a chmod (Windows) */ }
-    return true;
-  } catch (e) {
-    console.error('[operador] não consegui persistir OPERADOR_JWT_SECRET no .env:', e.message);
-    return false;
-  }
-}
-
 let SECRET = process.env.OPERADOR_JWT_SECRET;
 if (!SECRET || SECRET.length < 32) {
   const motivo = SECRET ? 'fraco/curto' : 'ausente';
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      `[operador] OPERADOR_JWT_SECRET ${motivo} em produção — defina um segredo forte (>=32 caracteres, `
+      + 'diferente do JWT_SECRET) no ambiente antes de subir. Gerar: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
+    );
+  }
   SECRET = gerarForte();
   process.env.OPERADOR_JWT_SECRET = SECRET;
-  if (process.env.NODE_ENV === 'production') {
-    const ok = persistir(SECRET);
-    if (!ok) {
-      // Mesmo risco do auth/secret.js: sem persistir, cada réplica assina
-      // diferente e derruba sessão de operador aleatoriamente. Aqui é ainda
-      // mais sensível — é a credencial de super-admin.
-      throw new Error(
-        '[operador] OPERADOR_JWT_SECRET ausente e não foi possível persistir um novo em produção '
-        + '(container com FS read-only?) — defina OPERADOR_JWT_SECRET no ambiente antes de subir.'
-      );
-    }
-    console.warn(`[operador] OPERADOR_JWT_SECRET ${motivo} — gerado um forte automaticamente e gravado no .env.`);
-  } else {
-    console.warn(`[operador] OPERADOR_JWT_SECRET ${motivo} — usando um segredo aleatório de sessão (dev/teste; não persistido).`);
-  }
+  console.warn(`[operador] OPERADOR_JWT_SECRET ${motivo} — usando um segredo aleatório de sessão (dev/teste; não persistido).`);
 }
 
 // Configuração idêntica nos dois lados anula a separação criptográfica: um

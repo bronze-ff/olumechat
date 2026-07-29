@@ -17,6 +17,22 @@
 'use strict';
 const crypto = require('crypto');
 
+// FIL-93 (P0.5): em produção o boot EXIGE IA_CRYPTO_KEY explícito — o
+// fallback para JWT_SECRET abaixo continua existindo só para dev/teste.
+// Calculado uma vez no load do módulo (mesmo padrão do auth/secret.js e do
+// storage/index.js) para o erro aparecer assim que o processo sobe, não na
+// primeira cifragem.
+if (!process.env.IA_CRYPTO_KEY) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      '[ia] IA_CRYPTO_KEY ausente em produção — sem uma chave estável e dedicada, credenciais de '
+      + 'IA/Meta cifradas por tenant ficam reféns de rotação do JWT_SECRET. Defina IA_CRYPTO_KEY no '
+      + 'ambiente antes de subir. Gerar: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"'
+    );
+  }
+  console.warn('[ia] IA_CRYPTO_KEY ausente — usando fallback JWT_SECRET (dev/teste; não use em produção).');
+}
+
 function chaveDe(tenantId, segredo, contexto = 'ia_config') {
   const s = segredo || process.env.IA_CRYPTO_KEY || process.env.JWT_SECRET || '';
   if (!s) throw new Error('IA_CRYPTO_KEY/JWT_SECRET ausente para derivar a chave de cifragem');
