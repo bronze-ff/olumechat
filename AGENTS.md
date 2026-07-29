@@ -65,6 +65,20 @@ cd client && npm run dev                        # http://localhost:5173
 9. Camada 1 do prompt da IA (`BASE_SISTEMA` em `ia/perfilStore.js`) é **intocável por
    admin**: anti-alucinação, guarda de escopo, anti-injeção e sigilo — não enfraqueça.
 
+## Mapas por nível (padrão do repo)
+
+Cada pasta de trabalho diário tem o próprio par `AGENTS.md` (conteúdo) + `CLAUDE.md`
+(`@AGENTS.md`): **`server/AGENTS.md`** (módulos e regras do backend) e
+**`client/AGENTS.md`** (front). São **deltas** — não repetem o raiz. Atenção com o Codex:
+ele varre da pasta de abertura para CIMA (nunca desce) — para trabalhar focado no server,
+abra-o de dentro de `server/`.
+
+## Integrações que os agentes usam aqui
+
+- **Orca CLI** (`orca ...`) — worktrees, terminais, automações; **`orca linear ...`** — tickets FIL-*
+- **gh** — PRs (sempre contra `main`); **Codex** — review cruzada (`codex review --base main`)
+- **Neon** (Postgres do produto) · **Meta Cloud API** (WhatsApp) · **R2/S3** (mídia em produção)
+
 ## Índice de docs
 
 - `docs/WORKFLOW.md` — branch/commit/teste/PR (contrato)
