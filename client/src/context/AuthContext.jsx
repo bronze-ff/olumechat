@@ -87,16 +87,18 @@ export function AuthProvider({ children }) {
     // havia corrida com o `<Navigate to="/login">` que o ProtectedRoute do
     // cliente monta no mesmo ciclo (renderiza com `user=null` antes de o
     // router aplicar `/operador`) — o replace do /login rodava depois e
-    // vencia. `window.location.assign` troca o documento inteiro: elimina a
-    // corrida por construção e limpa de quebra todo o estado do painel do
-    // cliente (React Query, SSE, contexto). Simetria com a ENTRADA da
+    // vencia. `window.location.replace` troca o documento inteiro sem
+    // empilhar entrada no histórico: elimina a corrida por construção, limpa
+    // de quebra todo o estado do painel do cliente (React Query, SSE,
+    // contexto) e preserva a semântica de `replace` — Voltar do navegador não
+    // pode cair na página morta do tenant. Simetria com a ENTRADA da
     // implantação, que já é hard-nav.
     marcarSessaoEncerrando(true);
     try { await api.post('/auth/logout'); } catch { /* encerra localmente mesmo se a API falhar */ }
     localStorage.removeItem('token');
     queryClient.clear();
     setUser(null);
-    window.location.assign('/operador/clientes');
+    window.location.replace('/operador/clientes');
   }, []);
 
   // Re-busca o perfil do servidor sem relogar — usado quando o PRÓPRIO usuário
