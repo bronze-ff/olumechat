@@ -18,6 +18,20 @@ const express = require('express');
 
 const { isValidSignature } = require('../webhook/verifySignature');
 const { buildWebhookRouter } = require('../webhook/routes');
+const db = require('../db/pool');
+
+// FIL-94: o POST agora PERSISTE o evento bruto antes de responder 200 (§P0.6 do
+// docs/DEPLOY_VPS.md). Sem banco atrás, a resposta correta passou a ser 503 —
+// então aqui trocamos a conexão por um dublê, como o resto da suíte faz.
+function fakeDb() {
+  db.getConnection = async () => ({
+    async execute(sql) {
+      if (sql.startsWith('INSERT INTO webhook_evento')) return { rows: [{ ID: 1 }], rowsAffected: 1 };
+      return { rows: [], rowsAffected: 0 };
+    },
+    async commit() {}, async rollback() {}, async close() {},
+  });
+}
 
 function sign(body, secret) {
   return 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
@@ -42,6 +56,7 @@ function request(method, url, { headers = {}, body } = {}) {
 }
 
 function startServer() {
+  fakeDb();
   const app = express();
   const cfg = { verifyToken: 'verify123', appSecret: 'test_app_secret' };
   app.use('/', buildWebhookRouter(cfg));

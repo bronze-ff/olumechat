@@ -196,6 +196,10 @@ async function start() {
     hub.start();
     // Recuperação pós-restart: redistribui conversas que ficaram aguardando.
     require('./fila/distribuidor').varrerPendentes();
+    // FIL-94: eventos do webhook aceitos e não concluídos (processo morto no
+    // meio) voltam ao trilho; também mede pendência/atraso e aplica a retenção
+    // do log bruto. Ver webhook/durabilidade.js.
+    require('./webhook/durabilidade').iniciar();
     // Timeout de inatividade do bot (autoatendimento).
     require('./bot/sweeper').iniciar();
     // Dispatcher de campanha de cobrança em lote.
