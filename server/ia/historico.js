@@ -36,20 +36,27 @@ const MAX_TURNOS = 40;
 const MAX_TENTATIVAS = 5;
 
 /**
- * A janela não pode cortar no meio de um par tool_use/tool_result: um turno
- * `tool` cuja chamada ficou fora do recorte vira `tool_result` órfão, e os dois
- * provedores respondem 400 a isso (Anthropic: "tool_result without tool_use";
- * OpenAI: `role:tool` sem `tool_calls` antes). O 400 viraria a resposta genérica
- * de indisponível para o cliente — silêncio na prática.
+ * A janela não pode cortar em qualquer lugar. Duas exigências dos provedores, e
+ * quebrar qualquer uma vira 400 — que o runtime transforma na resposta genérica
+ * de indisponível. Numa conversa longa isso aconteceria em TODO turno.
  *
- * Duas aparas, nas duas pontas:
- *   - INÍCIO: descarta turnos `tool` até o primeiro que não seja resultado.
- *   - FIM: descarta um `assistant` com tool-call que ficou sem resultado (só
+ *   - A PRIMEIRA mensagem tem que ser do `user` (a Anthropic recusa um array
+ *     que comece em `assistant`). Como um turno `tool` também não abre conversa
+ *     (vira `tool_result` órfão: "tool_result without tool_use" na Anthropic,
+ *     `role:tool` sem `tool_calls` antes na OpenAI), a regra das duas vira uma
+ *     só: **o recorte começa no primeiro turno `user`**. Isso preserva os pares
+ *     tool_use/tool_result de graça — o par sempre nasce depois de uma fala do
+ *     cliente, então nenhum par fica partido ao avançar até um `user`.
+ *   - O FIM não pode ser um `assistant` com tool-call sem o resultado dele (só
  *     acontece se o processo morrer entre gravar a chamada e gravar o retorno).
+ *
+ * O runtime SEMPRE grava o turno `user` da mensagem que está sendo respondida
+ * antes de carregar o histórico, então há sempre pelo menos um `user` dentro da
+ * janela dos últimos MAX_TURNOS.
  */
 function aparar(turnos) {
   let ini = 0;
-  while (ini < turnos.length && turnos[ini].papel === 'tool') ini += 1;
+  while (ini < turnos.length && turnos[ini].papel !== 'user') ini += 1;
   let fim = turnos.length;
   while (fim > ini && turnos[fim - 1].papel === 'assistant' && turnos[fim - 1].toolCallId) fim -= 1;
   return turnos.slice(ini, fim);

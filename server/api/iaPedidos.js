@@ -8,11 +8,15 @@
 // ATENDENTE); AUDITOR é somente-leitura em todo o produto e aqui também. Tudo
 // atrás do add-on (`tenant.ia_habilitada`), como o resto da IA.
 //
-// ESCOPO: gestor e auditor veem a carteira inteira; o atendente comum vê os
-// pedidos das conversas que ele pode ver (sem departamento — que é o caso das
-// conversas conduzidas pela IA —, do departamento dele, ou atribuídas a ele).
-// Mesma regra da lista de conversas, para o pedido não virar porta lateral para
-// dados de outro departamento.
+// ESCOPO: ADMIN e AUDITOR veem a carteira inteira; os demais veem os pedidos
+// das conversas que a lista de conversas mostraria para eles — EXATAMENTE a
+// mesma regra (api/conversas.js), incluindo a visibilidade exclusiva do
+// atendente comum (conversa já atribuída a um colega some) e a restrição por
+// CANAL. Achado de review (P1, PR #33): a primeira versão era mais larga que a
+// de conversas em dois pontos (admitia conversa de colega dentro do
+// departamento e ignorava `numeroIds`), e como o mesmo filtro guarda o
+// conferir/descartar, virava porta lateral para ler e decidir pedido de
+// conversa que o inbox esconde de propósito.
 'use strict';
 
 const express = require('express');
@@ -34,33 +38,70 @@ function podeAgir(req, res, next) {
   next();
 }
 
-/** Filtro de visibilidade por papel (ver cabeçalho). Devolve '' para quem vê tudo. */
+/**
+ * Filtro de visibilidade por papel — cópia fiel do escopo de api/conversas.js
+ * (ver cabeçalho). Devolve '' para quem vê tudo (ADMIN/AUDITOR).
+ * @param {object} binds objeto de binds do chamador, PREENCHIDO aqui dentro
+ */
 function filtroEscopo(perfil, binds) {
-  if (!perfil || ['ADMIN', 'SUPERVISOR', 'AUDITOR'].includes(perfil.papel)) return '';
-  const partes = ['c.departamento_id IS NULL'];
+  if (!perfil || perfil.papel === 'ADMIN' || perfil.papel === 'AUDITOR') return '';
+
+  // Visibilidade exclusiva: o ATENDENTE comum só vê a conversa atribuída a ELE
+  // ou ainda SEM dono. Conversa já atribuída a um colega some — e com ela o
+  // pedido dela. SUPERVISOR continua vendo todo o departamento, para supervisão.
+  const semDono = perfil.papel === 'SUPERVISOR' ? '' : ' AND c.atendente_id IS NULL';
+  const partes = [`(c.departamento_id IS NULL${semDono})`];
   if (perfil.atendenteId) {
     partes.push('c.atendente_id = :escopoAtd');
     binds.escopoAtd = perfil.atendenteId;
   }
-  (perfil.deptoIds || []).forEach((d, i) => { binds[`escDep${i}`] = d; });
-  if ((perfil.deptoIds || []).length) {
-    partes.push(`c.departamento_id IN (${perfil.deptoIds.map((_, i) => `:escDep${i}`).join(',')})`);
+  const deptoIds = perfil.deptoIds || [];
+  if (deptoIds.length) {
+    const ms = deptoIds.map((d, i) => { binds[`escDep${i}`] = d; return `:escDep${i}`; });
+    partes.push(`(c.departamento_id IN (${ms.join(',')})${semDono})`);
   }
-  return ` AND (${partes.join(' OR ')})`;
+  let filtro = ` AND (${partes.join(' OR ')})`;
+
+  // Escopo por NÚMERO (canal): atendente com canais cadastrados só vê conversa
+  // desses canais (+ sem canal + as atribuídas a ele). Lista vazia = sem
+  // restrição. É o que separa a operação ativa da receptiva no inbox — e o
+  // pedido não pode ser a brecha que devolve o dado escondido lá.
+  const numeroIds = perfil.numeroIds || [];
+  if (numeroIds.length) {
+    const partesNum = ['c.numero_id IS NULL'];
+    const ns = numeroIds.map((n, i) => { binds[`escNum${i}`] = n; return `:escNum${i}`; });
+    partesNum.push(`c.numero_id IN (${ns.join(',')})`);
+    if (perfil.atendenteId) partesNum.push('c.atendente_id = :escopoAtd'); // já bindado acima
+    filtro += ` AND (${partesNum.join(' OR ')})`;
+  }
+  return filtro;
 }
 
-/** payload jsonb → lista ordenada de campos para a tela. Os rótulos vêm do
- *  PAYLOAD, não do template atual: template editado depois não pode reescrever
- *  o que estava num pedido antigo (é a razão de a cópia existir). */
+/** payload jsonb → lista de campos para a tela, NA ORDEM DO TEMPLATE. Os
+ *  rótulos vêm do PAYLOAD, não do template atual: template editado depois não
+ *  pode reescrever o que estava num pedido antigo (é a razão de a cópia existir).
+ *
+ *  ⚠️ A ordem sai de `posicao`, gravada campo a campo no registro (ver
+ *  ia/pedidoTemplate.js): `campos` é jsonb e o Postgres NÃO preserva a ordem
+ *  das chaves — ele canonicaliza (chave curta primeiro, depois ordem de bytes).
+ *  Confiar em `Object.keys` mostraria o pedido numa ordem que ninguém
+ *  configurou. Pedido gravado antes desta correção não tem `posicao`: cai no
+ *  fim, preservando a ordem em que veio do banco (nada quebra, só não melhora). */
 function camposDoPayload(bruto) {
   const payload = typeof bruto === 'string' ? JSON.parse(bruto || '{}') : (bruto || {});
   const campos = payload.campos || {};
-  return Object.keys(campos).map((nome) => ({
-    nome,
-    rotulo: campos[nome] && campos[nome].rotulo ? campos[nome].rotulo : nome,
-    tipo: (campos[nome] && campos[nome].tipo) || 'texto',
-    valor: campos[nome] ? campos[nome].valor : null,
-  }));
+  return Object.keys(campos)
+    .map((nome, ordemNoBanco) => ({
+      nome,
+      rotulo: campos[nome] && campos[nome].rotulo ? campos[nome].rotulo : nome,
+      tipo: (campos[nome] && campos[nome].tipo) || 'texto',
+      valor: campos[nome] ? campos[nome].valor : null,
+      posicao: Number.isInteger(campos[nome] && campos[nome].posicao)
+        ? campos[nome].posicao
+        : Number.MAX_SAFE_INTEGER - 1000 + ordemNoBanco,
+    }))
+    .sort((a, b) => a.posicao - b.posicao)
+    .map(({ posicao, ...campo }) => campo);
 }
 
 function montarPedido(row) {
@@ -81,21 +122,39 @@ function montarPedido(row) {
   };
 }
 
+const POR_PAGINA = 30;
+const POR_PAGINA_MAX = 100;
+
 // GET / — ?status=rascunho|conferido|descartado|todos (default rascunho)
 //         ?conversaId= (badge/atalho a partir da conversa)
+//         ?antes=<id>  (cursor: próxima página)
+//
+// PAGINAÇÃO POR CURSOR, não offset (achado de review, P2, PR #33): a fila é
+// ordenada do mais novo para o mais antigo e recebe pedido novo o tempo todo —
+// com OFFSET, um pedido registrado entre uma página e outra empurra a lista e
+// faz um rascunho pular a página seguinte sem nunca ser visto. `id` é IDENTITY
+// (monotônico), então ordenar por ele é a mesma coisa que por `criado_em` e o
+// cursor "tudo com id menor que este" é exato.
+//
+// O corte anterior era um LIMIT sem continuação: num tenant movimentado, os
+// rascunhos além do teto sumiam da fila sem ninguém resolver.
 router.get('/', async (req, res, next) => {
   const statusFiltro = String(req.query.status || 'rascunho');
   const conversaId = Number(req.query.conversaId) || null;
-  const limite = Math.min(100, Math.max(1, Number(req.query.limite) || 50));
+  const antes = Number(req.query.antes) || null;
+  const limite = Math.min(POR_PAGINA_MAX, Math.max(1, Number(req.query.limite) || POR_PAGINA));
   if (statusFiltro !== 'todos' && !STATUS.includes(statusFiltro)) {
     return res.status(400).json({ error: 'Status inválido.' });
   }
   try {
-    const itens = await db.comTenant(req.tenantId, async (conn) => {
-      const binds = { tenantId: req.tenantId, limite };
+    const pagina = await db.comTenant(req.tenantId, async (conn) => {
+      // Pede uma linha A MAIS do que cabe na página: se ela vier, há próxima —
+      // sem precisar de um COUNT(*) da fila inteira a cada rolagem.
+      const binds = { tenantId: req.tenantId, limite: limite + 1 };
       let where = 'p.tenant_id = :tenantId';
       if (statusFiltro !== 'todos') { where += ' AND p.status = :status'; binds.status = statusFiltro; }
       if (conversaId) { where += ' AND p.conversa_id = :cv'; binds.cv = conversaId; }
+      if (antes) { where += ' AND p.id < :antes'; binds.antes = antes; }
       where += filtroEscopo(req.perfil, binds);
       const r = await conn.execute(
         `SELECT p.id, p.conversa_id, p.contato_id, p.titulo, p.payload, p.status, p.observacao,
@@ -108,16 +167,19 @@ router.get('/', async (req, res, next) => {
            LEFT JOIN contato ct  ON ct.tenant_id = p.tenant_id AND ct.id = p.contato_id
            LEFT JOIN atendente a ON a.tenant_id = p.tenant_id AND a.id = p.conferido_por
           WHERE ${where}
-          ORDER BY p.criado_em DESC, p.id DESC
+          ORDER BY p.id DESC
           LIMIT :limite`,
         binds);
-      return (r.rows || []).map(montarPedido);
+      const linhas = r.rows || [];
+      const temMais = linhas.length > limite;
+      const itens = linhas.slice(0, limite).map(montarPedido);
+      return { itens, proximo: temMais && itens.length ? itens[itens.length - 1].id : null };
     });
-    res.json(itens);
+    res.json(pagina);
   } catch (err) {
     // Migração 022 pendente: lista vazia em vez de 500 (mesmo tratamento das
     // telas de IA que nasceram antes da migração delas).
-    if (err.code === '42P01') return res.json([]);
+    if (err.code === '42P01') return res.json({ itens: [], proximo: null });
     next(err);
   }
 });

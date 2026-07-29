@@ -226,9 +226,15 @@ function normalizarValor(campo, bruto) {
 
 /**
  * Valida `args` do modelo contra o template e monta o payload que vai para o
- * banco. O payload carrega o RÓTULO e o TIPO junto do valor: o template editado
- * depois não pode reescrever o que estava num pedido antigo (é a razão de a
- * cópia existir — ver a spec).
+ * banco. O payload carrega o RÓTULO, o TIPO e a POSIÇÃO junto do valor: o
+ * template editado depois não pode reescrever o que estava num pedido antigo
+ * (é a razão de a cópia existir — ver a spec).
+ *
+ * ⚠️ `posicao` não é redundante com a ordem das chaves: `campos` vira jsonb, e
+ * o Postgres NÃO preserva a ordem de chaves de um objeto jsonb (ele
+ * canonicaliza — chaves curtas primeiro, depois ordem de bytes). Sem a posição
+ * explícita, a tela de conferência mostraria "Quantidade" antes de "Sabor" e o
+ * atendente leria o pedido fora da ordem que o admin configurou.
  *
  * @returns {{ payload?: {titulo, campos: object}, resumo?: string, erro?: string }}
  */
@@ -239,14 +245,15 @@ function validarPayload(template, args = {}) {
   const campos = {};
   const faltando = [];
   const linhas = [];
-  for (const c of template.campos) {
+  for (let indice = 0; indice < template.campos.length; indice += 1) {
+    const c = template.campos[indice];
     const { valor, erro } = normalizarValor(c, args[c.nome]);
     if (erro) return { erro };
     if (valor === undefined) {
       if (c.obrigatorio) faltando.push(c.rotulo);
       continue;
     }
-    campos[c.nome] = { rotulo: c.rotulo, tipo: c.tipo, valor };
+    campos[c.nome] = { rotulo: c.rotulo, tipo: c.tipo, valor, posicao: indice };
     linhas.push(`${c.rotulo}: ${valor}`);
   }
   if (faltando.length) {

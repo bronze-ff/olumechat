@@ -97,18 +97,45 @@ test('carregar pede só os últimos MAX_TURNOS, do fim para o começo', async ()
   assert.match(sel.sql, /\) ultimos ORDER BY NUMERO_TURNO, ID/i, 'e devolvida na ordem cronológica');
 });
 
-test('a janela NUNCA começa num resultado de ferramenta órfão (o provedor daria 400)', async () => {
-  // Recorte que cai no meio de um par: o `tool` de abertura perdeu a chamada
-  // que o originou. Mandar isso à Anthropic/OpenAI é 400 — e 400 vira, para o
-  // cliente, a resposta genérica de indisponível.
+// Achado de review (P1, PR #33): aparar só o `tool` do início não bastava. Com
+// a janela de 40, uma conversa longa começa o recorte num `assistant` comum —
+// e a Anthropic recusa um array que não comece em `user`. Seria 400 (ou seja: a
+// resposta de "indisponível") em TODO turno de TODA conversa longa.
+test('a janela SEMPRE começa num turno do cliente (assistant/tool na frente = 400)', async () => {
   const conn = fake({ rows: [
     { PAPEL: 'tool', CONTEUDO: '', TOOL_JSON: { toolCallId: 'orfao', nome: 'x', resultado: '[]' } },
     { PAPEL: 'assistant', CONTEUDO: 'tudo certo', TOOL_JSON: null },
     { PAPEL: 'user', CONTEUDO: 'obrigado', TOOL_JSON: null },
   ] });
   const msgs = await hist.carregar(conn, TENANT_A, 88);
-  assert.equal(msgs.length, 2);
-  assert.equal(msgs[0].texto, 'tudo certo');
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].papel, 'user');
+  assert.equal(msgs[0].texto, 'obrigado');
+});
+
+test('conversa longa: o recorte de 40 turnos ainda abre em `user` e não parte par de ferramenta', async () => {
+  // 60 turnos alternando user/assistant, com um par tool-call/tool-result no
+  // meio. A janela pega os últimos 40 — que, sem a apara, começariam num
+  // `assistant`.
+  const turnos = [];
+  for (let i = 0; i < 20; i += 1) {
+    turnos.push({ PAPEL: 'user', CONTEUDO: `pergunta ${i}`, TOOL_JSON: null });
+    turnos.push({ PAPEL: 'assistant', CONTEUDO: '', TOOL_JSON: { toolCallId: `t${i}`, nome: 'consultar' } });
+    turnos.push({ PAPEL: 'tool', CONTEUDO: '', TOOL_JSON: { toolCallId: `t${i}`, nome: 'consultar', resultado: '[]' } });
+  }
+  // A janela do banco (o LIMIT roda no Postgres; aqui o fake devolve o recorte).
+  const janela = turnos.slice(-hist.MAX_TURNOS);
+  assert.notEqual(janela[0].PAPEL, 'user', 'o cenário só vale se o corte cru NÃO cair num user');
+
+  const msgs = await hist.carregar(fake({ rows: janela }), TENANT_A, 88);
+  assert.equal(msgs[0].papel, 'user', 'a Anthropic recusa array que não começa em user');
+  assert.ok(msgs.length >= hist.MAX_TURNOS - 2, 'a apara descarta no máximo o par incompleto da ponta');
+  // Nenhum resultado de ferramenta sem a chamada correspondente antes dele.
+  const chamadas = new Set();
+  for (const m of msgs) {
+    if (m.papel === 'assistant' && m.toolCallId) chamadas.add(m.toolCallId);
+    if (m.papel === 'tool') assert.ok(chamadas.has(m.toolCallId), `tool_result órfão: ${m.toolCallId}`);
+  }
 });
 
 test('chamada de ferramenta sem resultado no fim também é aparada', async () => {
@@ -170,11 +197,16 @@ test('carregar devolve midiaCaminho e midiaMime no turno', async () => {
 });
 
 test('turno de AVISO não vira tool-call ao recarregar (envenenaria o payload do provedor)', async () => {
-  const conn = fake({ rows: [{ PAPEL: 'assistant', CONTEUDO: 'me manda por texto', TOOL_JSON: JSON.stringify({ aviso: 'video' }),
-    MIDIA_CAMINHO: null, MIDIA_MIME: null }] });
+  const conn = fake({ rows: [
+    // O turno do cliente vem antes porque a janela SEMPRE abre em `user` — uma
+    // conversa real nunca começa pela fala do assistente.
+    { PAPEL: 'user', CONTEUDO: '[vídeo]', TOOL_JSON: null, MIDIA_CAMINHO: null, MIDIA_MIME: null },
+    { PAPEL: 'assistant', CONTEUDO: 'me manda por texto', TOOL_JSON: JSON.stringify({ aviso: 'video' }),
+      MIDIA_CAMINHO: null, MIDIA_MIME: null },
+  ] });
   const msgs = await hist.carregar(conn, 1, 88);
-  assert.equal(msgs[0].toolCallId, undefined, 'sem tool_use_id, o provedor rejeitaria o turno');
-  assert.equal(msgs[0].texto, 'me manda por texto');
+  assert.equal(msgs[1].toolCallId, undefined, 'sem tool_use_id, o provedor rejeitaria o turno');
+  assert.equal(msgs[1].texto, 'me manda por texto');
 });
 
 test('jaAvisou: a resposta educada de tipo não suportado sai UMA vez por conversa', async () => {

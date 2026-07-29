@@ -77,9 +77,35 @@ test('payload válido guarda RÓTULO e TIPO junto do valor (template editado nã
   const { template } = t.normalizarTemplate(PIZZA);
   const { payload, resumo, erro } = t.validarPayload(template, { sabor: 'Calabresa', quantidade: 2 });
   assert.equal(erro, undefined);
-  assert.deepEqual(payload.campos.sabor, { rotulo: 'Sabor', tipo: 'opcoes', valor: 'Calabresa' });
+  assert.deepEqual(payload.campos.sabor, { rotulo: 'Sabor', tipo: 'opcoes', valor: 'Calabresa', posicao: 0 });
   assert.equal(payload.titulo, 'Pedido de delivery');
   assert.match(resumo, /Sabor: Calabresa/);
+});
+
+// Achado de review (P2, PR #33): `campos` vira jsonb e o Postgres NÃO preserva
+// a ordem das chaves — ele canonicaliza. Sem posição explícita, a tela de
+// conferência mostraria o pedido numa ordem que ninguém configurou.
+test('cada campo guarda a POSIÇÃO do template (jsonb não preserva ordem de chave)', () => {
+  const { template } = t.normalizarTemplate({
+    titulo: 'Agendamento',
+    // Ordem NÃO-alfabética e com chaves de tamanhos diferentes: é exatamente o
+    // que a canonicalização do jsonb reordenaria.
+    campos: [{ rotulo: 'Serviço' }, { rotulo: 'Data', tipo: 'data' }, { rotulo: 'Observação do cliente' }],
+  });
+  const { payload } = t.validarPayload(template, {
+    servico: 'Corte', data: '2026-08-01', observacao_do_cliente: 'chego 10min antes',
+  });
+  assert.equal(payload.campos.servico.posicao, 0);
+  assert.equal(payload.campos.data.posicao, 1);
+  assert.equal(payload.campos.observacao_do_cliente.posicao, 2);
+});
+
+test('campo opcional em branco não desloca a posição dos que vieram depois', () => {
+  const { template } = t.normalizarTemplate(PIZZA);
+  const { payload } = t.validarPayload(template, { sabor: 'Calabresa', quantidade: 1, observacao: 'sem cebola' });
+  // 'observacao' é o 5º campo do template; data/hora ficaram em branco.
+  assert.equal(payload.campos.observacao.posicao, 4);
+  assert.ok(payload.campos.sabor.posicao < payload.campos.observacao.posicao);
 });
 
 test('faltou campo obrigatório: erro que ENSINA o modelo a perguntar antes', () => {

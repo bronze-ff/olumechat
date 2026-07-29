@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import Spinner from './ui/Spinner';
 import Icon from './ui/Icon';
@@ -107,14 +107,20 @@ export default function PedidosIa({ conversaId = null }) {
   // AUDITOR é somente-leitura em todo o produto (o backend também recusa).
   const podeAgir = ['ADMIN', 'SUPERVISOR', 'ATENDENTE'].includes(user?.papel);
 
-  const pedidos = useQuery({
+  // Paginação por CURSOR (`antes` = id do último item da página). A fila recebe
+  // pedido novo o tempo todo: com offset, um pedido registrado entre uma página
+  // e outra empurraria a lista e faria um rascunho pular a página seguinte.
+  const pedidos = useInfiniteQuery({
     queryKey: ['ia-pedidos', status, conversaId || 'todas'],
-    queryFn: () => api.get('/ia-pedidos', {
-      params: { status, ...(conversaId ? { conversaId } : {}) },
+    queryFn: ({ pageParam }) => api.get('/ia-pedidos', {
+      params: { status, ...(conversaId ? { conversaId } : {}), ...(pageParam ? { antes: pageParam } : {}) },
     }).then((r) => r.data),
+    initialPageParam: null,
+    getNextPageParam: (ultima) => ultima?.proximo ?? undefined,
     enabled: !!user?.iaHabilitada,
     refetchInterval: 60000, // fallback; o tempo-real vem do SSE
   });
+  const itens = (pedidos.data?.pages || []).flatMap((p) => p.itens || []);
 
   const decidir = useMutation({
     mutationFn: ({ id, acao, observacao }) => api.post(`/ia-pedidos/${id}/${acao}`, { observacao }),
@@ -152,7 +158,7 @@ export default function PedidosIa({ conversaId = null }) {
       {pedidos.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
       {pedidos.isError && <p className="text-sm text-red-600">Não foi possível carregar os pedidos.</p>}
 
-      {pedidos.data?.length === 0 && (
+      {!pedidos.isLoading && !pedidos.isError && itens.length === 0 && (
         <div className="px-6 py-10 text-center">
           <span className="mx-auto w-10 h-10 rounded-xl bg-paper-200 text-stone-500 flex items-center justify-center">
             <Icon name="contract" size={19} />
@@ -167,13 +173,20 @@ export default function PedidosIa({ conversaId = null }) {
       )}
 
       <div className="space-y-2">
-        {(pedidos.data || []).map((p) => (
+        {itens.map((p) => (
           <Pedido key={p.id} pedido={p} podeAgir={podeAgir}
             ocupado={decidir.isPending}
             onConferir={() => decidir.mutate({ id: p.id, acao: 'conferir' })}
             onDescartar={(observacao) => decidir.mutate({ id: p.id, acao: 'descartar', observacao })} />
         ))}
       </div>
+
+      {pedidos.hasNextPage && (
+        <button type="button" onClick={() => pedidos.fetchNextPage()} disabled={pedidos.isFetchingNextPage}
+          className="w-full py-2 rounded-xl border border-black/[0.08] bg-white text-xs font-semibold text-stone-600 hover:border-brand-700 hover:text-brand-700 disabled:opacity-40">
+          {pedidos.isFetchingNextPage ? 'Carregando…' : 'Carregar mais'}
+        </button>
+      )}
     </div>
   );
 }

@@ -194,7 +194,7 @@ test('pedido: valida contra o template, cria RASCUNHO e publica evento', async (
   const ins = conn.executadas.find((e) => /INSERT INTO ia_pedido /i.test(e.sql));
   assert.match(ins.sql, /'rascunho'/, 'nada vale antes de um humano conferir');
   const payload = JSON.parse(ins.binds.payload);
-  assert.deepEqual(payload.campos.sabor, { rotulo: 'Sabor', tipo: 'opcoes', valor: 'Calabresa' });
+  assert.deepEqual(payload.campos.sabor, { rotulo: 'Sabor', tipo: 'opcoes', valor: 'Calabresa', posicao: 0 });
   assert.equal(payload.campos.quantidade.valor, 2);
   assert.equal(ins.binds.titulo, 'Pedido de delivery');
   assert.ok(r.eventos.some((e) => e.tipo === 'pedido' && e.pedidoId === 501), 'o badge do atendente aparece ao vivo');

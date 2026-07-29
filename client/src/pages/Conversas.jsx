@@ -1258,15 +1258,18 @@ export default function Conversas() {
   });
 
   // FIL-85 — pedidos EM RASCUNHO desta conversa: é o atalho a partir do
-  // atendimento (a lista completa mora na seção "Pedidos da IA"). Mesma forma
-  // de queryKey do componente PedidosIa, para os dois compartilharem cache e a
-  // invalidação por prefixo ['ia-pedidos'] pegar os dois.
+  // atendimento (a lista completa mora na seção "Pedidos da IA"). A queryKey
+  // fica sob o prefixo ['ia-pedidos'] para a invalidação do SSE pegar os dois,
+  // mas com um segmento PRÓPRIO ('badge'): o PedidosIa é uma infinite query, e
+  // duas queries de tipos diferentes na mesma chave brigariam pelo cache.
   const pedidosDaConversa = useQuery({
-    queryKey: ['ia-pedidos', 'rascunho', sel?.id],
-    queryFn: () => api.get('/ia-pedidos', { params: { status: 'rascunho', conversaId: sel.id } }).then((r) => r.data),
+    queryKey: ['ia-pedidos', 'badge', sel?.id],
+    queryFn: () => api.get('/ia-pedidos', {
+      params: { status: 'rascunho', conversaId: sel.id, limite: 20 },
+    }).then((r) => r.data),
     enabled: !!sel?.id && !!user?.iaHabilitada,
   });
-  const rascunhosDaConversa = pedidosDaConversa.data?.length || 0;
+  const rascunhosDaConversa = pedidosDaConversa.data?.itens?.length || 0;
 
   // Tempo-real: eventos do SSE (mensagem/status/fila/atribuicao/transferencia).
   useEventStream((evt) => {

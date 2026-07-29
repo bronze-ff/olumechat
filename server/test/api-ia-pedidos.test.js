@@ -53,8 +53,8 @@ function req(app, metodo, caminho, corpo) {
 const PAYLOAD = {
   titulo: 'Pedido de delivery',
   campos: {
-    sabor: { rotulo: 'Sabor', tipo: 'opcoes', valor: 'Calabresa' },
-    quantidade: { rotulo: 'Quantidade', tipo: 'numero', valor: 2 },
+    sabor: { rotulo: 'Sabor', tipo: 'opcoes', valor: 'Calabresa', posicao: 0 },
+    quantidade: { rotulo: 'Quantidade', tipo: 'numero', valor: 2, posicao: 1 },
   },
 };
 
@@ -93,21 +93,46 @@ test('GET lista rascunhos por padrão, com os rótulos vindos do PAYLOAD', async
   const estado = banco();
   const r = await req(servidor(), 'GET', '/api/ia-pedidos');
   assert.equal(r.status, 200);
-  assert.equal(r.body[0].titulo, 'Pedido de delivery');
-  assert.deepEqual(r.body[0].campos, [
+  assert.equal(r.body.itens[0].titulo, 'Pedido de delivery');
+  assert.deepEqual(r.body.itens[0].campos, [
     { nome: 'sabor', rotulo: 'Sabor', tipo: 'opcoes', valor: 'Calabresa' },
     { nome: 'quantidade', rotulo: 'Quantidade', tipo: 'numero', valor: 2 },
   ]);
-  assert.equal(r.body[0].contatoNome, 'Maria');
+  assert.equal(r.body.itens[0].contatoNome, 'Maria');
   assert.equal(estado.consultas[0].binds.status, 'rascunho', 'o default é o que precisa de gente');
 });
 
 test('template editado DEPOIS não corrompe pedido antigo (o rótulo é o do payload)', async () => {
   // A empresa renomeou "Sabor" para "Item do cardápio" no template. O pedido
   // registrado antes tem que continuar dizendo "Sabor".
-  banco({ lista: [{ ...LINHA, PAYLOAD: { titulo: 'Pedido', campos: { sabor: { rotulo: 'Sabor', tipo: 'texto', valor: 'Calabresa' } } } }] });
+  banco({ lista: [{ ...LINHA, PAYLOAD: { titulo: 'Pedido', campos: { sabor: { rotulo: 'Sabor', tipo: 'texto', valor: 'Calabresa', posicao: 0 } } } }] });
   const r = await req(servidor(), 'GET', '/api/ia-pedidos');
-  assert.equal(r.body[0].campos[0].rotulo, 'Sabor');
+  assert.equal(r.body.itens[0].campos[0].rotulo, 'Sabor');
+});
+
+// Achado de review (P2, PR #33): `campos` é jsonb e o Postgres canonicaliza a
+// ordem das chaves (curta primeiro, depois bytes) — `Object.keys` devolve a
+// ordem DO BANCO, não a que o admin configurou.
+test('os campos saem na ordem do TEMPLATE, não na ordem que o jsonb devolveu', async () => {
+  banco({ lista: [{ ...LINHA,
+    // Como o Postgres devolveria: "data" (4 letras) antes de "servico" (7).
+    PAYLOAD: { titulo: 'Agendamento', campos: {
+      data: { rotulo: 'Data', tipo: 'data', valor: '2026-08-01', posicao: 1 },
+      servico: { rotulo: 'Serviço', tipo: 'texto', valor: 'Corte', posicao: 0 },
+    } } }] });
+  const r = await req(servidor(), 'GET', '/api/ia-pedidos');
+  assert.deepEqual(r.body.itens[0].campos.map((c) => c.nome), ['servico', 'data']);
+  assert.ok(!('posicao' in r.body.itens[0].campos[0]), 'a posição é detalhe interno, não vai para a tela');
+});
+
+test('pedido gravado ANTES da correção (sem posição) continua legível', async () => {
+  banco({ lista: [{ ...LINHA,
+    PAYLOAD: { titulo: 'Pedido', campos: {
+      sabor: { rotulo: 'Sabor', tipo: 'texto', valor: 'Calabresa' },
+      quantidade: { rotulo: 'Quantidade', tipo: 'numero', valor: 1 },
+    } } }] });
+  const r = await req(servidor(), 'GET', '/api/ia-pedidos');
+  assert.deepEqual(r.body.itens[0].campos.map((c) => c.nome), ['sabor', 'quantidade']);
 });
 
 test('GET aceita filtro por status e por conversa (é o atalho do badge)', async () => {
@@ -119,17 +144,53 @@ test('GET aceita filtro por status e por conversa (é o atalho do badge)', async
   assert.equal(invalido.status, 400);
 });
 
-test('ESCOPO: gestor vê tudo; atendente comum só o que ele poderia ver na conversa', async () => {
-  const estadoGestor = banco();
-  await req(servidor({ papel: 'SUPERVISOR', atendenteId: 1, deptoIds: [] }), 'GET', '/api/ia-pedidos');
-  assert.ok(!/departamento_id/i.test(estadoGestor.consultas[0].sql));
+// Achado de review (P1, PR #33): o escopo daqui era MAIS LARGO que o da lista
+// de conversas — admitia conversa de colega dentro do departamento e ignorava a
+// restrição por canal. Como o mesmo filtro guarda o conferir/descartar, virava
+// porta lateral para o dado que o inbox esconde de propósito.
+test('ESCOPO: ADMIN e AUDITOR veem tudo; SUPERVISOR já é filtrado por departamento', async () => {
+  const estadoAdmin = banco();
+  await req(servidor({ papel: 'ADMIN', atendenteId: 1, deptoIds: [] }), 'GET', '/api/ia-pedidos');
+  assert.ok(!/departamento_id/i.test(estadoAdmin.consultas[0].sql));
 
-  const estadoAtendente = banco();
+  const estadoAuditor = banco();
+  await req(servidor({ papel: 'AUDITOR', atendenteId: null, deptoIds: [] }), 'GET', '/api/ia-pedidos');
+  assert.ok(!/departamento_id/i.test(estadoAuditor.consultas[0].sql));
+
+  const estadoSupervisor = banco();
+  await req(servidor({ papel: 'SUPERVISOR', atendenteId: 1, deptoIds: [9] }), 'GET', '/api/ia-pedidos');
+  const sqlSup = estadoSupervisor.consultas[0].sql;
+  assert.match(sqlSup, /c\.departamento_id IN \(:escDep0\)/, 'supervisor vê o departamento dele, não a carteira toda');
+  assert.ok(!/atendente_id IS NULL/.test(sqlSup), 'mas vê também o que já está com um atendente (supervisão)');
+});
+
+test('ESCOPO: atendente comum não vê pedido de conversa já atribuída a um colega', async () => {
+  const estado = banco();
   await req(servidor({ papel: 'ATENDENTE', atendenteId: 4, deptoIds: [9] }), 'GET', '/api/ia-pedidos');
-  const sql = estadoAtendente.consultas[0].sql;
-  assert.match(sql, /c\.departamento_id IS NULL/);
+  const sql = estado.consultas[0].sql;
+  // Exatamente a "visibilidade exclusiva" de api/conversas.js: sem dono OU minha.
+  assert.match(sql, /\(c\.departamento_id IS NULL AND c\.atendente_id IS NULL\)/);
   assert.match(sql, /c\.atendente_id = :escopoAtd/);
-  assert.equal(estadoAtendente.consultas[0].binds.escDep0, 9);
+  assert.match(sql, /\(c\.departamento_id IN \(:escDep0\) AND c\.atendente_id IS NULL\)/);
+  assert.equal(estado.consultas[0].binds.escDep0, 9);
+});
+
+test('ESCOPO: atendente restrito por CANAL não vê pedido de conversa de outro número', async () => {
+  const estado = banco();
+  await req(servidor({ papel: 'ATENDENTE', atendenteId: 4, deptoIds: [9], numeroIds: [2] }), 'GET', '/api/ia-pedidos');
+  const sql = estado.consultas[0].sql;
+  assert.match(sql, /c\.numero_id IN \(:escNum0\)/, 'sem isto o pedido devolve o que a fila do canal esconde');
+  assert.match(sql, /c\.numero_id IS NULL/);
+  assert.equal(estado.consultas[0].binds.escNum0, 2);
+});
+
+test('ESCOPO: conferir/descartar usa o MESMO filtro da leitura (não só a lista)', async () => {
+  const estado = banco();
+  await req(servidor({ papel: 'ATENDENTE', atendenteId: 4, deptoIds: [9], numeroIds: [2] }),
+    'POST', '/api/ia-pedidos/501/conferir');
+  const busca = estado.consultas[0].sql;
+  assert.match(busca, /c\.atendente_id = :escopoAtd/);
+  assert.match(busca, /c\.numero_id IN \(:escNum0\)/);
 });
 
 test('add-on desligado bloqueia a rota inteira', async () => {
@@ -143,7 +204,33 @@ test('migração 022 pendente: lista vazia em vez de 500', async () => {
   banco({ erro: err });
   const r = await req(servidor(), 'GET', '/api/ia-pedidos');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, []);
+  assert.deepEqual(r.body, { itens: [], proximo: null });
+});
+
+// Achado de review (P2, PR #33): a fila tinha teto e nenhuma continuação — num
+// tenant movimentado, rascunho além do corte sumia sem ninguém resolver.
+test('paginação por cursor: a página cheia devolve o `proximo` para continuar', async () => {
+  const muitos = Array.from({ length: 31 }, (_, i) => ({ ...LINHA, ID: 600 - i }));
+  const estado = banco({ lista: muitos });
+  const r = await req(servidor(), 'GET', '/api/ia-pedidos');
+  assert.equal(r.body.itens.length, 30, 'a linha extra é só o sinal de "tem mais", não entra na página');
+  assert.equal(r.body.proximo, 571, 'o cursor é o id do último item devolvido');
+  assert.equal(estado.consultas[0].binds.limite, 31, 'pede uma a mais para saber se há próxima sem COUNT(*)');
+  assert.match(estado.consultas[0].sql, /ORDER BY p\.id DESC/,
+    'ordenar por id (IDENTITY) é o que torna o cursor exato — com OFFSET, pedido novo faria um rascunho pular a página');
+});
+
+test('última página não devolve cursor (senão a tela pediria para sempre)', async () => {
+  banco({ lista: [LINHA] });
+  const r = await req(servidor(), 'GET', '/api/ia-pedidos');
+  assert.equal(r.body.proximo, null);
+});
+
+test('a próxima página filtra por id menor que o cursor', async () => {
+  const estado = banco();
+  await req(servidor(), 'GET', '/api/ia-pedidos?antes=571');
+  assert.match(estado.consultas[0].sql, /p\.id < :antes/);
+  assert.equal(estado.consultas[0].binds.antes, 571);
 });
 
 // ---------------------------------------------------------------------------
