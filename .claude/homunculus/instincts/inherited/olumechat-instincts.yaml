@@ -1,0 +1,411 @@
+# Instincts generated from https://github.com/bronze-ff/olumechat
+# Generated: 2026-07-29T23:26:04.643Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: olumechat-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/bronze-ff/olumechat
+---
+
+# Olumechat Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix, chore
+
+## Evidence
+
+- 3 commits analyzed
+- Detected conventional commit pattern
+- Examples: chore(deploy): Node 24, container do frontend, migração blindada e CI de imagens, fix(deploy): corrige review cruzada do PR #38 (FIL-92)
+
+---
+id: olumechat-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/bronze-ff/olumechat
+---
+
+# Olumechat Commit Length
+
+## Action
+
+Write moderate-length commit messages (~69 characters)
+
+## Evidence
+
+- Average commit message length: 69 chars
+- Based on 3 commits
+
+---
+id: olumechat-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/bronze-ff/olumechat
+---
+
+# Olumechat Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: olumechat-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/bronze-ff/olumechat
+---
+
+# Olumechat Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: olumechat-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/bronze-ff/olumechat
+---
+
+# Olumechat Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: olumechat-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/bronze-ff/olumechat
+---
+
+# Olumechat Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: olumechat-workflow-update-deployment-pipeline
+trigger: "when doing update deployment pipeline"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/bronze-ff/olumechat
+---
+
+# Olumechat Workflow Update Deployment Pipeline
+
+## Action
+
+Follow the update-deployment-pipeline workflow:
+1. Edit .github/workflows/ci.yml to adjust CI steps, environment variables, or add new jobs.
+2. Update Dockerfile and/or client/Dockerfile for new Node.js versions, build args, or multi-stage builds.
+3. Modify client/nginx.conf for asset caching or routing changes.
+4. Update server/docker-entrypoint.sh or scripts/migrar.js for migration or boot logic.
+5. Synchronize package.json engines fields and related package-lock.json if necessary.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: .github/workflows/ci.yml, Dockerfile, client/Dockerfile
+
+---
+id: olumechat-workflow-fix-deployment-issues
+trigger: "when doing fix deployment issues"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/bronze-ff/olumechat
+---
+
+# Olumechat Workflow Fix Deployment Issues
+
+## Action
+
+Follow the fix-deployment-issues workflow:
+1. Edit .github/workflows/ci.yml to fix environment variables or job logic.
+2. Update client/Dockerfile or client/nginx.conf to correct build args or caching.
+3. Patch server/scripts/migrar.js for migration locking or error handling.
+4. Synchronize related configuration in client/src/pages or other affected files.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: .github/workflows/ci.yml, client/Dockerfile, client/nginx.conf
+
+---
+id: olumechat-instinct-camelcase-files
+trigger: "When creating or renaming a file in the codebase"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Camelcase Files
+
+## Action
+
+Name the file using camelCase (e.g., myComponent.js)
+
+## Evidence
+
+- Pattern in namingConventions.files: camelCase
+
+---
+id: olumechat-instinct-camelcase-functions
+trigger: "When defining a new function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Camelcase Functions
+
+## Action
+
+Name the function using camelCase (e.g., fetchData)
+
+## Evidence
+
+- Pattern in namingConventions.functions: camelCase
+
+---
+id: olumechat-instinct-pascalcase-classes
+trigger: "When defining a new class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Pascalcase Classes
+
+## Action
+
+Name the class using PascalCase (e.g., UserController)
+
+## Evidence
+
+- Pattern in namingConventions.classes: PascalCase
+
+---
+id: olumechat-instinct-screaming-constants
+trigger: "When declaring a constant"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Screaming Constants
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE (e.g., MAX_RETRIES)
+
+## Evidence
+
+- Pattern in namingConventions.constants: SCREAMING_SNAKE_CASE
+
+---
+id: olumechat-instinct-relative-imports
+trigger: "When importing modules in JavaScript files"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Relative Imports
+
+## Action
+
+Use relative import paths (e.g., import x from '../utils/x')
+
+## Evidence
+
+- Pattern in importStyle: relative
+
+---
+id: olumechat-instinct-named-exports
+trigger: "When exporting functions or variables"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Named Exports
+
+## Action
+
+Use named exports (e.g., export function foo() {})
+
+## Evidence
+
+- Pattern in exportStyle: named
+
+---
+id: olumechat-instinct-try-catch-errors
+trigger: "When handling errors in JavaScript code"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Try Catch Errors
+
+## Action
+
+Use try-catch blocks for error handling
+
+## Evidence
+
+- Pattern in errorHandling.style: try-catch
+
+---
+id: olumechat-instinct-test-separate-location
+trigger: "When adding new tests"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Test Separate Location
+
+## Action
+
+Place test files in a separate directory from source code
+
+## Evidence
+
+- Pattern in architecture.testLocation: separate
+
+---
+id: olumechat-instinct-git-conventional-commits
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Git Conventional Commits
+
+## Action
+
+Use conventional commit format with a type prefix (e.g., fix: or chore:)
+
+## Evidence
+
+- Pattern in commits.type: conventional
+- Examples: fix(deploy): ..., chore(deploy): ...
+
+---
+id: olumechat-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Git Commit Length
+
+## Action
+
+Keep the commit message around 69 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength: 69
+
+---
+id: olumechat-instinct-update-deployment-pipeline
+trigger: "When someone needs to adjust deployment for new infrastructure, update Node.js versions, or change CI/CD behavior"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Update Deployment Pipeline
+
+## Action
+
+Edit .github/workflows/ci.yml, Dockerfile(s), nginx.conf, migration scripts, and package.json/lock files as needed to update deployment pipeline
+
+## Evidence
+
+- Workflow: update-deployment-pipeline
+- Commits: chore(deploy): Node 24, container do frontend, migração blindada e CI de imagens
+- Files: .github/workflows/ci.yml, Dockerfile, client/Dockerfile, client/nginx.conf, client/package.json, client/package-lock.json, server/docker-entrypoint.sh, server/scripts/migrar.js
+
+---
+id: olumechat-instinct-fix-deployment-issues
+trigger: "When a deployment or CI run fails, or after a code review points out issues in deployment configuration"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: bronze-ff/olumechat
+---
+
+# Olumechat Instinct Fix Deployment Issues
+
+## Action
+
+Edit .github/workflows/ci.yml, client/Dockerfile, client/nginx.conf, migration scripts, and related files to fix deployment issues
+
+## Evidence
+
+- Workflow: fix-deployment-issues
+- Commits: fix(deploy): corrige review cruzada do PR #38 (FIL-92), fix(ci): npm audit --omit=dev nos dois jobs, conforme docs/DEPLOY_VPS.md
+- Files: .github/workflows/ci.yml, client/Dockerfile, client/nginx.conf, client/src/pages/Landing.jsx, server/scripts/migrar.js
+
