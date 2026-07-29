@@ -55,3 +55,26 @@ test('ia/crypto: dev/teste SEM IA_CRYPTO_KEY usa fallback (JWT_SECRET) e só avi
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /usando fallback JWT_SECRET/);
 });
+
+// Achado de review P2 (Codex, PR #39): "x" ou um espaço em branco passavam
+// no guard antigo (só checava presença, não força). Mesmo padrão de
+// auth/secret.js e operador/segredo.js: exige >=32 caracteres (após trim).
+test('ia/crypto: produção com IA_CRYPTO_KEY curta ("x") falha o boot — presença sozinha não basta', () => {
+  const r = requerEmSubprocesso({
+    NODE_ENV: 'production',
+    IA_CRYPTO_KEY: 'x',
+    JWT_SECRET: 'segredo-do-tenant-com-mais-de-32-caracteres',
+  });
+  assert.notEqual(r.status, 0, 'processo deveria sair com erro');
+  assert.match(r.stderr, /IA_CRYPTO_KEY fraco\/curto em produção/);
+});
+
+test('ia/crypto: produção com IA_CRYPTO_KEY só espaços falha o boot (trim antes de medir)', () => {
+  const r = requerEmSubprocesso({
+    NODE_ENV: 'production',
+    IA_CRYPTO_KEY: '                                   ', // 35 espaços — "presente" mas vazio de verdade
+    JWT_SECRET: 'segredo-do-tenant-com-mais-de-32-caracteres',
+  });
+  assert.notEqual(r.status, 0, 'processo deveria sair com erro');
+  assert.match(r.stderr, /IA_CRYPTO_KEY ausente em produção/);
+});

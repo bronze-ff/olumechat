@@ -42,8 +42,17 @@ const router = express.Router();
 // sempre, se não houvesse um).
 const conexoesAbertas = new Set();
 
-/** Fecha toda conexão SSE aberta agora. O client reconecta sozinho (`retry: 5000` já escrito no stream). */
+// Achado de review P3 (Codex, PR #39): entre o ticket ser consumido e a
+// resposta virar SSE, o handler faz um `await carregarPerfil(...)` (consulta
+// real ao banco) — se o drain começar NESSA janela, a conexão ainda não está
+// em `conexoesAbertas` e escaparia do encerramento, prendendo server.close()
+// até o prazo máximo do shutdown estourar. Esta flag é checada depois de
+// QUALQUER await no handler, antes de abrir o stream.
+let encerrando = false;
+
+/** Fecha toda conexão SSE aberta agora e passa a rejeitar setup em andamento. O client reconecta sozinho (`retry: 5000` já escrito no stream). */
 function encerrarTodas() {
+  encerrando = true;
   for (const res of conexoesAbertas) {
     try { res.end(); } catch { /* já fechada */ }
   }
@@ -97,6 +106,11 @@ router.get('/', async (req, res) => {
       return res.status(500).json({ error: 'Falha ao carregar perfil' });
     }
   }
+
+  // O setup acima pode ter atravessado um SIGTERM (await carregarPerfil em
+  // voo quando encerrarTodas() varreu conexoesAbertas) — não abre stream
+  // novo depois que o drain já começou.
+  if (encerrando) return res.status(503).json({ error: 'Servidor em encerramento — tente novamente em instantes.' });
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
