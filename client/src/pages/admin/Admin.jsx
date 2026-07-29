@@ -34,7 +34,7 @@ const ABAS = [
   // rotas: quando o cliente reclama "a IA respondeu errado", o suporte precisa
   // ler as instruções que causaram aquilo. Por isso `papeis` em vez de adminOnly.
   { id: 'ia', rotulo: 'Agente de IA', descricao: 'Configure o provedor, as instruções e o comportamento da IA.', icon: 'bot', grupo: 'Automação', el: IaConfig, papeis: ['ADMIN', 'SUPERVISOR', 'AUDITOR'] },
-  { id: 'ia-acesso', rotulo: 'Permissões da IA', descricao: 'Defina quais contatos podem interagir com o agente de IA.', icon: 'shield', grupo: 'Automação', el: IaAutorizados, adminOnly: true },
+  { id: 'ia-acesso', rotulo: 'Modo teste da IA', descricao: 'Gerencie os telefones liberados a falar com o agente enquanto o canal estiver em modo teste.', icon: 'shield', grupo: 'Automação', el: IaAutorizados, adminOnly: true },
   { id: 'clientes', rotulo: 'Clientes', descricao: 'Centralize contatos, dados cadastrais e atendentes de referência.', icon: 'contact', grupo: 'Relacionamento', el: Clientes },
   { id: 'departamentos', rotulo: 'Departamentos', descricao: 'Estruture filas e responsabilidades por área.', icon: 'building', grupo: 'Equipe e canais', el: Departamentos },
   { id: 'atendentes', rotulo: 'Atendentes', descricao: 'Gerencie pessoas, papéis e acesso aos canais.', icon: 'users', grupo: 'Equipe e canais', el: Atendentes },

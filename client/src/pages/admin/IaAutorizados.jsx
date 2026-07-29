@@ -6,8 +6,10 @@ import Confirmar from '../../components/ui/Confirmar';
 import { useAuth } from '../../context/AuthContext';
 import { formatPhone } from '../../utils/formatters';
 
-// Telefones que podem conversar com o bot de IA. O backend devolve as colunas em
-// MAIÚSCULO (ID, TELEFONE, NOME, NUMERO_ID, ATIVO) — diferente das outras telas.
+// Telefones que podem conversar com o bot de IA ENQUANTO o canal estiver em
+// modo teste (FIL-88) — é a lista do modo teste, não um controle de acesso
+// permanente. O backend devolve as colunas em MAIÚSCULO (ID, TELEFONE, NOME,
+// NUMERO_ID, ATIVO) — diferente das outras telas.
 export default function IaAutorizados() {
   const { isAdmin, user } = useAuth();
   const [telefone, setTelefone] = useState('');
@@ -29,6 +31,16 @@ export default function IaAutorizados() {
     staleTime: 5 * 60_000,
     enabled: !!user?.iaHabilitada,
   });
+  // Lista completa (com modo/iaModoTeste) só para o estado contextual do topo —
+  // a /numeros/lista acima não devolve essas colunas.
+  const canais = useQuery({
+    queryKey: ['numeros-canais-ia'],
+    queryFn: () => api.get('/numeros').then((r) => r.data),
+    staleTime: 60_000,
+    enabled: !!user?.iaHabilitada,
+  });
+  const canaisComIa = (canais.data || []).filter((n) => n.modo === 'ia');
+  const algumEmTeste = canaisComIa.some((n) => n.iaModoTeste === 'S');
   const rotuloNumero = (id) => {
     const n = (numeros.data || []).find((x) => x.id === id);
     return n ? (n.nomeExibicao || formatPhone(n.displayPhone) || `Número #${id}`) : `Número #${id}`;
@@ -65,6 +77,38 @@ export default function IaAutorizados() {
 
   return (
     <div className="max-w-screen-xl mx-auto grid grid-cols-12 gap-4 items-start">
+      <div className="col-span-12 bg-white rounded-2xl border border-black/[0.06] p-4 space-y-3">
+        <p className="text-sm text-stone-600 leading-relaxed max-w-[70ch]">
+          Só telefones desta lista conversam com o agente <b>enquanto o canal estiver em modo teste</b>.
+          Com o modo teste desligado, o agente atende qualquer cliente e esta lista é ignorada.
+        </p>
+
+        {canais.isLoading && <div className="flex justify-center py-1"><Spinner /></div>}
+
+        {!canais.isLoading && canaisComIa.length === 0 && (
+          <p className="text-xs text-stone-400">Nenhum canal tem o agente de IA ligado ainda.</p>
+        )}
+
+        {!canais.isLoading && canaisComIa.length > 0 && (
+          <>
+            <div className="flex flex-wrap gap-2">
+              {canaisComIa.map((n) => (
+                <span key={n.id} className={`text-[11px] px-2.5 py-1 rounded-full border ${
+                  n.iaModoTeste === 'S' ? 'bg-brand-50 border-brand-100 text-brand-700' : 'bg-stone-50 border-stone-200 text-stone-500'
+                }`}>
+                  {n.nomeExibicao || formatPhone(n.displayPhone) || `Número #${n.id}`} · {n.iaModoTeste === 'S' ? 'em modo teste' : 'modo teste desligado'}
+                </span>
+              ))}
+            </div>
+            {!algumEmTeste && (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                Nenhum canal está em modo teste — esta lista não está em uso.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
       {isAdmin && (
         <form onSubmit={(e) => { e.preventDefault(); if (podeCriar) criar.mutate(); }}
           className="col-span-12 lg:col-span-4 lg:sticky lg:top-32 bg-white rounded-2xl border border-black/[0.06] p-4 space-y-3">

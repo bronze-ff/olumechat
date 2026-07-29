@@ -321,8 +321,8 @@ function AgenteIaModal({ num, onClose }) {
                 <span className="text-sm text-stone-700">
                   Modo teste (só números autorizados)
                   <span className="block text-[11px] text-stone-400">
-                    A IA responde apenas os telefones liberados em <b>Permissões da IA</b>; os demais
-                    recebem um aviso de canal restrito. Desmarque para atender qualquer cliente.
+                    A IA responde apenas os telefones liberados em <b>Automação → Modo teste da IA</b>; os
+                    demais recebem um aviso de canal restrito. Desmarque para atender qualquer cliente.
                   </span>
                 </span>
               </label>
