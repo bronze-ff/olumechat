@@ -40,6 +40,7 @@ const painel = require('../financeiro/painel');
 const precos = require('../consumo/precos');
 const iaConfigStore = require('../ia/iaConfigStore');
 const onboarding = require('./onboarding');
+const leads = require('./leads');
 const { trocarCodigo } = require('../api/meta');
 const { guardar } = require('../meta/connection');
 const { linkDeConvite } = require('../utils/conviteLink');
@@ -969,6 +970,52 @@ router.get(
         limite: req.query.limite ? Number(req.query.limite) : 100,
       });
       res.json(mapRows(rows));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Leads comerciais da landing (FIL-96) — seção "Leads" do grupo Carteira.
+// GET  /api/operador/leads?status= — carteira de leads, filtro opcional.
+// GET  /api/operador/leads/contagem-novos — o número do badge no menu.
+// PATCH /api/operador/leads/:id { status, observacao? } — contatado/descartado.
+// ---------------------------------------------------------------------------
+router.get(
+  '/leads',
+  query('status').optional({ nullable: true }).isString(),
+  async (req, res, next) => {
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(mapRows(await leads.listar({ status: req.query.status || undefined })));
+    } catch (err) {
+      tratar(err, res, next);
+    }
+  }
+);
+
+router.get('/leads/contagem-novos', async (req, res, next) => {
+  try {
+    res.json({ novos: await leads.contarNovos() });
+  } catch (err) {
+    tratar(err, res, next);
+  }
+});
+
+router.patch(
+  '/leads/:id',
+  body('status').isString(),
+  body('observacao').optional({ nullable: true }).isString().isLength({ max: 2000 }),
+  async (req, res, next) => {
+    const id = idDaRota(req, res);
+    if (!id) return;
+    if (checarValidacao(req, res)) return;
+    try {
+      res.json(mapRow(await leads.atualizarStatus({
+        operador: req.operador, id, status: req.body.status, observacao: req.body.observacao,
+        ip: auditoria.ipDaRequisicao(req),
+      })));
     } catch (err) {
       tratar(err, res, next);
     }

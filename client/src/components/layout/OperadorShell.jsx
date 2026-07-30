@@ -1,9 +1,11 @@
 import { useRef } from 'react';
 import { NavLink } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import Brand from '../ui/Brand';
 import Icon from '../ui/Icon';
 import ThemeMenu from '../ui/ThemeMenu';
 import useScrollEdges from '../../hooks/useScrollEdges';
+import apiOperador from '../../services/apiOperador';
 
 // Casco visual do painel do operador (FIL-70): sidebar + cabeçalho mobile +
 // breadcrumb desktop. Extraído de Operador.jsx (FIL-80) para o painel
@@ -13,6 +15,18 @@ export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titul
   const inicial = (eu.data?.nome || eu.data?.email || '?').slice(0, 1).toUpperCase();
   const navMobileRef = useRef(null);
   const navMobile = useScrollEdges(navMobileRef, [secoes.length]);
+
+  // Badge de "leads novos" (FIL-96) no item de menu marcado com `badge: true`
+  // — buscado aqui, e não na página de Leads, porque o shell aparece em toda
+  // tela do operador e o número precisa ficar visível mesmo fora dela.
+  const temBadge = secoes.some((item) => item.badge);
+  const contagemNovos = useQuery({
+    queryKey: ['operador', 'leads', 'contagem-novos'],
+    queryFn: () => apiOperador.get('/leads/contagem-novos').then((r) => r.data.novos),
+    enabled: temBadge,
+    refetchInterval: 60_000,
+  });
+  const novos = contagemNovos.data || 0;
 
   return (
     <div className="admin-surface min-h-screen bg-paper-50 lg:flex">
@@ -54,7 +68,12 @@ export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titul
                     {({ isActive }) => (
                       <>
                         <Icon name={item.icon} size={16} className={isActive ? 'text-brand-300' : 'text-white/45'} />
-                        <span className="truncate">{item.label}</span>
+                        <span className="truncate flex-1">{item.label}</span>
+                        {item.badge && novos > 0 && (
+                          <span className="ml-auto min-w-[18px] h-[18px] px-1 rounded-full bg-brand-400 text-ink-950 text-[10px] font-bold flex items-center justify-center" aria-label={`${novos} novos`}>
+                            {novos}
+                          </span>
+                        )}
                       </>
                     )}
                   </NavLink>
@@ -106,6 +125,11 @@ export default function OperadorShell({ secoes, grupos, atual, eu, onSair, titul
                 >
                   <Icon name={item.icon} size={15} />
                   {item.label}
+                  {item.badge && novos > 0 && (
+                    <span className="min-w-[16px] h-4 px-1 rounded-full bg-brand-600 text-white text-[10px] font-bold flex items-center justify-center" aria-label={`${novos} novos`}>
+                      {novos}
+                    </span>
+                  )}
                 </NavLink>
               ))}
             </nav>
