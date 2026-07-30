@@ -57,7 +57,7 @@ test('POST /api/conversas (template, conversa ativa): grava mensagem_enviada', a
   const conn = {
     async execute(sql, binds) {
       capturas.push({ sql, binds });
-      if (sql.includes('FROM MC_ZAP_CONTATO') || sql.includes('FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: null }] };
+      if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: null }] };
       if (sql.includes('FROM auditoria')) return { rows: [] };
       if (sql.includes('FROM numero')) return { rows: [{ ID: 2, PHONE_NUMBER_ID: '1112223334', PERMITE_ATIVO: 'S', ATIVO: 'S' }] };
       if (sql.includes('FROM departamento')) return { rows: [] };

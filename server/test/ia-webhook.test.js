@@ -20,7 +20,7 @@ function fakeConn(conversaExistente, opts) {
   return { cap: [], async execute(sql, binds) {
     this.cap.push({ sql, binds });
     if (sql.includes('FROM numero')) return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: null, FLUXO_ID: null, MODO: 'ia' }] };
-    if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Gestor' }] };
+    if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: 'Gestor' }] };
     if (sql.includes('FROM conversa')) return { rows: conversaExistente ? [conversaExistente] : [] };
     if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260701100001' }] };
     if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [88] } };
