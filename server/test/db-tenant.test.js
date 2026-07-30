@@ -285,11 +285,18 @@ test('RLS real: tenant B não lê a linha do tenant A (Postgres de verdade)',
       );
       await admin.query('ROLLBACK');
     } finally {
-      await admin.query('BEGIN');
-      await admin.query('DELETE FROM contato WHERE nome_perfil LIKE $1', [`%${marca}`]);
-      await admin.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]);
-      await admin.query('COMMIT').catch(() => {});
-      await admin.end();
+      // O end() TEM de acontecer mesmo se a limpeza falhar (ex.: a asserção
+      // acima deixou a transação abortada e o BEGIN daqui estoura 25P02). Um
+      // client aberto segura o event loop e o processo do node:test nunca sai:
+      // um teste vermelho viraria um job de CI pendurado (FIL-98).
+      try {
+        await admin.query('BEGIN').catch(() => {});
+        await admin.query('DELETE FROM contato WHERE nome_perfil LIKE $1', [`%${marca}`]).catch(() => {});
+        await admin.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]).catch(() => {});
+        await admin.query('COMMIT').catch(() => {});
+      } finally {
+        await admin.end().catch(() => {});
+      }
     }
   });
 
@@ -352,11 +359,14 @@ test('RLS real: phone_number_id é único GLOBAL — outro tenant não registra 
       );
       await c.query('ROLLBACK');
     } finally {
-      await c.query('BEGIN');
-      await c.query('DELETE FROM numero WHERE phone_number_id = $1', [pnid]);
-      await c.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]);
-      await c.query('COMMIT').catch(() => {});
-      await c.end();
+      try {
+        await c.query('BEGIN').catch(() => {});
+        await c.query('DELETE FROM numero WHERE phone_number_id = $1', [pnid]).catch(() => {});
+        await c.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]).catch(() => {});
+        await c.query('COMMIT').catch(() => {});
+      } finally {
+        await c.end().catch(() => {}); // ver nota do teardown acima (FIL-98)
+      }
     }
   });
 

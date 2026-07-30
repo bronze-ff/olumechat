@@ -47,4 +47,6 @@
   contato/conversa/consumo. Escrita nova no caminho da mensagem entra DEPOIS desse
   pré-check, senão o reprocessamento rebobina a janela de 24h ou cobra duas vezes.
 - Testes: `npm test` (suite completa, sem rede); integração real com Postgres exige
-  `TEST_DATABASE_URL` (senão são pulados — e isso é ok). Rode a suite ANTES do push.
+  `TEST_DATABASE_URL` (senão são pulados — ok no laptop, **proibido na CI**: o job
+  `server-test-rls` roda a suíte com `RLS_OBRIGATORIO=1` e teste pulado FALHA, ver
+  `test/run-tests.js` e `docs/WORKFLOW.md` §3). Rode a suite ANTES do push.

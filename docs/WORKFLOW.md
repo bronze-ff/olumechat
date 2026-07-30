@@ -62,8 +62,33 @@ cd client && npm run build   # se tocou o frontend
   pool ou sessão precisa provar que o tenant A não enxerga dado do tenant B.
   Ver a armadilha do `set_config` transaction-scoped em `PORTE.md` §1.2.
 - **A CI é obrigatória e bloqueia o merge.** A `main` é protegida e exige
-  `server-test` e `client-build` verdes. A suíte local continua sendo o primeiro
-  filtro — a CI é o juiz, porque roda em ambiente limpo.
+  `server-test`, `server-test-rls` e `client-build` verdes. A suíte local
+  continua sendo o primeiro filtro — a CI é o juiz, porque roda em ambiente
+  limpo.
+
+### Testes de RLS contra Postgres real — obrigatórios na CI (FIL-98)
+
+Os testes de isolamento entre tenants só existem com banco de verdade: sem
+`TEST_DATABASE_URL` o `node:test` os marca como `skipped` e a suíte termina
+verde **sem ter provado nada**. No laptop isso é aceitável (`npm test` sem
+banco continua sendo o filtro rápido). Na CI, não:
+
+- o job `server-test-rls` levanta um Postgres 16, roda `npm run migrar` e
+  executa a suíte inteira com `TEST_DATABASE_URL` apontando para ele;
+- com `RLS_OBRIGATORIO=1`, o `test/run-tests.js` **falha se qualquer teste for
+  pulado** e lista no log os testes que rodaram contra o banco real. Teste que
+  não roda não pode se disfarçar de teste que passou;
+- consequência prática: um PR que remova uma policy, deixe uma tabela sem RLS
+  ou vaze dado entre tenants **fica vermelho na CI**.
+
+Quer rodar igual à CI na sua máquina? Suba um Postgres qualquer, aplique as
+migrações e:
+
+```bash
+cd server
+DATABASE_URL=postgres://user:senha@localhost:5432/olume npm run migrar
+TEST_DATABASE_URL=postgres://user:senha@localhost:5432/olume RLS_OBRIGATORIO=1 npm test
+```
 
 ## §4 Pull Request
 

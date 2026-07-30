@@ -25,7 +25,8 @@ um **painel do operador** (provisionamento, financeiro, sessão de suporte audit
   atendimento com handoff nos dois sentidos, STT (whisper) + visão, ferramentas nativas
   (ficha, tag, pedido com template por empresa) e upload de PDF/XLSX/CSV na base.
 - Suite do server: `cd server && npm test` (1.000+ testes; integração com Postgres real só
-  com `TEST_DATABASE_URL`). Client: `cd client && npm run build`.
+  com `TEST_DATABASE_URL` — na CI o job `server-test-rls` a fornece e teste pulado vira
+  falha). Client: `cd client && npm run build`.
 
 ## Stack e estrutura
 
@@ -49,7 +50,7 @@ cd client && npm run dev                        # http://localhost:5173
 1. **`docs/WORKFLOW.md` é contrato**: branch `<tipo>/<descricao>` cortada de `origin/main`
    fresca, Conventional Commits em português, suite verde antes do PR, nunca commitar
    código direto na `main`, um ticket = uma branch = um PR. A `main` é protegida e exige
-   CI verde (`server-test`, `client-build`).
+   CI verde (`server-test`, `server-test-rls`, `client-build`).
 2. **Produção está no ar.** Migração é **expand/contract** (nunca remove coluna na mesma
    release que para de usá-la), variável nova precisa entrar no Coolify dos ambientes que
    a usam, e `VITE_*` exige rebuild. Mudança vai para staging antes de produção.
