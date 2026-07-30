@@ -78,6 +78,9 @@ jobs:
   backend-image:
     runs-on: ubuntu-latest
     needs: server-test
+    permissions:
+      contents: read
+      packages: write
     services:
       postgres:
         image: postgres:16-alpine
@@ -144,20 +147,70 @@ jobs:
       - name: Encerrar o container
         if: always()
         run: docker rm -f backend-ci || true
+      # FIL-99: só publica em push na main, e só depois do smoke acima ter
+      # passado (steps sem always()/failure() só rodam se os anteriores
+      # tiverem sucesso). PR de fork nunca ganha packages: write.
+      - name: Login no GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publicar imagem do backend no GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          SHA_SHORT="${GITHUB_SHA:0:7}"
+          IMAGE="ghcr.io/bronze-ff/olumechat-server:sha-${SHA_SHORT}"
+          docker tag olume-chat-server:ci "$IMAGE"
+          docker push "$IMAGE"
+          echo "Publicado: $IMAGE"
 
   # FIL-92 (P0.8): build reproduzível do frontend (P0.3) — mesma origem que o
   # Coolify vai construir/publicar.
+  # FIL-99: duas imagens do MESMO commit porque VITE_API_URL é embutido no
+  # bundle em build-time — não dá para promover o bundle de staging para
+  # produção, ele apontaria para a API errada.
   frontend-image:
     runs-on: ubuntu-latest
     needs: client-build
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Build imagem do frontend
+      - name: Build imagem do frontend (staging)
         run: |
-          docker build -t olume-chat-client:ci -f client/Dockerfile client \
+          docker build -t olume-chat-client-staging:ci -f client/Dockerfile client \
+            --build-arg VITE_API_URL=https://api-staging.olumechat.com.br/api \
+            --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br
+      - name: Build imagem do frontend (produção)
+        run: |
+          docker build -t olume-chat-client-prod:ci -f client/Dockerfile client \
             --build-arg VITE_API_URL=https://api.olumechat.com.br/api \
             --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br
+      - name: Login no GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publicar imagens do frontend no GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          SHA_SHORT="${GITHUB_SHA:0:7}"
+          STAGING_IMAGE="ghcr.io/bronze-ff/olumechat-client-staging:sha-${SHA_SHORT}"
+          PROD_IMAGE="ghcr.io/bronze-ff/olumechat-client-prod:sha-${SHA_SHORT}"
+          docker tag olume-chat-client-staging:ci "$STAGING_IMAGE"
+          docker tag olume-chat-client-prod:ci "$PROD_IMAGE"
+          docker push "$STAGING_IMAGE"
+          docker push "$PROD_IMAGE"
+          echo "Publicado: $STAGING_IMAGE"
+          echo "Publicado: $PROD_IMAGE"
 
 # TODO (FIL-92, fora deste PR — dependem de credencial de CI):
 # - teste de RLS contra uma branch Neon de CI/homologação descartável;
