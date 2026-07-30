@@ -10,7 +10,16 @@ server/media/
 client/dist/
 
 # Config local do agente / skills pessoais
-.claude/
+.claude/*
+# skills sao conhecimento do projeto, nao configuracao pessoal — versionadas
+# só a skill própria do projeto; as de marketplace (neon, copywriting,
+# senior-security) são instaláveis e ficam de fora para não apodrecerem aqui
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/orquestrar-projeto/
+.claude/settings.local.json
+.claude/launch.json
+.claude/scheduled_tasks.lock
 .superpowers/
 
 .DS_Store

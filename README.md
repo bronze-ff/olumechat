@@ -5,20 +5,22 @@ Plataforma **multi-tenant** de atendimento por WhatsApp, integrada direto na
 chatbot de fluxos, bot de IA, campanhas em massa e métricas — vendida como
 serviço para empresas de qualquer segmento (farmácia, RH, clínica, varejo).
 
-> ⚠️ **Estado atual: fork em porte.** O código veio do `mc-atendimentos`, um
-> sistema on-prem single-tenant, e o acoplamento com o cliente original **já
-> foi removido** (ver "O que saiu"). A **fundação Postgres/Neon já está de
-> pé**: schema multi-tenant com RLS, pool `pg`, helper de binds e
-> `comTenant()`. O que ainda falta é o **porte das queries dos módulos de
-> negócio** (`api/*`, `bot/*`, `ia/*`, `fila/*`), que seguem escritas para o
-> schema antigo — por isso o sistema **ainda não roda de ponta a ponta**.
-> O que fazer, em ordem, está em [`docs/PORTE.md`](docs/PORTE.md).
-> A arquitetura para Redis, filas, workers, cache, load balancer e escala
-> horizontal está em
-> [`docs/ESCALABILIDADE.md`](docs/ESCALABILIDADE.md).
-> A configuração de deploy está em [`docs/DEPLOY_VPS.md`](docs/DEPLOY_VPS.md)
-> (caminho oficial: VPS + Coolify), mas a liberação para clientes depende dos
-> P0 do próprio documento e do smoke test descrito lá.
+> ### 🟢 Em produção
+>
+> | | Endereço |
+> |---|---|
+> | Landing e app | **https://olumechat.com.br** |
+> | API | **https://api.olumechat.com.br** |
+> | Staging (restrito) | https://staging.olumechat.com.br |
+> | Painel de deploy | https://ops.olumechat.com.br |
+>
+> Roda numa VPS com Coolify, Postgres no Neon e mídia no Cloudflare R2.
+> **Falta apenas a conta Meta** para o WhatsApp operar de ponta a ponta —
+> o resto do sistema está no ar e validado.
+>
+> - **Como cada ambiente funciona e como acessar:** [`docs/AMBIENTES.md`](docs/AMBIENTES.md)
+> - **O que falta para o primeiro cliente:** [`docs/GO-LIVE-PENDENCIAS.md`](docs/GO-LIVE-PENDENCIAS.md)
+> - **Como se trabalha aqui (contrato):** [`docs/WORKFLOW.md`](docs/WORKFLOW.md)
 
 ---
 
@@ -174,12 +176,17 @@ para rodar** — ficou como fonte histórica do modelo de dados; o schema vigent
 ## Desenvolvimento
 
 ```bash
-cd server && npm install && npm test    # node:test
-cd client && npm install && npm run dev
+cp server/.env.example server/.env      # preencha com uma branch Neon descartável
+cd server && npm install && npm run migrar && npm run dev
+cd client && npm install && npm run dev # http://localhost:5173
 ```
 
-Os testes de RLS contra Postgres real só rodam com `TEST_DATABASE_URL` no
-ambiente; sem ela são pulados e a suíte segue verde.
+`npm test` no server roda a suíte completa (1.000+ testes, sem rede). Os testes de
+RLS contra Postgres real só rodam com `TEST_DATABASE_URL`; sem ela são pulados e a
+suíte segue verde.
+
+**Antes de abrir PR:** suíte verde e build do client. A `main` é protegida e exige
+os checks `server-test` e `client-build`.
 
 ## Deploy
 
@@ -193,10 +200,13 @@ ambiente; sem ela são pulados e a suíte segue verde.
 Para desenvolvimento local, copie `server/.env.example` para `server/.env` e
 use uma branch Neon descartável.
 
-### Proteção do GitHub
+### Do merge até produção
 
-No repositório `bronze-ff/olumechat`, o administrador deve proteger `main`, exigir
-pull request, exigir o check `test` deste workflow e bloquear push direto. O
-merge continua sendo feito manualmente após o CI verde.
+Merge na `main` **não** é lançamento. O caminho é: CI verde → merge → deploy em
+**staging** → validação → promoção da **mesma imagem** para produção. Detalhes,
+armadilhas e comandos em [`docs/AMBIENTES.md`](docs/AMBIENTES.md).
+
+A `main` já está protegida (exige `server-test` e `client-build`, bloqueia
+force-push e deleção).
 
 Convenções de branch, commit, PR e review: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
