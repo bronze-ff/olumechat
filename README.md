@@ -91,9 +91,10 @@ serviço para empresas de qualquer segmento (farmácia, RH, clínica, varejo).
   é **login próprio**: tabela `usuario` por tenant, senha em argon2id, e o
   `tenant_id` viaja assinado no JWT (FIL-67).
 
-**Ainda com resíduo** (enumerado em `docs/PORTE.md`): os nomes de tabela são
-`MC_ZAP_*` em parte do código, e `api/contatos.js` carrega campos do cadastro
-de cliente do WinThor.
+**Ainda com resíduo** (enumerado em `docs/PORTE.md`): `api/contatos.js` carrega
+campos do cadastro de cliente do WinThor. Os nomes de tabela `MC_ZAP_*` do fork
+já saíram de todo o SQL executável (FIL-94 e FIL-95) — sobraram só em comentário
+e no de→para da migração 001.
 
 ---
 

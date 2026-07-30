@@ -36,7 +36,7 @@ function fakeConnMig({ capturas, contatoNovoExiste = false }) {
     async execute(sql, binds) {
       capturas.push({ sql, binds });
       if (sql.includes('FROM numero')) return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: null, MODO: 'padrao', FLUXO_ID: null }] };
-      if (sql.includes('FROM MC_ZAP_CONTATO') && sql.includes('TELEFONE IN')) {
+      if (sql.includes('NOME_PERFIL FROM contato') && sql.includes('TELEFONE IN')) {
         const vals = Object.values(binds || {}).join(',');
         if (vals.includes('8888')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] }; // antigo
         return { rows: contatoNovoExiste ? [{ ID: 9, NOME_PERFIL: 'Outro' }] : [] };      // novo

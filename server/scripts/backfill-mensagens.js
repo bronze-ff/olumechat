@@ -28,7 +28,7 @@ async function main() {
     const binds = {};
     const ms = TIPOS.map((t, i) => { binds[`t${i}`] = t; return `:t${i}`; });
     const r = await conn.execute(
-      `SELECT ID, TIPO, CONTEUDO FROM MC_ZAP_MENSAGEM
+      `SELECT ID, TIPO, CONTEUDO FROM mensagem
         WHERE DIRECAO = 'in' AND TIPO IN (${ms.join(',')})
           AND (CONTEUDO LIKE '{%' OR CONTEUDO LIKE '[%')
         ORDER BY ID`,
@@ -48,7 +48,7 @@ async function main() {
       if (!novo) { pulados++; continue; }
       console.log(`#${row.ID} [${row.TIPO}]  ${String(row.CONTEUDO).slice(0, 60)}  ->  ${novo}`);
       if (commit) {
-        await conn.execute(`UPDATE MC_ZAP_MENSAGEM SET CONTEUDO = :c WHERE ID = :id`,
+        await conn.execute(`UPDATE mensagem SET CONTEUDO = :c WHERE ID = :id`,
           { c: novo, id: row.ID });
       }
       reescritos++;

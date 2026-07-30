@@ -6,6 +6,12 @@
 // contatos (um da conversa ativa, outro da resposta dele) e a janela de 24h
 // nunca "abre" na conversa certa. `variantes()` devolve as duas formas para
 // casar o contato independentemente de como o número chegou.
+//
+// FIL-95: `acharContato` consultava `MC_ZAP_CONTATO`, resíduo do fork Oracle —
+// a tabela chama `contato` desde a migração 001 e `db/sql.js::traduzir` só
+// converte binds, não nomes de tabela. A query estourava "relation does not
+// exist" na PRIMEIRA mensagem recebida (é o primeiro passo de
+// `getOrCreateContato`, na ingestão do webhook) e não havia catch em volta.
 'use strict';
 
 /** Só dígitos; adiciona DDI 55 para números BR de 10/11 dígitos. */
@@ -37,7 +43,7 @@ async function acharContato(conn, telefone) {
   const binds = {};
   const marks = vs.map((v, i) => { binds['t' + i] = v; return ':t' + i; });
   const r = await conn.execute(
-    `SELECT ID, NOME_PERFIL FROM MC_ZAP_CONTATO
+    `SELECT ID, NOME_PERFIL FROM contato
       WHERE TELEFONE IN (${marks.join(',')})
       ORDER BY ID FETCH FIRST 1 ROWS ONLY`,
     binds

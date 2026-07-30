@@ -199,20 +199,120 @@ jobs:
       - name: Encerrar o container
         if: always()
         run: docker rm -f backend-ci || true
+      # FIL-99 (review Codex, P1): backend-image só CONSTRÓI. Quem publica é o
+      # job publicar-imagens, que exige sucesso de toda a CI (server-test,
+      # client-build, npm-audit, backend-image, frontend-image) — assim
+      # nenhuma imagem chega ao registry a partir de um commit com CI vermelha
+      # em outra frente.
+      - name: Salvar imagem do backend como artefato
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker save -o /tmp/olume-chat-server.tar olume-chat-server:ci
+      - name: Upload do artefato do backend
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image
+          path: /tmp/olume-chat-server.tar
+          retention-days: 1
 
   # FIL-92 (P0.8): build reproduzível do frontend (P0.3) — mesma origem que o
   # Coolify vai construir/publicar.
+  # FIL-99: duas imagens do MESMO commit porque VITE_API_URL é embutido no
+  # bundle em build-time — não dá para promover o bundle de staging para
+  # produção, ele apontaria para a API errada.
   frontend-image:
     runs-on: ubuntu-latest
     needs: client-build
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Build imagem do frontend
+      - name: Build imagem do frontend (staging)
         run: |
-          docker build -t olume-chat-client:ci -f client/Dockerfile client \
+          docker build -t olume-chat-client-staging:ci -f client/Dockerfile client \
+            --build-arg VITE_API_URL=https://api-staging.olumechat.com.br/api \
+            --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br
+      - name: Build imagem do frontend (produção)
+        run: |
+          docker build -t olume-chat-client-prod:ci -f client/Dockerfile client \
             --build-arg VITE_API_URL=https://api.olumechat.com.br/api \
             --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br
+      # FIL-99 (review Codex, P1): frontend-image só CONSTRÓI — ver comentário
+      # equivalente em backend-image. publicar-imagens é quem faz login e push.
+      - name: Salvar imagens do frontend como artefatos
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p /tmp/images
+          docker save -o /tmp/images/olume-chat-client-staging.tar olume-chat-client-staging:ci
+          docker save -o /tmp/images/olume-chat-client-prod.tar olume-chat-client-prod:ci
+      - name: Upload dos artefatos do frontend
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-images
+          path: /tmp/images
+          retention-days: 1
+
+  # FIL-99 (review Codex, P1 + P2): único job com packages: write. Só roda em
+  # push na main e só depois que TODA a CI (não só o smoke do backend) tiver
+  # passado — o `needs` abaixo é a garantia central do desenho: "a imagem que
+  # produção recebe é exatamente a que passou em toda a validação".
+  publicar-imagens:
+    runs-on: ubuntu-latest
+    needs: [server-test, client-build, npm-audit, backend-image, frontend-image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Baixar artefato do backend
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-image
+          path: /tmp/images
+      - name: Baixar artefatos do frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-images
+          path: /tmp/images
+      - name: Carregar imagens no Docker
+        run: |
+          docker load -i /tmp/images/olume-chat-server.tar
+          docker load -i /tmp/images/olume-chat-client-staging.tar
+          docker load -i /tmp/images/olume-chat-client-prod.tar
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # P2: docker push sobrescreve a tag sem perguntar, e um re-run no MESMO
+      # commit não é reproduzível (a base node:24-bookworm-slim e as
+      # dependências de sistema mudam por baixo). Se a tag sha-<commit> já
+      # existe no registry, o push é pulado — a tag imutável nunca troca de
+      # digest por baixo de quem já promoveu/validou aquele SHA.
+      - name: Publicar imagens no GHCR (tag imutável, nunca sobrescreve)
+        run: |
+          set -euo pipefail
+          SHA_SHORT="${GITHUB_SHA:0:7}"
+
+          publicar() {
+            local_tag="$1"
+            remote_image="$2"
+            # docker buildx imagetools inspect: consulta o manifesto remoto sem
+            # exigir o flag experimental do `docker manifest`.
+            if inspect="$(docker buildx imagetools inspect "$remote_image" 2>/dev/null)"; then
+              digest="$(echo "$inspect" | awk '/^Digest:/{print $2; exit}')"
+              echo "::warning::${remote_image} já existe no GHCR — push pulado para preservar a tag imutável. Digest válido: ${digest:-desconhecido}"
+              return 0
+            fi
+            docker tag "$local_tag" "$remote_image"
+            docker push "$remote_image"
+            echo "Publicado: $remote_image"
+          }
+
+          publicar olume-chat-server:ci "ghcr.io/bronze-ff/olumechat-server:sha-${SHA_SHORT}"
+          publicar olume-chat-client-staging:ci "ghcr.io/bronze-ff/olumechat-client-staging:sha-${SHA_SHORT}"
+          publicar olume-chat-client-prod:ci "ghcr.io/bronze-ff/olumechat-client-prod:sha-${SHA_SHORT}"
 
 # FIL-98: o teste de RLS contra Postgres real saiu desta lista — roda no job
 # `server-test-rls` acima, contra o Postgres do runner (branch Neon efêmera é

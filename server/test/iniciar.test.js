@@ -23,7 +23,7 @@ const TOKEN = jwt.sign({ jti: 't1', tenantId: 1, matricula: 123, nome: 'Teste' }
 function fakeConn({ optout = false, numero = { ID: 2 }, depExiste = true, capture = {} } = {}) {
   return {
     async execute(sql, binds) {
-      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: null }] };
+      if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: null }] };
       if (sql.includes('FROM auditoria')) return { rows: optout ? [{ ACAO: 'optout' }] : [] };
       if (sql.includes('FROM numero')) return { rows: numero ? [numero] : [] };
       if (sql.includes('FROM departamento')) return { rows: depExiste ? [{ ID: binds && binds.id }] : [] };

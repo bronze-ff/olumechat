@@ -45,7 +45,7 @@ function fakeConn({ conversaExistente = null, capturas = [] } = {}) {
       if (sql.includes('FROM numero')) {
         return { rows: [{ ID: 2, TENANT_ID: 701, DEPARTAMENTO_PADRAO_ID: null, MODO: 'padrao', FLUXO_ID: null }] };
       }
-      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
       if (sql.includes('FROM conversa')) return { rows: conversaExistente ? [conversaExistente] : [] };
       if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100099' }] };
       if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [70] } };
