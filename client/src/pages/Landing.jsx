@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import axios from 'axios';
 import Brand, { BrandMark } from '../components/ui/Brand';
 import Icon from '../components/ui/Icon';
 import ThemeMenu from '../components/ui/ThemeMenu';
@@ -69,6 +70,10 @@ const seguranca = [
 ];
 
 const emailComercial = import.meta.env.VITE_COMERCIAL_EMAIL || 'comercial@olumechat.com.br';
+// Axios cru, sem o interceptor de sessão de services/api.js: este endpoint é
+// público (FIL-96) e aquele client redireciona pra /login quando não há
+// token — o que derrubaria toda submissão vinda da landing.
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 function ProductPreview() {
   const conversas = [
@@ -299,16 +304,16 @@ function FeaturePreview({ tipo }) {
 }
 
 export default function Landing() {
-  const [form, setForm] = useState({ nome: '', empresa: '', email: '', equipe: '' });
+  const [form, setForm] = useState({ nome: '', empresa: '', email: '', equipe: '', site: '' });
   const [recursoAtivo, setRecursoAtivo] = useState('atendimento');
+  const [envio, setEnvio] = useState({ estado: 'idle', erro: '' }); // idle | enviando | sucesso | erro
   const recurso = recursos.find((item) => item.id === recursoAtivo) || recursos[0];
 
   function atualizar(campo) {
     return (event) => setForm((atual) => ({ ...atual, [campo]: event.target.value }));
   }
 
-  function solicitarDemonstracao(event) {
-    event.preventDefault();
+  function abrirMailto() {
     const assunto = encodeURIComponent(`Demonstração Olume Chat para ${form.empresa}`);
     const corpo = encodeURIComponent([
       `Olá, meu nome é ${form.nome}.`,
@@ -320,6 +325,31 @@ export default function Landing() {
       'Quero conhecer o Olume Chat e entender como organizar nossa operação de atendimento.',
     ].join('\n'));
     window.location.href = `mailto:${emailComercial}?subject=${assunto}&body=${corpo}`;
+  }
+
+  async function solicitarDemonstracao(event) {
+    event.preventDefault();
+    setEnvio({ estado: 'enviando', erro: '' });
+    try {
+      await axios.post(`${API_URL}/leads`, {
+        nome: form.nome,
+        empresa: form.empresa,
+        email: form.email,
+        tamanhoEquipe: form.equipe,
+        origem: window.location.search || undefined,
+        site: form.site, // honeypot — sempre vazio para uma pessoa
+      });
+      setEnvio({ estado: 'sucesso', erro: '' });
+    } catch (err) {
+      if (!err.response) {
+        // Sem resposta do servidor (rede caiu, DNS, etc.) — nunca perde o
+        // interessado: cai no mailto, que já funcionava antes deste ticket.
+        abrirMailto();
+        setEnvio({ estado: 'mailto', erro: '' });
+        return;
+      }
+      setEnvio({ estado: 'erro', erro: err.response?.data?.error || 'Não foi possível enviar agora. Tente novamente ou escreva para nosso e-mail.' });
+    }
   }
 
   return (
@@ -522,7 +552,7 @@ export default function Landing() {
                 Sua operação pode começar organizada.
               </h2>
               <p className="mt-6 max-w-[520px] text-base leading-7 text-[#A9BBB5]">
-                Conte um pouco sobre sua empresa. Abriremos seu aplicativo de e-mail com a solicitação pronta.
+                Conte um pouco sobre sua empresa. Nosso time comercial retorna em até 1 dia útil.
               </p>
               <p className="mt-10 text-sm text-[#A9BBB5]">
                 Já usa o Olume Chat?{' '}
@@ -532,7 +562,32 @@ export default function Landing() {
               </p>
             </div>
 
+            {envio.estado === 'sucesso' || envio.estado === 'mailto' ? (
+              <div className="border-t border-[#2D403A] pt-7" role="status">
+                <div className="flex items-start gap-3 rounded-xl border border-[#2D403A] bg-white/5 p-5">
+                  <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#5BD6AE]/15 text-[#5BD6AE]">
+                    <Icon name="check" size={18} />
+                  </span>
+                  <div>
+                    <p className="font-bold text-[#F2F7F5]">
+                      {envio.estado === 'sucesso' ? 'Recebemos!' : 'Abrimos seu e-mail.'}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-[#A9BBB5]">
+                      {envio.estado === 'sucesso'
+                        ? 'Retornamos em até 1 dia útil.'
+                        : 'Não conseguimos enviar automaticamente agora, então preparamos a mensagem no seu aplicativo de e-mail — é só confirmar o envio.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
             <form onSubmit={solicitarDemonstracao} className="grid gap-5 border-t border-[#2D403A] pt-7 sm:grid-cols-2">
+              {/* Honeypot: campo que só um bot preenche (humano não vê nem tabula
+                  até ele). Vindo preenchido, o backend descarta em silêncio. */}
+              <label className="absolute h-0 w-0 overflow-hidden opacity-0" aria-hidden="true" tabIndex={-1}>
+                Não preencha este campo
+                <input type="text" name="site" tabIndex={-1} autoComplete="off" value={form.site} onChange={atualizar('site')} />
+              </label>
               <label className="block">
                 <span className="mb-2 block text-sm font-medium text-[#D8E5E1]">Seu nome</span>
                 <input required value={form.nome} onChange={atualizar('nome')} autoComplete="name" className="landing-dark-input" placeholder="Como podemos chamar você?" />
@@ -556,14 +611,23 @@ export default function Landing() {
                 </select>
               </label>
               <div className="sm:col-span-2">
-                <button type="submit" className="landing-mint-action inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-[#5BD6AE] px-6 text-sm font-bold text-[#071A15] hover:bg-[#7BE0C2] sm:w-auto">
-                  Solicitar demonstração <span className="ml-3" aria-hidden="true">→</span>
+                <button
+                  type="submit"
+                  disabled={envio.estado === 'enviando'}
+                  className="landing-mint-action inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-[#5BD6AE] px-6 text-sm font-bold text-[#071A15] hover:bg-[#7BE0C2] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                >
+                  {envio.estado === 'enviando' ? 'Enviando…' : 'Solicitar demonstração'}
+                  {envio.estado !== 'enviando' && <span className="ml-3" aria-hidden="true">→</span>}
                 </button>
+                {envio.estado === 'erro' && (
+                  <p className="mt-3 text-xs leading-5 text-[#FFB4A9]" role="alert">{envio.erro}</p>
+                )}
                 <p className="mt-4 text-xs leading-5 text-[#A9BBB5]">
                   Ou escreva para <a className="text-[#F2F7F5] underline underline-offset-4 hover:text-[#5BD6AE]" href={`mailto:${emailComercial}`}>{emailComercial}</a>
                 </p>
               </div>
             </form>
+            )}
           </div>
         </section>
       </main>
