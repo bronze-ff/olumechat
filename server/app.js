@@ -110,6 +110,9 @@ app.use('/api', express.json({ limit: '1mb' }));
 const presencaRoutes = require('./api/presenca');
 
 app.use('/api/auth', authRoutes);
+// Formulário público da landing (FIL-96) — sem autenticação de propósito;
+// rate limit + honeypot próprios (ver api/leads.js).
+app.use('/api/leads', require('./api/leads'));
 app.use('/api/meta', authMiddleware, anexarPerfil, require('./api/meta').router);
 // Painel do OPERADOR (FIL-70) — fora do RBAC de tenant: prefixo, middleware e
 // sessão próprios. NÃO passa por authMiddleware/anexarPerfil de propósito;
