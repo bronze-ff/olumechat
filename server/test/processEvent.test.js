@@ -40,7 +40,7 @@ function fakeConn({ deptoDoNumero = null, conversaExistente = null, capturas = [
       if (sql.includes('FROM numero')) {
         return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: deptoDoNumero, MODO: 'padrao', FLUXO_ID: null }] };
       }
-      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
       if (sql.includes('FROM conversa')) {
         return { rows: conversaExistente ? [conversaExistente] : [] };
       }
@@ -153,7 +153,7 @@ function fakeConnRedelivery(capturas = []) {
       if (sql.includes('FROM numero')) {
         return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: null, MODO: 'padrao', FLUXO_ID: null }] };
       }
-      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
       if (sql.startsWith('INSERT INTO mensagem')) {
         // Simula o ON CONFLICT DO NOTHING real do Postgres: 0 linhas afetadas
         // pro WAMID que já existe, 1 pro novo — nunca lança.
@@ -220,7 +220,7 @@ function fakeConnBot({ conversaExistente = null, capturas = [] } = {}) {
       if (sql.includes('FROM numero')) {
         return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: null, MODO: 'padrao', FLUXO_ID: 9 }] };
       }
-      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
       if (sql.includes('FROM conversa')) return { rows: conversaExistente ? [conversaExistente] : [] };
       if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100077' }] };
       if (sql.startsWith('INSERT INTO conversa')) return { outBinds: { id: [88] } };
@@ -307,7 +307,7 @@ function connCanalIa({ iaRegra = 'sempre', config = [], capturas = [] }) {
         return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: 9, MODO: 'ia',
           IA_REGRA: iaRegra, IA_MODO_TESTE: 'N', FLUXO_ID: null }] };
       }
-      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
       if (sql.includes('FROM conversa')) return { rows: [] }; // conversa NOVA
       if (sql.includes("nextval('seq_protocolo')")) return { rows: [{ P: '260610100042' }] };
       if (sql.includes('FROM config')) return { rows: config };
