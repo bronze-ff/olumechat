@@ -29,6 +29,61 @@ jobs:
       - name: Run server tests
         run: npm test
 
+  # FIL-98 (P0.8): os testes de isolamento entre tenants (RLS) só existem com
+  # Postgres real — sem TEST_DATABASE_URL o node:test os marca como `skipped` e
+  # o `server-test` acima fica verde sem ter provado nada. Este job é um job
+  # PRÓPRIO (e não um passo do `backend-image`) de propósito: ali o Postgres
+  # serve ao smoke da imagem candidata a produção, um objetivo diferente, e
+  # misturar os dois faria um portão de segurança depender do build do Docker.
+  # Aqui a suíte roda inteira contra um Postgres 16 do runner, com as 26
+  # migrações aplicadas — e `RLS_OBRIGATORIO=1` faz teste pulado FALHAR
+  # (test/run-tests.js), porque teste que não roda não pode se disfarçar de
+  # teste que passou.
+  server-test-rls:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: olume
+          POSTGRES_PASSWORD: olume
+          POSTGRES_DB: olume_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U olume"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      # Conexão direta (sem "-pooler"), como o scripts/migrar.js exige: o lock
+      # de migração é de sessão. O usuário do service container é superusuário,
+      # então o CREATE ROLE falatta_app das migrações passa.
+      - name: Aplicar as migrações no Postgres da CI
+        run: npm run migrar
+        env:
+          DATABASE_URL: postgres://olume:olume@127.0.0.1:5432/olume_ci
+      # DATABASE_URL fica FORA daqui de propósito: a suíte não deve falar com o
+      # banco pelo pool da aplicação, só pelos testes que pedem TEST_DATABASE_URL.
+      - name: Suíte do server contra Postgres real (RLS obrigatório)
+        run: npm test
+        env:
+          TEST_DATABASE_URL: postgres://olume:olume@127.0.0.1:5432/olume_ci
+          RLS_OBRIGATORIO: '1'
+
   client-build:
     runs-on: ubuntu-latest
     defaults:
@@ -159,8 +214,10 @@ jobs:
             --build-arg VITE_API_URL=https://api.olumechat.com.br/api \
             --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br
 
+# FIL-98: o teste de RLS contra Postgres real saiu desta lista — roda no job
+# `server-test-rls` acima, contra o Postgres do runner (branch Neon efêmera é
+# mais lenta e não acrescenta nada para RLS).
 # TODO (FIL-92, fora deste PR — dependem de credencial de CI):
-# - teste de RLS contra uma branch Neon de CI/homologação descartável;
 # - scan de secrets (ex.: gitleaks) e scan de vulnerabilidade de imagem
 #   (ex.: trivy) nas imagens de backend/frontend;
 # - validação das migrations numa branch Neon descartável (não no Postgres
