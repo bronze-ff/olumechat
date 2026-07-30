@@ -3,6 +3,7 @@
 const express = require('express');
 const db = require('../db/pool');
 const { guardar } = require('../meta/connection');
+const appCliente = require('../meta/appCliente');
 const { exigirPapel } = require('../auth/rbac');
 
 const router = express.Router();
@@ -72,4 +73,82 @@ router.get('/status', exigirPapel('ADMIN', 'SUPERVISOR', 'AUDITOR'), async (req,
   } catch (err) { next(err); }
 });
 
-module.exports = { router, trocarCodigo };
+// ── App da Meta DO CLIENTE (FIL-97) ────────────────────────────────────────
+// Enquanto a Olume não tem CNPJ (e portanto nenhum app verificado próprio),
+// cada cliente usa o app dele. Isto é trabalho técnico de implantação — App ID,
+// App Secret e token permanente saem do painel da Meta do cliente e são colados
+// aqui pelo operador dentro da sessão de suporte auditada. Mesmo gate do
+// /signup/exchange, e toda mutação de suporte já cai na trilha que o PRÓPRIO
+// cliente lê (auth/middleware.js); a auditoria explícita abaixo é o registro
+// com nome e detalhe do que mudou — nunca com os valores.
+
+/**
+ * Base pública da API, para montar a URL que o operador cola no app do cliente.
+ * `WEBHOOK_BASE_URL` é opcional: sem ela, deduzimos do próprio request (o
+ * Express já resolve protocolo/host pelos proxies confiáveis do `trust proxy`).
+ * Defina-a nos ambientes hospedados — o valor deduzido depende do header Host,
+ * e a URL exibida aqui vai ser colada numa configuração da Meta, onde um valor
+ * errado só aparece como "o webhook nunca chega".
+ */
+function baseDoWebhook(req) {
+  const configurada = String(process.env.WEBHOOK_BASE_URL || '').trim();
+  if (configurada) return configurada.replace(/\/+$/, '');
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+function comUrl(req, dados) {
+  return {
+    ...dados,
+    webhookUrl: dados.identificador ? baseDoWebhook(req) + appCliente.caminhoWebhook(dados.identificador) : null,
+  };
+}
+
+router.get('/app', exigirSuporteOperador, async (req, res, next) => {
+  try {
+    const dados = await db.comTenant(req.tenantId, (conn) => appCliente.carregar(conn, req.tenantId));
+    res.json(comUrl(req, dados));
+  } catch (err) { next(err); }
+});
+
+router.put('/app', exigirSuporteOperador, async (req, res, next) => {
+  const { appId, appSecret, accessToken, wabaId } = req.body || {};
+  const temAlgo = [appId, appSecret, accessToken].some((v) => String(v || '').trim());
+  if (!temAlgo) return res.status(400).json({ error: 'Informe ao menos um campo para gravar.' });
+  try {
+    const dados = await db.comTenant(req.tenantId, async (conn) => {
+      // O token permanente vem primeiro: é ele que cria a linha de meta_conexao
+      // (access_token_criptografado é NOT NULL desde a migração 008).
+      if (String(accessToken || '').trim()) {
+        await guardar({
+          tenantId: req.tenantId,
+          accessToken: String(accessToken).trim(),
+          wabaId: String(wabaId || '').trim() || null,
+          conn,
+        });
+      }
+      const salvo = await appCliente.salvar(conn, req.tenantId, { appId, appSecret });
+      await conn.execute(
+        `INSERT INTO auditoria (acao, entidade, entidade_id, detalhe, ip)
+         VALUES ('meta_app_cliente', 'meta_conexao', :id, :det, :ip)`,
+        {
+          id: req.tenantId,
+          // Só O QUE mudou, nunca o valor: esta trilha é lida no painel do cliente.
+          det: JSON.stringify({
+            appId: salvo.appId || null,
+            appSecret: salvo.appSecretAtualizado,
+            accessToken: Boolean(String(accessToken || '').trim()),
+            operador: (req.user && req.user.email) || null,
+          }),
+          ip: req.ip || null,
+        }
+      );
+      return appCliente.carregar(conn, req.tenantId);
+    });
+    res.json(comUrl(req, dados));
+  } catch (err) {
+    if (err && err.status === 409) return res.status(409).json({ error: err.message });
+    next(err);
+  }
+});
+
+module.exports = { router, trocarCodigo, baseDoWebhook };

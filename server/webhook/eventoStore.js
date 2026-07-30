@@ -66,11 +66,22 @@ async function executar(sql, binds) {
  *
  * Só o HASH é guardado: a chave nunca carrega texto do cliente (ela vive em
  * índice e em log de erro).
+ *
+ * FIL-97 — `tenantId` (só no webhook POR CLIENTE) entra no material do hash.
+ * Com um App Secret por cliente, o tenant A consegue assinar um payload
+ * qualquer com o segredo DELE: sem o tenant na chave, ele poderia reproduzir os
+ * wamids de um evento do tenant B e fazer o evento REAL de B colapsar como
+ * "reentrega já registrada" — ACK sem processar, mensagem do cliente sumindo em
+ * silêncio. Com o tenant no hash, cada caminho tem seu próprio espaço de
+ * chaves. O webhook GLOBAL não passa tenant e a chave fica IDÊNTICA à de antes
+ * deste ticket — evento já gravado continua colapsando com a reentrega dele.
  * @param {Buffer|string} rawBody corpo exatamente como chegou
  * @param {object} payload mesmo corpo já parseado
+ * @param {number|null} [tenantId] dono do caminho `/webhook/<identificador>`
  * @returns {string} `ev:<sha256>` ou `raw:<sha256>` (67 chars)
  */
-function chaveIdempotente(rawBody, payload) {
+function chaveIdempotente(rawBody, payload, tenantId) {
+  const escopo = tenantId ? `t:${tenantId}|` : '';
   const ids = [];
   for (const entry of (payload && payload.entry) || []) {
     for (const change of (entry && entry.changes) || []) {
@@ -81,9 +92,9 @@ function chaveIdempotente(rawBody, payload) {
       }
     }
   }
-  if (ids.length) return 'ev:' + sha256(ids.join('|'));
+  if (ids.length) return 'ev:' + sha256(escopo + ids.join('|'));
   const corpo = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody == null ? '' : rawBody));
-  return 'raw:' + sha256(corpo);
+  return 'raw:' + sha256(escopo ? Buffer.concat([Buffer.from(escopo), corpo]) : corpo);
 }
 
 function sha256(valor) {
@@ -109,18 +120,24 @@ function primeiroPhoneNumberId(payload) {
  * Não buscamos o id da linha existente de propósito — quem recebe duplicado só
  * precisa dar ACK, e um segundo SELECT no caminho crítico do webhook custaria
  * latência sem servir para nada.
+ *
+ * `tenantId` (FIL-97) só vem no webhook POR CLIENTE e é o dono do CAMINHO por
+ * onde o evento entrou — não o dono do conteúdo, que só o processamento
+ * resolve. Gravado para o reprocessamento da recuperação amarrar o mesmo
+ * tenant que o POST original amarrou (ver o cabeçalho da migração 026).
  * @returns {Promise<{id: number|null, duplicado: boolean}>}
  */
-async function persistir({ rawBody, payload, phoneNumberId }) {
+async function persistir({ rawBody, payload, phoneNumberId, tenantId }) {
   const r = await executar(
-    `INSERT INTO webhook_evento (chave_idempotente, payload, phone_number_id)
-     VALUES (:chave, :payload, :phone)
+    `INSERT INTO webhook_evento (chave_idempotente, payload, phone_number_id, webhook_tenant_id)
+     VALUES (:chave, :payload, :phone, :tenantId)
      ON CONFLICT (chave_idempotente) DO NOTHING
      RETURNING id`,
     {
-      chave: chaveIdempotente(rawBody, payload),
+      chave: chaveIdempotente(rawBody, payload, tenantId),
       payload: Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : String(rawBody == null ? '' : rawBody),
       phone: phoneNumberId || primeiroPhoneNumberId(payload),
+      tenantId: tenantId || null,
     }
   );
   const linha = (r.rows || [])[0];
@@ -256,7 +273,7 @@ async function falhar(id, erro, maxTentativas) {
     o teto vem por bind. */
 async function candidatosOrfaos({ orfaoMin, maxTentativas, limite }) {
   const r = await executar(
-    `SELECT id, payload, tentativas
+    `SELECT id, payload, tentativas, webhook_tenant_id
        FROM webhook_evento
       WHERE estado IN ('recebido', 'processando')
         AND tentativas < :max
@@ -265,7 +282,14 @@ async function candidatosOrfaos({ orfaoMin, maxTentativas, limite }) {
       LIMIT :limite`,
     { orfaoMin, max: maxTentativas, limite }
   );
-  return (r.rows || []).map((l) => ({ id: l.ID, payload: l.PAYLOAD, tentativas: Number(l.TENTATIVAS) }));
+  return (r.rows || []).map((l) => ({
+    id: l.ID,
+    payload: l.PAYLOAD,
+    tentativas: Number(l.TENTATIVAS),
+    // FIL-97: o tenant do CAMINHO de entrada acompanha o replay — sem ele, o
+    // reprocessamento aceitaria um change que o POST original teria descartado.
+    webhookTenantId: l.WEBHOOK_TENANT_ID == null ? null : Number(l.WEBHOOK_TENANT_ID),
+  }));
 }
 
 /** Gauge para o alerta "evento persistido sem conclusão" (§9): quantos estão

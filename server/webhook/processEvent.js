@@ -14,6 +14,17 @@
 // phone_number_id desconhecido (número não provisionado para nenhum tenant) =
 // evento IGNORADO — nunca cria conversa órfã nem adivinha um tenant.
 //
+// ── FIL-97: `tenantEsperado` — QUEM ASSINOU SÓ ESCREVE NA PRÓPRIA EMPRESA ───
+// Com um app da Meta POR CLIENTE, o App Secret deixou de ser único da Olume:
+// cada cliente assina com o segredo dele. Uma assinatura válida no caminho
+// `/webhook/<identificador>` de um cliente prova "veio do app dele" e NADA sobre
+// o conteúdo — nada impediria esse cliente de forjar um payload com o
+// `phone_number_id` de OUTRA empresa e ver a mensagem cair no inbox dela. Por
+// isso, quando o evento entrou por um caminho de tenant, todo change cujo número
+// pertença a outro tenant é DESCARTADO aqui, depois de resolvido e antes de
+// qualquer escrita. O webhook global (`/webhook`, META_APP_SECRET) não passa
+// `tenantEsperado` e segue idêntico: lá o segredo é da própria Olume.
+//
 // ── REPLAY: ESTE MÓDULO RODA MAIS DE UMA VEZ PARA O MESMO PAYLOAD ───────────
 // Com a entrada durável (FIL-94), um evento aceito é reprocessado se o processo
 // morreu no meio. Duas consequências que MUDARAM o desenho daqui (achados P1 da
@@ -770,13 +781,18 @@ async function despacharPendentes(eventoId) {
 /**
  * Processa um payload bruto do webhook (objeto já parseado). Idempotente.
  * @param {object} payload corpo do webhook já parseado
- * @param {{eventoId?: number}} [opts] `eventoId` = linha de `webhook_evento`
- *   (caminho durável, FIL-94): os efeitos pós-commit são gravados no outbox
- *   dentro da transação de cada change e despachados de lá. Sem ele, os efeitos
- *   são despachados da memória — caminho de chamada direta/teste de unidade.
+ * @param {{eventoId?: number, tenantEsperado?: number|null}} [opts]
+ *   `eventoId` = linha de `webhook_evento` (caminho durável, FIL-94): os efeitos
+ *   pós-commit são gravados no outbox dentro da transação de cada change e
+ *   despachados de lá. Sem ele, os efeitos são despachados da memória — caminho
+ *   de chamada direta/teste de unidade.
+ *   `tenantEsperado` = dono do caminho `/webhook/<identificador>` por onde o
+ *   evento entrou (FIL-97): change de outro tenant é descartado. Ver o bloco
+ *   FIL-97 no cabeçalho.
  */
 async function processPayload(payload, opts = {}) {
   const eventoId = opts.eventoId || null;
+  const tenantEsperado = opts.tenantEsperado || null;
   const entries = payload.entry || [];
   const eventosGlobais = [];
 
@@ -789,6 +805,16 @@ async function processPayload(payload, opts = {}) {
         // phone_number_id não provisionado para nenhum tenant: IGNORA o evento
         // por completo — nunca cria conversa órfã nem adivinha um tenant dono.
         console.warn(`[webhook] phone_number_id desconhecido (${meta.phone_number_id || 'vazio'}) — evento ignorado`);
+        continue;
+      }
+      // FIL-97: quem assinou com o App Secret de um cliente só escreve na
+      // empresa dele. Descartado ANTES de abrir o comTenant() — o change de
+      // outro tenant não chega a tocar em nada.
+      if (tenantEsperado && Number(numero.tenantId) !== Number(tenantEsperado)) {
+        console.warn(
+          `[webhook] change do phone_number_id ${meta.phone_number_id || 'vazio'} pertence ao tenant `
+          + `${numero.tenantId}, mas entrou pelo webhook do tenant ${tenantEsperado} — DESCARTADO`
+        );
         continue;
       }
       // Cada change roda na sua PRÓPRIA transação tenant-scoped: commit no

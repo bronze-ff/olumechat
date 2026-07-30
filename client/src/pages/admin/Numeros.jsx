@@ -351,6 +351,113 @@ function AgenteIaModal({ num, onClose }) {
   );
 }
 
+// FIL-97 — App da Meta DO CLIENTE. Enquanto a Olume não tem app próprio
+// verificado, cada cliente conecta o app dele: App ID, Chave Secreta e token
+// permanente, mais a URL de webhook exclusiva que o operador cola no painel da
+// Meta do cliente. Tarefa técnica de implantação — só aparece na sessão de
+// suporte (o backend exige o mesmo em PUT /api/meta/app).
+function AppMetaModal({ dados, onClose }) {
+  const [appId, setAppId] = useState(dados?.appId || '');
+  const [appSecret, setAppSecret] = useState('');
+  const [accessToken, setAccessToken] = useState('');
+  const [wabaId, setWabaId] = useState('');
+  const [erro, setErro] = useState('');
+  const [copiado, setCopiado] = useState(false);
+  const qc = useQueryClient();
+
+  const salvar = useMutation({
+    mutationFn: () => api.put('/meta/app', {
+      appId: appId.trim() || undefined,
+      appSecret: appSecret.trim() || undefined,
+      accessToken: accessToken.trim() || undefined,
+      wabaId: wabaId.trim() || undefined,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['meta-app'] });
+      qc.invalidateQueries({ queryKey: ['meta-connection-status'] });
+      setAppSecret(''); setAccessToken('');
+    },
+    onError: (e) => setErro(e.response?.data?.error || 'Falha ao salvar.'),
+  });
+
+  const url = salvar.data?.data?.webhookUrl || dados?.webhookUrl || '';
+
+  const copiar = async () => {
+    try { await navigator.clipboard.writeText(url); setCopiado(true); setTimeout(() => setCopiado(false), 2000); }
+    catch { setCopiado(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative w-full sm:max-w-lg bg-white rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col">
+        <div className="navy-gradient text-white px-4 py-3 flex items-center gap-2">
+          <span className="section-bar" />
+          <h2 className="font-display font-bold text-base flex-1">App da Meta deste cliente</h2>
+          <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Fechar">✕</button>
+        </div>
+        <div className="modal-body space-y-4">
+          <p className="text-[11px] text-stone-500">
+            Use quando o cliente tem o <b>próprio aplicativo</b> na Meta. Os dados saem de
+            <b> Meta for Developers → App → Configurações → Básico</b>. Nada aqui é exibido
+            de volta depois de salvo — para trocar, digite o valor novo.
+          </p>
+
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">ID do aplicativo</label>
+            <input className="input-field font-mono" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="Ex.: 1234567890123456" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">
+              Chave secreta do app {dados?.temAppSecret && <span className="text-emerald-700 normal-case">· já configurada</span>}
+            </label>
+            <input className="input-field font-mono" type="password" autoComplete="new-password" value={appSecret}
+              onChange={(e) => setAppSecret(e.target.value)} placeholder={dados?.temAppSecret ? '•••••••• (deixe vazio para manter)' : 'Cole a chave secreta'} />
+            <p className="text-[11px] text-stone-400 mt-1">É ela que valida a assinatura de cada mensagem recebida.</p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">
+              Token permanente {dados?.temToken && <span className="text-emerald-700 normal-case">· já configurado</span>}
+            </label>
+            <input className="input-field font-mono" type="password" autoComplete="new-password" value={accessToken}
+              onChange={(e) => setAccessToken(e.target.value)} placeholder={dados?.temToken ? '•••••••• (deixe vazio para manter)' : 'Cole o token do usuário do sistema'} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">ID da conta do WhatsApp (opcional)</label>
+            <input className="input-field font-mono" value={wabaId} onChange={(e) => setWabaId(e.target.value)} placeholder="WABA ID" />
+          </div>
+
+          {url && (
+            <div className="rounded-xl border border-black/[0.08] bg-paper-50 p-3">
+              <p className="text-xs font-semibold text-stone-800">URL de webhook deste cliente</p>
+              <p className="text-[11px] text-stone-500 mt-0.5 mb-2">
+                Cole no app da Meta do cliente em <b>WhatsApp → Configuração → Webhook</b>, junto com o
+                token de verificação. Este endereço é exclusivo dele.
+              </p>
+              <div className="flex gap-2">
+                <input readOnly value={url} className="input-field !py-2 font-mono text-xs flex-1" onFocus={(e) => e.target.select()} />
+                <button onClick={copiar} className="shrink-0 px-3 py-2 rounded-xl border border-black/20 text-stone-700 font-semibold text-xs">
+                  {copiado ? 'Copiado!' : 'Copiar'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {salvar.isSuccess && <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2">Dados do app salvos.</p>}
+          {erro && <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{erro}</div>}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-black/20 text-stone-700 font-semibold text-sm">Fechar</button>
+          <button onClick={() => { setErro(''); salvar.mutate(); }} disabled={salvar.isPending}
+            className="flex-1 py-2.5 rounded-xl bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
+            {salvar.isPending ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Pré-cadastro manual: necessário p/ usar um número NOVO como origem de campanha
 // antes dele receber a primeira mensagem (o webhook só cria a linha no 1º evento).
 function CadastrarNumero({ deptos, onClose }) {
@@ -431,6 +538,7 @@ export default function Numeros() {
   const [editando, setEditando] = useState(null);
   const [statusDe, setStatusDe] = useState(null);
   const [cadastrando, setCadastrando] = useState(false);
+  const [appMeta, setAppMeta] = useState(false);
   // FIL-84: ligar/desligar a IA do canal é do ADMIN do cliente — não depende de
   // sessão de suporte do operador (o backend exige ADMIN em PUT /:id/ia).
   const [iaDe, setIaDe] = useState(null);
@@ -447,6 +555,13 @@ export default function Numeros() {
   const meta = useQuery({
     queryKey: ['meta-connection-status'],
     queryFn: () => api.get('/meta/status').then((r) => r.data),
+    retry: false,
+  });
+  // FIL-97: só a sessão de suporte enxerga (e o backend exige o mesmo).
+  const app = useQuery({
+    queryKey: ['meta-app'],
+    queryFn: () => api.get('/meta/app').then((r) => r.data),
+    enabled: podeProvisionar,
     retry: false,
   });
 
@@ -478,6 +593,23 @@ export default function Numeros() {
         </div>
         {meta.data?.some((x) => x.pending) && <span className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded-full">Há pendências</span>}
       </div>
+      {podeProvisionar && (
+        <div className="bg-white rounded-2xl border border-black/[0.06] px-4 py-3 flex items-center gap-3">
+          <span className={`w-2.5 h-2.5 rounded-full ${app.data?.temAppSecret ? 'bg-emerald-500' : 'bg-stone-300'}`} />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-stone-800">App da Meta deste cliente</p>
+            <p className="text-xs text-stone-500 truncate">
+              {app.data?.temAppSecret
+                ? <>Chave secreta configurada. Webhook: <span className="font-mono">{app.data.webhookUrl}</span></>
+                : 'Use quando o cliente tem o próprio aplicativo na Meta, em vez do app da plataforma.'}
+            </p>
+          </div>
+          <button onClick={() => setAppMeta(true)}
+            className="shrink-0 text-xs px-3 py-1.5 rounded-lg border border-black/15 text-stone-600 hover:bg-paper-50 font-medium">
+            {app.data?.temAppSecret ? 'Editar' : 'Configurar'}
+          </button>
+        </div>
+      )}
       <div className="bg-white rounded-2xl border border-black/[0.06] divide-y divide-black/[0.05]">
         {numeros.isLoading && <div className="p-8 flex justify-center"><Spinner /></div>}
         {numeros.isError && <p className="p-4 text-sm text-red-600">{numeros.error.response?.data?.error || 'Erro ao carregar.'}</p>}
@@ -547,6 +679,7 @@ export default function Numeros() {
       {cadastrando && <Portal><CadastrarNumero deptos={deptos.data} onClose={() => setCadastrando(false)} /></Portal>}
       {statusDe && <Portal><StatusMeta num={statusDe} onClose={() => setStatusDe(null)} /></Portal>}
       {iaDe && <Portal><AgenteIaModal num={iaDe} onClose={() => setIaDe(null)} /></Portal>}
+      {appMeta && <Portal><AppMetaModal dados={app.data} onClose={() => setAppMeta(false)} /></Portal>}
     </div>
   );
 }

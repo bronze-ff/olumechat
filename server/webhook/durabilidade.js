@@ -113,10 +113,15 @@ function registrarAtraso(ms) {
  * Persiste o evento bruto. RELANÇA o erro de propósito: quem chama (routes.js)
  * tem que responder erro recuperável para a Meta reenviar — engolir aqui seria
  * exatamente o bug que este ticket corrige.
+ * @param {Buffer} rawBody
+ * @param {object} payload
+ * @param {{tenantId?: number|null}} [opts] FIL-97: dono do caminho
+ *   `/webhook/<identificador>` por onde o evento entrou (o webhook global não
+ *   passa nada). Fica gravado para o replay amarrar o mesmo tenant.
  * @returns {Promise<{id: number|null, duplicado: boolean}>}
  */
-async function receber(rawBody, payload) {
-  const r = await store.persistir({ rawBody, payload });
+async function receber(rawBody, payload, opts = {}) {
+  const r = await store.persistir({ rawBody, payload, tenantId: opts.tenantId || null });
   if (r.duplicado) {
     contadores.duplicados += 1;
     return r;
@@ -128,21 +133,24 @@ async function receber(rawBody, payload) {
 /**
  * Caminho inline (logo depois do ACK): reivindica o evento recém-gravado e
  * processa. Se perder a reivindicação, alguém já está com ele — não faz nada.
+ * @param {{tenantEsperado?: number|null}} [opts] ver `executar`
  * @returns {Promise<boolean>} true = processou e concluiu
  */
-async function processar(id, payload) {
+async function processar(id, payload, opts = {}) {
   if (!id) return false;
   if (!(await store.reivindicarNovo(id))) return false;
-  return executar(id, payload);
+  return executar(id, payload, opts.tenantEsperado || null);
 }
 
 /** Roda o pipeline de sempre e fecha o estado do evento. O `eventoId` vai para
-    o processPayload porque é ele que liga o outbox de efeitos (P1-1). */
-async function executar(id, payload) {
+    o processPayload porque é ele que liga o outbox de efeitos (P1-1); o
+    `tenantEsperado` (FIL-97) porque uma assinatura feita com o App Secret de um
+    cliente só pode escrever na empresa DELE. */
+async function executar(id, payload, tenantEsperado = null) {
   const { maxTentativas } = cfg();
   let resultado;
   try {
-    resultado = await processEvent.processPayload(payload, { eventoId: id });
+    resultado = await processEvent.processPayload(payload, { eventoId: id, tenantEsperado });
   } catch (err) {
     await registrarFalha(id, err, maxTentativas);
     return false;
@@ -236,7 +244,7 @@ async function varrer() {
         continue;
       }
       console.warn(`[webhook] reprocessando evento ${cand.id} (tentativa ${cand.tentativas + 1})`);
-      await executar(cand.id, payload);
+      await executar(cand.id, payload, cand.webhookTenantId || null);
     } catch (err) {
       console.error(`[webhook] recuperação do evento ${cand.id} falhou:`, err.message);
     }

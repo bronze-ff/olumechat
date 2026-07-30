@@ -224,7 +224,9 @@ test('candidatosOrfaos: procura só eventos não concluídos, velhos e dentro do
     if (sql.startsWith('SELECT')) return { rows: [{ ID: 7, PAYLOAD: '{"entry":[]}', TENTATIVAS: 1 }] };
   });
   const linhas = await store.candidatosOrfaos({ orfaoMin: 2, maxTentativas: 5, limite: 50 });
-  assert.deepEqual(linhas, [{ id: 7, payload: '{"entry":[]}', tentativas: 1 }]);
+  // FIL-97: o tenant do CAMINHO de entrada vem junto (null no webhook global) —
+  // sem ele o replay aceitaria change que o POST original teria descartado.
+  assert.deepEqual(linhas, [{ id: 7, payload: '{"entry":[]}', tentativas: 1, webhookTenantId: null }]);
   assert.match(chamadas[0].sql, /estado IN \('recebido', 'processando'\)/);
   assert.match(chamadas[0].sql, /tentativas < :max/);
   assert.deepEqual(

@@ -7,7 +7,7 @@
 | Pasta | Responsabilidade |
 |---|---|
 | `api/` | Rotas do painel do cliente (RBAC via `auth/rbac.js`) |
-| `webhook/` | Entrada da Meta — evento bruto **persistido antes do ACK** e efeitos pós-commit em **outbox transacional** (`durabilidade.js` + `eventoStore.js` + `efeitoStore.js`, FIL-94), tenant por `phone_number_id` |
+| `webhook/` | Entrada da Meta — evento bruto **persistido antes do ACK** e efeitos pós-commit em **outbox transacional** (`durabilidade.js` + `eventoStore.js` + `efeitoStore.js`, FIL-94), tenant por `phone_number_id`; `/webhook/<32 hex>` = app da Meta **do cliente** (FIL-97) |
 | `ia/` | Agente de IA: `runtime.js` (3 fases), `perfilStore` (prompt em camadas), `operacoes.js` (ferramentas nativas), `stt.js`, `anexos.js`, `handoff.js`, `historico.js` (janela 40 turnos) |
 | `bot/` | Chatbot de fluxos determinístico |
 | `fila/` | Distribuidor (least-loaded + round-robin, debounce, leader) |
@@ -36,6 +36,13 @@
   automática do cliente quando o processo morre entre o commit e o dispatch — e o replay
   não reproduz (o dedup por WAMID pula a mensagem). Efeito novo = mais um `tipo` tratado
   em `processEvent::despachar`, nada além disso.
+- **Dois modelos de app da Meta convivem** (FIL-97): `/webhook` valida com o
+  `META_APP_SECRET` global (plataforma/Embedded Signup); `/webhook/<32 hex>` resolve o
+  tenant PELO CAMINHO e valida com o App Secret daquele cliente (`meta/appCliente.js`).
+  No caminho por cliente a assinatura prova a ORIGEM, nunca o conteúdo — por isso o
+  evento fica amarrado ao tenant do caminho (`webhook_evento.webhook_tenant_id`) e o
+  `processPayload` descarta change de outro tenant. Não remova essa amarração: sem ela,
+  um cliente com app próprio escreve no inbox de outra empresa com assinatura válida.
 - **Replay é normal aqui**: `processChange` consulta os WAMIDs já gravados ANTES de tocar
   contato/conversa/consumo. Escrita nova no caminho da mensagem entra DEPOIS desse
   pré-check, senão o reprocessamento rebobina a janela de 24h ou cobra duas vezes.
