@@ -4,9 +4,10 @@ Regras de branch, commit, teste, PR e merge do **Olume**. Vale para humano e
 para agente. Se você é um agente autônomo tocando um ticket, este arquivo é
 contrato — leia §1, §2, §3 e §4 **antes** de criar qualquer branch.
 
-Antes de qualquer implementação, leia também [`PORTE.md`](PORTE.md): o repo é um
-fork em porte e muita coisa que "parece pronta" ainda roda em Oracle
-single-tenant.
+**O sistema está em produção** (`olumechat.com.br`), com ambiente de staging
+espelhado. Antes de qualquer implementação, leia [`AMBIENTES.md`](AMBIENTES.md):
+onde cada ambiente roda, como acessar e como uma mudança viaja de dev → staging →
+produção. `PORTE.md` é histórico do porte Oracle→Postgres, só para consulta.
 
 ---
 
@@ -50,7 +51,7 @@ refactor(auth): login em tabela própria, sem ERP externo
 ## §3 Testes — obrigatório antes do PR
 
 ```bash
-cd server && npm test        # node:test — 225 testes hoje, todos verdes
+cd server && npm test        # node:test — 1.000+ testes, todos verdes
 cd client && npm run build   # se tocou o frontend
 ```
 
@@ -60,7 +61,9 @@ cd client && npm run build   # se tocou o frontend
 - **Multi-tenancy exige teste de vazamento.** Qualquer PR que mexa em query,
   pool ou sessão precisa provar que o tenant A não enxerga dado do tenant B.
   Ver a armadilha do `set_config` transaction-scoped em `PORTE.md` §1.2.
-- Não há CI ainda. A verificação real é a suíte local + a review cruzada.
+- **A CI é obrigatória e bloqueia o merge.** A `main` é protegida e exige
+  `server-test` e `client-build` verdes. A suíte local continua sendo o primeiro
+  filtro — a CI é o juiz, porque roda em ambiente limpo.
 
 ## §4 Pull Request
 
@@ -74,6 +77,16 @@ gh pr create --base main
 - **Não faça merge. Não toque na `main`.** O merge é do humano e é o portão da
   próxima onda.
 
+### Depois do merge: staging antes de produção
+
+Merge na `main` **não** é lançamento. O caminho é:
+
+1. deploy em **staging** (`staging.olumechat.com.br`) e validação com dados de teste;
+2. promoção para **produção** publicando **a mesma imagem** validada — nunca um rebuild.
+
+Mudança que só toca documentação pode ir direto. Qualquer coisa que toque código,
+schema ou configuração passa por staging. Ver [`AMBIENTES.md`](AMBIENTES.md).
+
 ## §5 Dúvida durante a implementação
 
 Se o ticket não responde uma decisão de escopo: **não chute**. Imprima uma linha
@@ -81,8 +94,14 @@ começando com `PERGUNTA:` e pare.
 
 ## §6 Banco de dados
 
-- **PostgreSQL no Neon.** Migrações versionadas e numeradas, idempotentes,
-  nunca editadas depois de aplicadas.
+- **PostgreSQL no Neon**, uma branch por ambiente (`production`, `staging`,
+  `main` para dev). Migrações versionadas e numeradas, idempotentes, nunca
+  editadas depois de aplicadas — elas rodam **todas** no boot de cada deploy.
+- **Expand/contract obrigatório com produção no ar.** Release N adiciona coluna e
+  escreve nos dois lugares; release N+1 remove a antiga. Nunca remova na mesma
+  release que parou de usar: é o que permite reverter código sem reverter banco.
+- **Migração arriscada testa em branch efêmera do Neon** criada a partir da
+  `production` — dados reais, risco zero, descarta depois.
 - `tenant_id` em toda tabela nova, com RLS habilitada. Sem exceção.
 - SQL sempre parametrizado. Input de usuário **nunca** concatenado.
 - Nunca use `SET SESSION` para escopo de tenant — só
@@ -107,7 +126,24 @@ humano mergeia.
 - Comentário de review é **insumo, não ordem**: correção confirmada no código
   vira commit na mesma branch; achado que contradiz o ticket vai pro humano.
 
-## §9 Segurança
+## §9 Ambientes e deploy
+
+Detalhe completo em [`AMBIENTES.md`](AMBIENTES.md). O essencial para quem
+implementa:
+
+- **Produção está no ar com clientes potenciais vendo.** Nada vai para lá sem
+  passar por staging.
+- **Nunca aponte um ambiente para o banco ou bucket do outro.** Cada um tem
+  connection string, bucket e segredos próprios — inclusive `JWT_SECRET` e
+  `IA_CRYPTO_KEY` diferentes, de propósito.
+- **Nunca commite valor de variável de ambiente**, nem em exemplo. O
+  `.env.example` leva placeholders.
+- Deploy e rollback são feitos no Coolify (`ops.olumechat.com.br`). Migração roda
+  no entrypoint do container, **antes** do servidor subir: falhou, o container
+  não fica pronto e a versão anterior continua atendendo.
+- Variáveis `VITE_*` são **build-time**: mudou o valor, precisa rebuildar.
+
+## §10 Segurança
 
 Todo ticket, PR e worker deste projeto segue [`SEGURANCA.md`](SEGURANCA.md).
 O corpo do PR deve confirmar, item a item, os pontos do checklist que a

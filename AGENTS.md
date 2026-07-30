@@ -13,10 +13,14 @@ Plataforma **multi-tenant** de atendimento por WhatsApp direto na **Cloud API da
 IA (responde, escuta áudio, vê imagem, age e transfere para humano), campanhas, métricas e
 um **painel do operador** (provisionamento, financeiro, sessão de suporte auditada).
 
-## Estado atual (2026-07-29)
+## Estado atual (2026-07-30)
 
-- **Roda de ponta a ponta.** O porte Oracle→Postgres/Neon foi concluído; ignore avisos
-  antigos de "fork em porte" que ainda existam em docs — na dúvida, o código manda.
+- **EM PRODUÇÃO.** `olumechat.com.br` (landing + app) e `api.olumechat.com.br` no ar,
+  em VPS com Coolify. Staging espelhado em `staging.olumechat.com.br` (atrás de
+  Cloudflare Access). Ver **`docs/AMBIENTES.md`** antes de mexer em qualquer coisa que
+  chegue ao deploy.
+- Falta só a conta Meta para o WhatsApp funcionar (`META_APP_SECRET` está com
+  placeholder — o webhook rejeita tudo até ser trocado, que é o comportamento seguro).
 - Roadmap de IA completo (FIL-83..86): instruções/base de conhecimento por empresa,
   atendimento com handoff nos dois sentidos, STT (whisper) + visão, ferramentas nativas
   (ficha, tag, pedido com template por empresa) e upload de PDF/XLSX/CSV na base.
@@ -44,27 +48,31 @@ cd client && npm run dev                        # http://localhost:5173
 
 1. **`docs/WORKFLOW.md` é contrato**: branch `<tipo>/<descricao>` cortada de `origin/main`
    fresca, Conventional Commits em português, suite verde antes do PR, nunca commitar
-   código direto na `main`, um ticket = uma branch = um PR.
-2. **Tabela nova entra no bloco RLS `isolamento_tenant`** (padrão das migrações 013/016/
+   código direto na `main`, um ticket = uma branch = um PR. A `main` é protegida e exige
+   CI verde (`server-test`, `client-build`).
+2. **Produção está no ar.** Migração é **expand/contract** (nunca remove coluna na mesma
+   release que para de usá-la), variável nova precisa entrar no Coolify dos ambientes que
+   a usam, e `VITE_*` exige rebuild. Mudança vai para staging antes de produção.
+3. **Tabela nova entra no bloco RLS `isolamento_tenant`** (padrão das migrações 013/016/
    020/021/022) e ganha `UNIQUE (tenant_id, id)`. Fora do bloco = sem isolamento entre
    empresas, silenciosamente.
-3. **Migração idempotente de verdade** — o histórico inteiro roda a cada deploy; "não dá
+4. **Migração idempotente de verdade** — o histórico inteiro roda a cada deploy; "não dá
    erro ao repetir" não basta (backfills precisam de guarda).
-4. **Nunca segure duas conexões do pool na mesma requisição.** O runtime da IA é dividido
+5. **Nunca segure duas conexões do pool na mesma requisição.** O runtime da IA é dividido
    em 3 fases exatamente por isso (`server/ia/runtime.js`); `iaConfigStore.carregar()` NÃO
    recebe `conn`, `perfilStore.carregar(conn, ...)` recebe. Leia os cabeçalhos antes de mexer.
-5. **Dois JWTs distintos de propósito**: sessão do cliente (`JWT_SECRET`, `token`) e do
+6. **Dois JWTs distintos de propósito**: sessão do cliente (`JWT_SECRET`, `token`) e do
    operador (`OPERADOR_JWT_SECRET`, `token_operador`) nunca se misturam — axios separados
    (`services/api.js` vs `services/apiOperador.js`). `IA_CRYPTO_KEY` é dedicada e estável.
-6. **Não use a tabela `config` para dado sensível ou grande**: o GET devolve tudo a
+7. **Não use a tabela `config` para dado sensível ou grande**: o GET devolve tudo a
    qualquer autenticado e o PUT trunca em 2.000 chars.
-7. **Multi-tenant no webhook**: a Meta não manda tenant — resolve-se por `phone_number_id`
+8. **Multi-tenant no webhook**: a Meta não manda tenant — resolve-se por `phone_number_id`
    (única unicidade global do schema). Um único webhook para todos os clientes.
-8. **Texto de produto em PT-BR**, sem vocabulário da Multicanal (anti-referência do
+9. **Texto de produto em PT-BR**, sem vocabulário da Multicanal (anti-referência do
    `PRODUCT.md`), e sem expor jargão de implementação na UI.
-9. Camada 1 do prompt da IA (`BASE_SISTEMA` em `ia/perfilStore.js`) é **intocável por
+10. Camada 1 do prompt da IA (`BASE_SISTEMA` em `ia/perfilStore.js`) é **intocável por
    admin**: anti-alucinação, guarda de escopo, anti-injeção e sigilo — não enfraqueça.
-10. Identificadores internos `falatta_*` (role do banco, migrações) são legado pré-rebrand
+11. Identificadores internos `falatta_*` (role do banco, migrações) são legado pré-rebrand
     (FIL-91: empresa Olume / produto Olume Chat) e **não devem ser renomeados** — troca de
     role é mudança de infra sem valor de marca e quebraria o banco existente.
 
@@ -84,7 +92,9 @@ abra-o de dentro de `server/`.
 
 ## Índice de docs
 
-- `docs/WORKFLOW.md` — branch/commit/teste/PR (contrato)
+- `docs/WORKFLOW.md` — branch/commit/teste/PR/deploy (contrato)
+- `docs/AMBIENTES.md` — dev, staging e produção: endereços, acesso, promoção e armadilhas
+- `docs/GO-LIVE-PENDENCIAS.md` — o que falta para o primeiro cliente
 - `docs/DEPLOY.md` — produção: Vercel (front) + Render (server) + Neon + R2
 - `docs/SEGURANCA.md` · `docs/ESCALABILIDADE.md` · `docs/PORTE.md` (histórico do porte)
 - `PRODUCT.md` (produto/marca) · `DESIGN.md` (visual)
