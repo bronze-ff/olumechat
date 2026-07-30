@@ -112,21 +112,18 @@ router.get('/app', exigirSuporteOperador, async (req, res, next) => {
 
 router.put('/app', exigirSuporteOperador, async (req, res, next) => {
   const { appId, appSecret, accessToken, wabaId } = req.body || {};
-  const temAlgo = [appId, appSecret, accessToken].some((v) => String(v || '').trim());
+  const temAlgo = [appId, appSecret, accessToken, wabaId].some((v) => String(v || '').trim());
   if (!temAlgo) return res.status(400).json({ error: 'Informe ao menos um campo para gravar.' });
   try {
     const dados = await db.comTenant(req.tenantId, async (conn) => {
       // O token permanente vem primeiro: é ele que cria a linha de meta_conexao
-      // (access_token_criptografado é NOT NULL desde a migração 008).
+      // (access_token_criptografado é NOT NULL desde a migração 008). O WABA ID
+      // NÃO vai aqui: quem grava é o `salvar` abaixo, para valer também quando o
+      // operador só corrige o WABA e não tem o token em mãos (review do PR #43).
       if (String(accessToken || '').trim()) {
-        await guardar({
-          tenantId: req.tenantId,
-          accessToken: String(accessToken).trim(),
-          wabaId: String(wabaId || '').trim() || null,
-          conn,
-        });
+        await guardar({ tenantId: req.tenantId, accessToken: String(accessToken).trim(), conn });
       }
-      const salvo = await appCliente.salvar(conn, req.tenantId, { appId, appSecret });
+      const salvo = await appCliente.salvar(conn, req.tenantId, { appId, appSecret, wabaId });
       await conn.execute(
         `INSERT INTO auditoria (acao, entidade, entidade_id, detalhe, ip)
          VALUES ('meta_app_cliente', 'meta_conexao', :id, :det, :ip)`,
@@ -135,6 +132,7 @@ router.put('/app', exigirSuporteOperador, async (req, res, next) => {
           // Só O QUE mudou, nunca o valor: esta trilha é lida no painel do cliente.
           det: JSON.stringify({
             appId: salvo.appId || null,
+            wabaId: salvo.wabaId || null,
             appSecret: salvo.appSecretAtualizado,
             accessToken: Boolean(String(accessToken || '').trim()),
             operador: (req.user && req.user.email) || null,

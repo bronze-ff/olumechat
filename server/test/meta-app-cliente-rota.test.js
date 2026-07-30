@@ -71,6 +71,7 @@ function fakeComTenant(linha) {
       if (/UPDATE meta_conexao/i.test(sql)) {
         capturado.updates.push(binds);
         if (binds.appId) linha.APP_ID = binds.appId;
+        if (binds.wabaId) linha.WABA_ID = binds.wabaId;
         if (binds.segredo) { linha.APP_SECRET_CRIPTOGRAFADO = binds.segredo; linha.TEM_APP_SECRET = true; }
         linha.WEBHOOK_IDENTIFICADOR = linha.WEBHOOK_IDENTIFICADOR || binds.ident;
         return { rows: [], rowsAffected: 1 };
@@ -123,7 +124,9 @@ test('PUT /meta/app: grava cifrado, gera o caminho e devolve a URL — sem o seg
     // Trilha que o cliente lê: o que mudou, nunca o valor.
     assert.equal(cap.auditorias.length, 1);
     const detalhe = JSON.parse(cap.auditorias[0].det);
-    assert.deepEqual(detalhe, { appId: '1234567890', appSecret: true, accessToken: true, operador: 'op@olume.test' });
+    assert.deepEqual(detalhe, {
+      appId: '1234567890', wabaId: null, appSecret: true, accessToken: true, operador: 'op@olume.test',
+    });
     assert.ok(!cap.auditorias[0].det.includes(SEGREDO));
   } finally { db.comTenant = old; }
 });
@@ -152,6 +155,33 @@ test('PUT /meta/app: campo vazio MANTÉM o valor gravado (a tela nunca devolve o
     assert.equal(update.segredo, null, 'segredo vazio não pode apagar o que já existe');
     // O caminho já publicado no app do cliente NUNCA é rotacionado por uma edição.
     assert.equal(JSON.parse(r.body).webhookUrl, `https://api.olume.test/webhook/${'f'.repeat(32)}`);
+  } finally { db.comTenant = old; }
+});
+
+test('PUT /meta/app: dá para corrigir SÓ o WABA ID, sem redigitar o token', async () => {
+  // Review do PR #43 (P2): o WABA ID só era gravado junto com um access token
+  // novo — corrigir um valor errado obrigava o operador a ter em mãos o dado
+  // mais difícil de obter. Ele agora vale como mudança por si só.
+  const old = db.comTenant;
+  const cap = fakeComTenant({
+    TENANT_ID: T, APP_ID: 'app-existente', WABA_ID: 'waba-errado',
+    WEBHOOK_IDENTIFICADOR: 'f'.repeat(32), TEM_APP_SECRET: true, TEM_TOKEN: true,
+  });
+  try {
+    const r = await request(montar({ suporte: true }), 'PUT', '/meta/app', { wabaId: 'waba-certo' });
+    assert.equal(r.status, 200);
+    assert.equal(JSON.parse(r.body).wabaId, 'waba-certo');
+
+    // Uma única escrita, a do UPDATE: o `guardar` (que exige token) não roda.
+    assert.equal(cap.updates.length, 1);
+    const update = cap.updates[0];
+    assert.equal(update.wabaId, 'waba-certo');
+    assert.equal(update.token, undefined, 'não pode reescrever o access token');
+    // E o que não veio na requisição continua intacto.
+    assert.equal(update.appId, null);
+    assert.equal(update.segredo, null);
+
+    assert.equal(JSON.parse(cap.auditorias[0].det).wabaId, 'waba-certo');
   } finally { db.comTenant = old; }
 });
 

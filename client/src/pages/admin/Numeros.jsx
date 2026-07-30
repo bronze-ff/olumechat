@@ -360,7 +360,9 @@ function AppMetaModal({ dados, onClose }) {
   const [appId, setAppId] = useState(dados?.appId || '');
   const [appSecret, setAppSecret] = useState('');
   const [accessToken, setAccessToken] = useState('');
-  const [wabaId, setWabaId] = useState('');
+  // Prefill do que NÃO é segredo: o operador precisa enxergar o valor atual para
+  // corrigi-lo sem redigitar o token permanente (review do PR #43).
+  const [wabaId, setWabaId] = useState(dados?.wabaId || '');
   const [erro, setErro] = useState('');
   const [copiado, setCopiado] = useState(false);
   const qc = useQueryClient();
@@ -425,6 +427,7 @@ function AppMetaModal({ dados, onClose }) {
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wide text-stone-600 mb-1.5">ID da conta do WhatsApp (opcional)</label>
             <input className="input-field font-mono" value={wabaId} onChange={(e) => setWabaId(e.target.value)} placeholder="WABA ID" />
+            <p className="text-[11px] text-stone-400 mt-1">Pode ser corrigido sozinho — não precisa reenviar o token.</p>
           </div>
 
           {url && (

@@ -104,7 +104,7 @@ async function resolverPorIdentificador(identificador) {
  */
 async function carregar(conn, tenantId) {
   const r = await conn.execute(
-    `SELECT app_id, webhook_identificador,
+    `SELECT app_id, waba_id, webhook_identificador,
             (app_secret_criptografado IS NOT NULL) AS tem_app_secret,
             (access_token_criptografado IS NOT NULL) AS tem_token,
             status, atualizado_em
@@ -114,10 +114,16 @@ async function carregar(conn, tenantId) {
   );
   const row = (r.rows || [])[0];
   if (!row) {
-    return { appId: null, identificador: null, temAppSecret: false, temToken: false, status: null, atualizadoEm: null };
+    return {
+      appId: null, wabaId: null, identificador: null,
+      temAppSecret: false, temToken: false, status: null, atualizadoEm: null,
+    };
   }
   return {
     appId: row.APP_ID || null,
+    // O WABA ID não é segredo (é um identificador de conta) e volta em claro: a
+    // tela precisa dele para o operador conferir e corrigir sem redigitar nada.
+    wabaId: row.WABA_ID || null,
     identificador: row.WEBHOOK_IDENTIFICADOR || null,
     temAppSecret: row.TEM_APP_SECRET === true,
     temToken: row.TEM_TOKEN === true,
@@ -127,19 +133,28 @@ async function carregar(conn, tenantId) {
 }
 
 /**
- * Grava App ID e/ou App Secret do cliente e garante o identificador do webhook.
+ * Grava App ID, App Secret e WABA ID do cliente e garante o identificador do
+ * webhook.
  *
  * Campo ausente/vazio = NÃO MEXE (é o que permite trocar só o App ID sem
  * reenviar o segredo, que a tela nunca devolve). O identificador é gerado uma
  * única vez e NUNCA é rotacionado aqui: trocá-lo invalidaria a URL já colada no
  * app do cliente e derrubaria a entrada de mensagens dele em silêncio.
  *
+ * ⚠️ O WABA ID é gravado AQUI, e não só no `connection.js::guardar` (achado P2
+ * da review do PR #43). Lá ele só entra junto com um access token novo — então
+ * corrigir um WABA ID errado obrigava o operador a redigitar o token permanente,
+ * que é o dado mais difícil de ter em mãos na hora. Este UPDATE cobre os dois
+ * casos: com token novo o `guardar` cria a linha e este passe grava o WABA;
+ * sem token novo, este passe é o único a rodar.
+ *
  * Exige a linha de `meta_conexao` já existente — ela nasce com o access token
  * (`meta/connection.js::guardar`), que é NOT NULL. A rota grava o token primeiro.
  * @param {object} conn conexão já dentro de comTenant(tenantId)
- * @returns {Promise<{identificador: string, appId: string|null, appSecretAtualizado: boolean}>}
+ * @returns {Promise<{identificador: string, appId: string|null, wabaId: string|null,
+ *                    appSecretAtualizado: boolean}>}
  */
-async function salvar(conn, tenantId, { appId, appSecret } = {}) {
+async function salvar(conn, tenantId, { appId, appSecret, wabaId } = {}) {
   const id = Number(tenantId);
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error('tenantId inválido');
 
@@ -151,18 +166,21 @@ async function salvar(conn, tenantId, { appId, appSecret } = {}) {
   }
 
   const appIdLimpo = appId === undefined || appId === null ? null : String(appId).trim();
+  const wabaLimpo = wabaId === undefined || wabaId === null ? null : String(wabaId).trim();
   const segredoLimpo = appSecret === undefined || appSecret === null ? '' : String(appSecret).trim();
   const identificador = atual.identificador || gerarIdentificador();
 
   await conn.execute(
     `UPDATE meta_conexao
         SET app_id = COALESCE(:appId, app_id),
+            waba_id = COALESCE(:wabaId, waba_id),
             app_secret_criptografado = COALESCE(:segredo, app_secret_criptografado),
             webhook_identificador = COALESCE(webhook_identificador, :ident),
             atualizado_em = now()
       WHERE tenant_id = :tenantId`,
     {
       appId: appIdLimpo || null,
+      wabaId: wabaLimpo || null,
       segredo: segredoLimpo ? criptografar(segredoLimpo, id, undefined, CONTEXTO) : null,
       ident: identificador,
       tenantId: id,
@@ -172,6 +190,7 @@ async function salvar(conn, tenantId, { appId, appSecret } = {}) {
   return {
     identificador,
     appId: appIdLimpo || atual.appId,
+    wabaId: wabaLimpo || atual.wabaId,
     appSecretAtualizado: Boolean(segredoLimpo),
   };
 }
