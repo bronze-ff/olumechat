@@ -43,7 +43,7 @@ desabilitada). Portas abertas: 22, 80, 443 — e só.
 2. Desenvolva local, contra o Neon `main`. Migração arriscada? Crie uma **branch efêmera do
    Neon a partir da `production`**, rode a migração lá, confira com o formato de dados real
    e descarte. Custo zero.
-3. PR → CI verde (`server-test` + `client-build`, exigidos pela proteção da `main`) → review
+3. PR → CI verde (`server-test` + `server-test-rls` + `client-build`, exigidos pela proteção da `main`) → review
    cruzada → merge.
 4. **Deploy em staging** e validação com dados de teste.
 5. **Promoção para produção**: publique a **mesma imagem** validada em staging — nunca um

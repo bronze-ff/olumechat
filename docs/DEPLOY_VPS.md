@@ -105,7 +105,8 @@ desenhada para Vercel + Render.
 - presença, ticket SSE, rate limits e alguns caches ainda vivem na memória;
 - o processo da API também executa campanhas, IA e tarefas periódicas;
 - readiness não comprova o estado do barramento direto nem do R2;
-- CI não testa a imagem Docker nem o isolamento RLS contra um Postgres real;
+- ~~CI não testa a imagem Docker nem o isolamento RLS contra um Postgres real~~
+  (resolvido: `backend-image` em FIL-92 e `server-test-rls` em FIL-98);
 - não há observabilidade, backup/restauração e staging finalizados;
 - o worktree local contém alterações de deploy ainda não publicadas no GitHub.
 
@@ -430,7 +431,7 @@ ser usada depois de existir um processo de mascaramento verificado.
 - mover as mudanças locais para branch/PR conforme `docs/WORKFLOW.md`;
 - revisar e commitar os arquivos de deploy que hoje estão apenas no worktree;
 - manter `main` protegida;
-- exigir os checks `server-test` e `client-build`;
+- exigir os checks `server-test`, `server-test-rls` (FIL-98) e `client-build`;
 - bloquear deploy de commit que não existe em `origin/main`;
 - remover artefatos de `tmp/` do escopo do deploy.
 
@@ -535,7 +536,11 @@ container antigo encerra sem ficar preso indefinidamente.
 
 Adicionar depois dos checks atuais:
 
-- teste de RLS contra branch Neon de CI/homologação;
+- ~~teste de RLS contra Postgres real~~ **feito (FIL-98)**: job `server-test-rls`
+  no `.github/workflows/ci.yml` — Postgres 16 do runner + migrações + suíte com
+  `TEST_DATABASE_URL`, e `RLS_OBRIGATORIO=1` faz teste pulado falhar. Ficou no
+  Postgres do runner, não numa branch Neon: para RLS o resultado é o mesmo e é
+  mais rápido;
 - build da imagem do backend;
 - build da imagem ou pacote do frontend;
 - boot do container e smoke de `/health/live`;

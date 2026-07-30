@@ -182,11 +182,13 @@ cd client && npm install && npm run dev # http://localhost:5173
 ```
 
 `npm test` no server roda a suíte completa (1.000+ testes, sem rede). Os testes de
-RLS contra Postgres real só rodam com `TEST_DATABASE_URL`; sem ela são pulados e a
-suíte segue verde.
+RLS contra Postgres real só rodam com `TEST_DATABASE_URL`; sem ela são pulados —
+localmente tudo bem, mas **na CI eles são obrigatórios**: o job `server-test-rls`
+levanta um Postgres, aplica as migrações e roda a suíte com `RLS_OBRIGATORIO=1`,
+que transforma teste pulado em falha (FIL-98).
 
 **Antes de abrir PR:** suíte verde e build do client. A `main` é protegida e exige
-os checks `server-test` e `client-build`.
+os checks `server-test`, `server-test-rls` e `client-build`.
 
 ## Deploy
 
@@ -206,7 +208,7 @@ Merge na `main` **não** é lançamento. O caminho é: CI verde → merge → de
 **staging** → validação → promoção da **mesma imagem** para produção. Detalhes,
 armadilhas e comandos em [`docs/AMBIENTES.md`](docs/AMBIENTES.md).
 
-A `main` já está protegida (exige `server-test` e `client-build`, bloqueia
-force-push e deleção).
+A `main` já está protegida (exige `server-test`, `server-test-rls` e
+`client-build`, bloqueia force-push e deleção).
 
 Convenções de branch, commit, PR e review: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).

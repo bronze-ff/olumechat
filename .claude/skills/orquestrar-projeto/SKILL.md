@@ -42,9 +42,9 @@ Linear. Se nao vier nada, pergunte.
   ambiente pode derrubar cliente. Todo ticket que toca esses pontos precisa
   dizer no PR **como sobe** (migracao expand/contract? precisa variavel nova no
   Coolify? exige rebuild por ser `VITE_*`?). Ver `docs/AMBIENTES.md`.
-- **A CI e portao real.** A `main` e protegida e exige `server-test` e
-  `client-build` verdes. Worker que abre PR com CI vermelha nao terminou o
-  trabalho — mande corrigir antes da review cruzada.
+- **A CI e portao real.** A `main` e protegida e exige `server-test`,
+  `server-test-rls` e `client-build` verdes. Worker que abre PR com CI vermelha
+  nao terminou o trabalho — mande corrigir antes da review cruzada.
 - **Toda worktree filha nasce de `origin/main` fresca** — `git fetch origin
   main` antes de cortar qualquer onda.
 
