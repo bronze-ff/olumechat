@@ -73,9 +73,8 @@ function criarConexaoFalsa(banco) {
         return { rows: row ? [linhaMaiuscula(row)] : [] };
       }
 
-      // acharContato (utils/telefone.js — fora do escopo do FIL-60, ainda usa
-      // o nome de tabela do fork). Respeita RLS como qualquer outra tabela.
-      if (/FROM\s+MC_ZAP_CONTATO/i.test(t)) {
+      // acharContato (utils/telefone.js). Respeita RLS como qualquer outra tabela.
+      if (/NOME_PERFIL\s+FROM\s+contato/i.test(t)) {
         const alvos = Object.values(binds);
         const achado = visiveis('contato').find((c) => alvos.includes(c.telefone));
         return { rows: achado ? [linhaMaiuscula({ id: achado.id, nome_perfil: achado.nome_perfil })] : [] };

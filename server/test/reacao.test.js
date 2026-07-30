@@ -34,7 +34,7 @@ function fakeConnReacao({ capturas, aberta }) {
       if (sql.includes('FROM numero')) return { rows: [{ ID: 2, TENANT_ID: 1, DEPARTAMENTO_PADRAO_ID: 4, MODO: 'padrao', FLUXO_ID: null }] };
       // Guarda da reação (SELECT 1 ...) — vem ANTES do select genérico de conversa.
       if (sql.includes('SELECT 1 FROM conversa')) return { rows: aberta ? [{ '1': 1 }] : [] };
-      if (sql.includes('FROM MC_ZAP_CONTATO')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (sql.includes('NOME_PERFIL FROM contato')) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
       if (sql.includes('FROM conversa')) {
         return { rows: aberta ? [{ ID: 70, DEPARTAMENTO_ID: 4, FILA_STATUS: 'em_atendimento', PROTOCOLO: 'P1', AVISO_FORA_HORARIO: 'N' }] : [] };
       }

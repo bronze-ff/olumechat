@@ -87,7 +87,7 @@ function bancoEmMemoria() {
         const alvos = Object.values(binds);
         return { rows: alvos.filter((w) => estado.wamids.has(w)).map((w) => ({ WAMID: w })) };
       }
-      if (/FROM MC_ZAP_CONTATO/i.test(t)) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
+      if (/NOME_PERFIL FROM contato/i.test(t)) return { rows: [{ ID: 3, NOME_PERFIL: 'Cliente' }] };
       if (/^SELECT id, departamento_id, fila_status, protocolo, aviso_fora_horario FROM conversa/i.test(t)) {
         const abertas = estado.conversas.filter((c) => c.status !== 'resolvida');
         return { rows: abertas.map((c) => ({
