@@ -26,8 +26,21 @@ Quando o repositório virar privado, a origem "Public Repository" para de clonar
 - Em cada aplicação (`frontend` e `backend`): trocar a origem para essa source
 - **Deixar auto-deploy DESLIGADO** (o deploy será disparado pelo CI, não pelo push)
 
-### 2. Conta Meta Business + verificação (CAMINHO CRÍTICO — dias)
-Nada de WhatsApp existe sem isso. Começar imediatamente.
+### 2. Conta Meta Business + verificação (dias)
+
+> **FIL-97 destravou a venda enquanto isso.** A verificação da Meta exige CNPJ, que a
+> Olume ainda não tem — e sem app próprio nenhum cliente entraria. Agora o sistema também
+> suporta **um app da Meta por cliente**: o cliente usa o app DELE (App ID, App Secret e
+> token permanente), e o operador cadastra isso na sessão de suporte, em
+> **Canais → App da Meta deste cliente**. Cada cliente recebe ali uma **URL de webhook
+> exclusiva** (`https://api.olumechat.com.br/webhook/<32 hex>`) para colar no app dele,
+> com o mesmo `WEBHOOK_VERIFY_TOKEN` de sempre.
+>
+> Isto **não substitui** o item abaixo: o app da plataforma continua sendo o destino
+> final. Quando ele existir, clientes novos entram por Embedded Signup e os antigos
+> migram um a um — os dois modelos convivem, sem big bang.
+
+Continua sendo o caminho certo para escalar. Começar assim que houver CNPJ.
 1. Criar conta em `business.facebook.com` com e-mail da Olume (precisa de uma conta pessoal do Facebook de um sócio como admin)
 2. Submeter **verificação da empresa**: cartão CNPJ, razão social/endereço/telefone idênticos ao CNPJ, site oficial (`olumechat.com.br` já serve), e-mail do domínio
 3. Criar o app em `developers.facebook.com` → adicionar produto **WhatsApp**
