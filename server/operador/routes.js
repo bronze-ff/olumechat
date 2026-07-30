@@ -978,17 +978,27 @@ router.get(
 
 // ---------------------------------------------------------------------------
 // Leads comerciais da landing (FIL-96) — seção "Leads" do grupo Carteira.
-// GET  /api/operador/leads?status= — carteira de leads, filtro opcional.
+// GET  /api/operador/leads?status=&antes=&limite= — página de leads, cursor
+//   por id (mesmo padrão de GET /ia-pedidos, FIL-85 — achado [P2] da review
+//   do PR #42: um LIMIT fixo sem continuação deixava lead antigo inalcançável).
 // GET  /api/operador/leads/contagem-novos — o número do badge no menu.
-// PATCH /api/operador/leads/:id { status, observacao? } — contatado/descartado.
+// PATCH /api/operador/leads/:id { status?, observacao? } — os dois campos são
+//   independentes (ver operador/leads.js::atualizarStatus — achados [P2]).
 // ---------------------------------------------------------------------------
 router.get(
   '/leads',
   query('status').optional({ nullable: true }).isString(),
+  query('antes').optional({ nullable: true }).isInt({ min: 1 }),
+  query('limite').optional({ nullable: true }).isInt({ min: 1, max: 200 }),
   async (req, res, next) => {
     if (checarValidacao(req, res)) return;
     try {
-      res.json(mapRows(await leads.listar({ status: req.query.status || undefined })));
+      const pagina = await leads.listar({
+        status: req.query.status || undefined,
+        antes: req.query.antes ? Number(req.query.antes) : undefined,
+        limite: req.query.limite ? Number(req.query.limite) : undefined,
+      });
+      res.json({ itens: mapRows(pagina.itens), proximo: pagina.proximo });
     } catch (err) {
       tratar(err, res, next);
     }
@@ -1005,7 +1015,7 @@ router.get('/leads/contagem-novos', async (req, res, next) => {
 
 router.patch(
   '/leads/:id',
-  body('status').isString(),
+  body('status').optional({ nullable: true }).isString(),
   body('observacao').optional({ nullable: true }).isString().isLength({ max: 2000 }),
   async (req, res, next) => {
     const id = idDaRota(req, res);

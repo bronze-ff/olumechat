@@ -27,11 +27,12 @@ function freshLeadsRouter() {
   return require('../api/leads');
 }
 
-function conexao(inseridos) {
+function conexao(inseridos, binds) {
   return {
-    async execute(sql) {
+    async execute(sql, params = {}) {
       if (/INSERT INTO lead_comercial/i.test(sql)) {
         inseridos.push(1);
+        if (binds) binds.push(params);
         return { rows: [{ ID: inseridos.length, CRIADO_EM: new Date() }] };
       }
       return { rows: [] };
@@ -40,8 +41,8 @@ function conexao(inseridos) {
   };
 }
 
-function startServer(inseridos) {
-  db.getConnection = async () => conexao(inseridos);
+function startServer(inseridos, binds) {
+  db.getConnection = async () => conexao(inseridos, binds);
   const app = express();
   app.use(express.json());
   app.use('/api/leads', freshLeadsRouter());
@@ -77,6 +78,23 @@ test('POST /api/leads: dados válidos grava o lead e devolve 201', async () => {
     assert.equal(r.status, 201);
     assert.deepEqual(r.body, { ok: true });
     assert.equal(inseridos.length, 1);
+  } finally { server.close(); }
+});
+
+// Achado [P1] da review do PR #42: um `origem` de campanha paga (utm +
+// gclid/fbclid) passa fácil de 200 chars, e o lead que veio de anúncio pago
+// era justamente o que se perdia — 400 ANTES do `limitar()` truncar, e o
+// fallback de mailto do front só entra em ação em falha de rede, não em 400.
+test('POST /api/leads: origem de rastreamento gigante é TRUNCADA, nunca rejeita o lead', async () => {
+  const inseridos = [];
+  const binds = [];
+  const { server, port } = await startServer(inseridos, binds);
+  try {
+    const origemGigante = 'utm_source=google&utm_medium=cpc&utm_campaign=demo&gclid='.padEnd(400, 'x');
+    const r = await post(port, { ...LEAD_VALIDO, origem: origemGigante });
+    assert.equal(r.status, 201, 'metadado auxiliar não pode rejeitar um lead legítimo');
+    assert.equal(inseridos.length, 1);
+    assert.equal(binds[0].origem.length, 200, 'limitar() trunca para o tamanho da coluna');
   } finally { server.close(); }
 });
 

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiOperador, { CHAVE_TOKEN } from '../../services/apiOperador';
 import Spinner from '../../components/ui/Spinner';
 import Icon from '../../components/ui/Icon';
@@ -33,13 +33,31 @@ export default function Leads() {
   const [observando, setObservando] = useState(null); // { id, observacao }
 
   const eu = useQuery({ queryKey: ['operador', 'eu'], queryFn: () => apiOperador.get('/eu').then((r) => r.data) });
-  const leads = useQuery({
+
+  // Paginação por CURSOR (`antes` = id do último lead da página) — mesmo
+  // padrão de PedidosIa.jsx (FIL-85). Achado [P2] da review do PR #42: um
+  // LIMIT fixo sem continuação deixava lead antigo inalcançável, e a tela
+  // ainda mostrava `lista.length` como se fosse o total da carteira.
+  const leads = useInfiniteQuery({
     queryKey: ['operador', 'leads', filtro],
-    queryFn: () => apiOperador.get('/leads', { params: filtro ? { status: filtro } : {} }).then((r) => r.data),
+    queryFn: ({ pageParam }) => apiOperador.get('/leads', {
+      params: { ...(filtro ? { status: filtro } : {}), ...(pageParam ? { antes: pageParam } : {}) },
+    }).then((r) => r.data),
+    initialPageParam: null,
+    getNextPageParam: (ultima) => ultima?.proximo ?? undefined,
   });
+  const lista = (leads.data?.pages || []).flatMap((p) => p.itens || []);
 
   const atualizar = useMutation({
-    mutationFn: ({ id, status, observacao }) => apiOperador.patch(`/leads/${id}`, { status, observacao }).then((r) => r.data),
+    // `status` só entra no corpo quando informado — salvar só a nota (ver
+    // botão "Salvar" do editor abaixo) NÃO pode reenviar o status que estava
+    // em memória quando o editor abriu: se outra pessoa mudou o status
+    // enquanto a nota era escrita, reenviar o valor velho sobrescreveria a
+    // mudança dela (achado [P2] da review do PR #42).
+    mutationFn: ({ id, status, observacao }) => apiOperador.patch(`/leads/${id}`, {
+      ...(status !== undefined ? { status } : {}),
+      ...(observacao !== undefined ? { observacao } : {}),
+    }).then((r) => r.data),
     onSuccess: () => {
       setObservando(null);
       qc.invalidateQueries({ queryKey: ['operador', 'leads'] });
@@ -53,7 +71,6 @@ export default function Leads() {
     navigate('/operador/login', { replace: true });
   }
 
-  const lista = leads.data || [];
   const atual = SECOES.find((item) => item.id === 'leads');
 
   return (
@@ -79,7 +96,10 @@ export default function Leads() {
         <header className="px-5 py-4 flex flex-wrap items-center gap-3 border-b border-paper-300">
           <div className="flex-1">
             <h2 className="font-semibold text-ink-950">Leads recebidos</h2>
-            <p className="mt-0.5 text-xs text-stone-500">{lista.length} {lista.length === 1 ? 'lead' : 'leads'}</p>
+            {/* "carregados", não "total": a lista é paginada por cursor — ver
+                achado [P2] da review do PR #42 (lista.length como se fosse o
+                total da carteira era enganoso assim que passasse de uma página). */}
+            <p className="mt-0.5 text-xs text-stone-500">{lista.length} {lista.length === 1 ? 'lead carregado' : 'leads carregados'}</p>
           </div>
           <select className="min-h-10 text-xs border border-paper-400 rounded-lg px-3 bg-white text-stone-700" value={filtro} onChange={(e) => setFiltro(e.target.value)}>
             <option value="">Todos os status</option>
@@ -127,7 +147,10 @@ export default function Leads() {
                 </dl>
 
                 <div className="flex flex-wrap gap-2 lg:justify-end lg:shrink-0">
-                  <a href={`mailto:${lead.email}`} className="min-h-9 px-3 rounded-lg border border-paper-400 bg-white text-stone-700 hover:border-brand-300 hover:text-brand-800 text-xs font-semibold inline-flex items-center gap-1.5">
+                  {/* O e-mail é entrada pública — sem escapar, um valor tipo
+                      "foo?bcc=vitima@x.com" vira cabeçalho do mailto em vez de
+                      endereço literal (achado [P2] da review do PR #42). */}
+                  <a href={`mailto:${encodeURIComponent(lead.email)}`} className="min-h-9 px-3 rounded-lg border border-paper-400 bg-white text-stone-700 hover:border-brand-300 hover:text-brand-800 text-xs font-semibold inline-flex items-center gap-1.5">
                     <Icon name="contact" size={15} />
                     Escrever
                   </a>
@@ -164,7 +187,12 @@ export default function Leads() {
                   className="mt-3 flex gap-2"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    atualizar.mutate({ id: lead.id, status: lead.status, observacao: observando.observacao.trim() });
+                    // SEM `status`: reenviar o valor que estava em memória
+                    // quando o editor abriu sobrescreveria uma mudança de
+                    // status feita por outra pessoa nesse meio-tempo (achado
+                    // [P2] da review do PR #42) — o backend trata os dois
+                    // campos como independentes.
+                    atualizar.mutate({ id: lead.id, observacao: observando.observacao.trim() });
                   }}
                 >
                   <textarea
@@ -194,6 +222,19 @@ export default function Leads() {
             <p className="mt-1 mx-auto max-w-md text-sm text-stone-600">
               Assim que alguém preencher o formulário da landing, ele aparece aqui.
             </p>
+          </div>
+        )}
+
+        {leads.hasNextPage && (
+          <div className="p-3 border-t border-paper-300">
+            <button
+              type="button"
+              onClick={() => leads.fetchNextPage()}
+              disabled={leads.isFetchingNextPage}
+              className="w-full min-h-9 rounded-lg border border-paper-400 bg-white text-xs font-semibold text-stone-600 hover:border-brand-300 hover:text-brand-800 disabled:opacity-40"
+            >
+              {leads.isFetchingNextPage ? 'Carregando…' : 'Carregar mais'}
+            </button>
           </div>
         )}
       </section>

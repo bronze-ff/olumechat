@@ -13,6 +13,8 @@ const auditoria = require('./auditoria');
 const { ErroOperador } = require('./erroOperador');
 
 const STATUS = Object.freeze(['novo', 'contatado', 'descartado']);
+const POR_PAGINA = 50;
+const POR_PAGINA_MAX = 200;
 
 /** Corta o que não cabe na coluna em vez de estourar o INSERT. */
 function limitar(valor, max) {
@@ -50,28 +52,41 @@ async function criar(dados) {
 }
 
 /**
- * Listagem para o painel (mais recentes primeiro). Filtro opcional por
- * status — sem filtro, devolve a carteira de leads inteira.
- * @param {{ status?: string }} [filtros]
+ * Listagem para o painel (mais recentes primeiro), com PAGINAÇÃO POR CURSOR —
+ * mesmo padrão de api/iaPedidos.js (FIL-85, achado [P2] da review do PR #42:
+ * um `LIMIT 500` sem continuação deixava lead antigo inalcançável, e a tela
+ * ainda mostrava `lista.length` como se fosse o total). `id` é IDENTITY
+ * (monotônico), então "tudo com id menor que o cursor" é uma página exata —
+ * mesmo com lead novo chegando entre uma página e outra.
+ * @param {{ status?: string, antes?: number, limite?: number }} [filtros]
+ * @returns {Promise<{ itens: object[], proximo: number|null }>}
  */
 async function listar(filtros = {}) {
-  const binds = {};
-  let filtro = '';
-  if (filtros.status) {
-    if (!STATUS.includes(filtros.status)) throw new ErroOperador(400, 'Status inválido.');
-    filtro = 'WHERE status = :status';
-    binds.status = filtros.status;
-  }
+  if (filtros.status && !STATUS.includes(filtros.status)) throw new ErroOperador(400, 'Status inválido.');
+  const limite = Math.min(POR_PAGINA_MAX, Math.max(1, Number(filtros.limite) || POR_PAGINA));
+  const antes = idValido(filtros.antes);
+
+  const condicoes = [];
+  // Pede uma linha A MAIS do que cabe na página: se ela vier, há próxima —
+  // sem precisar de um COUNT(*) da tabela inteira a cada rolagem.
+  const binds = { limite: limite + 1 };
+  if (filtros.status) { condicoes.push('status = :status'); binds.status = filtros.status; }
+  if (antes) { condicoes.push('id < :antes'); binds.antes = antes; }
+  const filtro = condicoes.length ? `WHERE ${condicoes.join(' AND ')}` : '';
+
   return comOperador(async (conn) => {
     const r = await conn.execute(
       `SELECT id, nome, empresa, email, tamanho_equipe, origem, status, observacao, criado_em, atualizado_em
          FROM lead_comercial
          ${filtro}
-        ORDER BY criado_em DESC
-        LIMIT 500`,
+        ORDER BY id DESC
+        LIMIT :limite`,
       binds
     );
-    return r.rows;
+    const linhas = r.rows || [];
+    const temMais = linhas.length > limite;
+    const itens = linhas.slice(0, limite);
+    return { itens, proximo: temMais && itens.length ? Number(itens[itens.length - 1].ID) : null };
   });
 }
 
@@ -84,30 +99,53 @@ async function contarNovos() {
 }
 
 /**
- * Marca contatado/descartado (ou de volta para novo). Auditado — mesma
- * regra do resto do painel: toda ação de operador entra em
+ * Marca contatado/descartado e/ou atualiza a nota — os dois campos são
+ * INDEPENDENTES de propósito (achados [P2] da review do PR #42):
+ *
+ *  • `observacao` OMITIDA (undefined) preserva a nota já gravada — "marcar
+ *    status sem reescrever a nota". `observacao` EXPLICITAMENTE '' APAGA a
+ *    nota: antes, `limitar('')` virava null e um COALESCE restaurava o valor
+ *    antigo, então "apagar a nota" respondia sucesso e não mudava nada.
+ *  • `status` também é OMISSÍVEL — é o que permite ao front salvar só a nota
+ *    sem reenviar o status que tinha em memória quando abriu o editor. Sem
+ *    isso, um segundo operador podia mudar o status enquanto o primeiro ainda
+ *    escrevia a nota, e "Salvar" sobrescrevia o status novo com o velho.
+ *
+ * Auditado — mesma regra do resto do painel: toda ação de operador entra em
  * `operador_auditoria`, com `tenant_id` NULO (o lead não é de tenant nenhum).
- * @param {{ operador: object, id: number, status: string, observacao?: string, ip?: string }} dados
+ * @param {{ operador: object, id: number, status?: string, observacao?: string, ip?: string }} dados
  */
 async function atualizarStatus({ operador, id, status, observacao, ip }) {
   const leadId = idValido(id);
   if (!leadId) throw new ErroOperador(400, 'ID de lead inválido.');
-  if (!STATUS.includes(status)) throw new ErroOperador(400, 'Status inválido.');
+
+  const statusFornecido = status !== undefined && status !== null;
+  const observacaoFornecida = observacao !== undefined;
+  if (!statusFornecido && !observacaoFornecida) {
+    throw new ErroOperador(400, 'Informe status e/ou observação para atualizar.');
+  }
+  if (statusFornecido && !STATUS.includes(status)) throw new ErroOperador(400, 'Status inválido.');
+
+  const sets = ['atualizado_em = now()'];
+  const binds = { id: leadId };
+  if (statusFornecido) { sets.push('status = :status'); binds.status = status; }
+  if (observacaoFornecida) { sets.push('observacao = :observacao'); binds.observacao = limitar(observacao, 2000); }
 
   return comOperador(async (conn) => {
     const r = await conn.execute(
-      // COALESCE: sem `observacao` no corpo do PATCH (marcar status sem
-      // reescrever a nota), a coluna mantém o valor já gravado.
       `UPDATE lead_comercial
-          SET status = :status, observacao = COALESCE(:observacao, observacao), atualizado_em = now()
+          SET ${sets.join(', ')}
         WHERE id = :id
         RETURNING id, nome, empresa, email, tamanho_equipe, origem, status, observacao, criado_em, atualizado_em`,
-      { id: leadId, status, observacao: limitar(observacao, 2000) }
+      binds
     );
     if (!r.rows.length) throw new ErroOperador(404, 'Lead não encontrado.');
     await auditoria.registrar(conn, {
-      operador, acao: 'lead_status_alterado', entidade: 'lead_comercial', entidadeId: leadId,
-      detalhe: { status }, ip,
+      operador,
+      acao: statusFornecido ? 'lead_status_alterado' : 'lead_observacao_atualizada',
+      entidade: 'lead_comercial', entidadeId: leadId,
+      detalhe: statusFornecido ? { status } : null,
+      ip,
     });
     return r.rows[0];
   });

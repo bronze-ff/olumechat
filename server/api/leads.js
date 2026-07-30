@@ -73,7 +73,13 @@ router.post(
   body('empresa').isString().trim().isLength({ min: 1, max: 160 }),
   body('email').isString().trim().isLength({ min: 3, max: 160 }).isEmail(),
   body('tamanhoEquipe').optional({ nullable: true }).isString().trim().isLength({ max: 60 }),
-  body('origem').optional({ nullable: true }).isString().trim().isLength({ max: 200 }),
+  // SEM isLength aqui de propósito (achado [P1] da review do PR #42): `origem`
+  // é metadado de rastreamento (querystring utm + gclid/fbclid facilmente
+  // passam de 200 chars) — `operador/leads.js::limitar()` já corta o que não
+  // cabe na coluna. Um lead de campanha paga não pode ser REJEITADO por causa
+  // de um campo auxiliar; o fallback de mailto do front só entra em ação em
+  // falha de REDE, não em 400, então rejeitar aqui perdia o contato de vez.
+  body('origem').optional({ nullable: true }).isString().trim(),
   async (req, res) => {
     if (checarValidacao(req, res)) return;
     try {
