@@ -215,22 +215,30 @@ test('RLS real: retenção NÃO reescreve o total permanente quando o corte de 9
       await admin.query('BEGIN');
       await admin.query('SET LOCAL ROLE falatta_app');
       await admin.query("SELECT set_config('app.current_tenant_id', $1, true)", [String(tenantId)]);
-      for (let dia = 1; dia <= 30; dia++) {
-        // Datas fixas e antigas o bastante para o mês INTEIRO já ter cruzado
-        // qualquer corte de retenção razoável (dias=90) na data de hoje.
+      // Âncora no PRIMEIRO instante do mês de ~200 dias atrás e espaçamento em
+      // HORAS: os 30 eventos precisam cair todos na MESMA competência. Com
+      // `(now() - 200 days) + N dias` eles atravessavam a virada do mês, e o
+      // fechamento — que é por competência — agregava só a parte do mês
+      // escolhido (o total dava 2000 em vez de 3000, dependendo do dia de
+      // hoje). 30 × 12h = 15 dias: cabe em qualquer mês, inclusive fevereiro.
+      const MES = `date_trunc('month', now() - interval '200 days')`;
+      for (let evento = 1; evento <= 30; evento++) {
+        // Antigo o bastante para o mês INTEIRO já ter cruzado qualquer corte de
+        // retenção razoável (dias=90) na data de hoje.
         await admin.query(
           `INSERT INTO consumo_evento (tenant_id, tipo, quantidade, custo_centavos, criado_em)
-           VALUES ($1, 'ia_tokens', 100, 5, (now() - interval '200 days') + make_interval(days => $2))`,
-          [tenantId, dia]
+           VALUES ($1, 'ia_tokens', 100, 5, ${MES} + make_interval(hours => $2))`,
+          [tenantId, evento * 12]
         );
       }
       await admin.query('COMMIT');
 
       const fechamentoReal = require('../consumo/fechamento');
       const wrapAdmin = require('../db/pool')._wrapClient({ query: (...a) => admin.query(...a), release: () => {} });
-      const anoMes = await admin.query(
-        `SELECT to_char(criado_em, 'YYYY-MM') AS ano_mes FROM consumo_evento WHERE tenant_id = $1 LIMIT 1`, [tenantId]
-      ).then((r) => r.rows[0].ano_mes);
+      // A competência vem da MESMA expressão que gerou os eventos — não de um
+      // `LIMIT 1` sem ORDER BY, que escolhia uma das duas competências ao acaso.
+      const anoMes = await admin.query(`SELECT to_char(${MES}, 'YYYY-MM') AS ano_mes`)
+        .then((r) => r.rows[0].ano_mes);
 
       // Tick 1: fecha o mês inteiro.
       await fechamentoReal.fecharMes(wrapAdmin, anoMes);

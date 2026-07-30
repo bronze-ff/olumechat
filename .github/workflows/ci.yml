@@ -41,6 +41,11 @@ jobs:
   # teste que passou.
   server-test-rls:
     runs-on: ubuntu-latest
+    # Rede de segurança: a suíte com banco real leva ~1 min. Se um teste
+    # pendurar um handle aberto, o job iria até o teto de 6h do GitHub queimando
+    # minutos e deixando o PR "pendente" para sempre. Trava tem que virar
+    # vermelho rápido.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: server
@@ -258,7 +263,10 @@ jobs:
   # produção recebe é exatamente a que passou em toda a validação".
   publicar-imagens:
     runs-on: ubuntu-latest
-    needs: [server-test, client-build, npm-audit, backend-image, frontend-image]
+    # FIL-98: server-test-rls entra aqui pelo mesmo motivo dos demais — sem ele,
+    # a imagem que produção recebe poderia vir de um commit cujo portão de
+    # isolamento entre tenants ficou vermelho.
+    needs: [server-test, server-test-rls, client-build, npm-audit, backend-image, frontend-image]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read

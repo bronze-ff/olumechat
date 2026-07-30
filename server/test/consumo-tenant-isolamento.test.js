@@ -177,18 +177,38 @@ test('RLS real: consumo_evento do tenant A não aparece pro tenant B, e preco_pr
       assert.equal(doB.rowCount, 0, 'VAZAMENTO: tenant B leu o consumo do tenant A');
 
       // preco_provedor: falatta_app não enxerga NADA, nem do próprio contexto.
+      // A migração 016 fecha a tabela em DUAS camadas — `REVOKE ALL ... FROM
+      // falatta_app` e policy `USING (false)`. A do GRANT dispara primeiro, e
+      // num schema construído só pelas migrações o que se vê é 42501
+      // (permission denied), não "0 linhas". As duas formas provam a mesma
+      // propriedade (preço nunca vaza pro caminho de tenant); o que NÃO pode
+      // acontecer é vir linha. ROLLBACK em vez de COMMIT porque um 42501
+      // aborta a transação inteira (FIL-98).
       await admin.query('BEGIN');
       await admin.query('SET LOCAL ROLE falatta_app');
       await admin.query("SELECT set_config('app.current_tenant_id', $1, true)", [String(A)]);
-      const precoViaTenant = await admin.query('SELECT * FROM preco_provedor');
-      await admin.query('COMMIT');
-      assert.equal(precoViaTenant.rowCount, 0, 'preco_provedor deveria ser invisível ao caminho de tenant');
+      let linhasDePreco = null;
+      try {
+        linhasDePreco = (await admin.query('SELECT * FROM preco_provedor')).rowCount;
+      } catch (err) {
+        assert.equal(err.code, '42501',
+          `esperava permission denied em preco_provedor, veio ${err.code}: ${err.message}`);
+      }
+      await admin.query('ROLLBACK');
+      assert.ok(linhasDePreco === null || linhasDePreco === 0,
+        `preco_provedor deveria ser invisível ao caminho de tenant (veio ${linhasDePreco} linha(s))`);
     } finally {
-      await admin.query('BEGIN');
-      await admin.query('DELETE FROM consumo_evento WHERE tenant_id IN (SELECT id FROM tenant WHERE slug LIKE $1)', [`%-${marca}`]);
-      await admin.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]);
-      await admin.query('COMMIT').catch(() => {});
-      await admin.end();
+      // O end() TEM de acontecer mesmo se a limpeza falhar: um client aberto
+      // segura o event loop e o processo do node:test nunca sai — foi assim
+      // que um único teste vermelho virou um job de CI pendurado (FIL-98).
+      try {
+        await admin.query('BEGIN').catch(() => {});
+        await admin.query('DELETE FROM consumo_evento WHERE tenant_id IN (SELECT id FROM tenant WHERE slug LIKE $1)', [`%-${marca}`]).catch(() => {});
+        await admin.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]).catch(() => {});
+        await admin.query('COMMIT').catch(() => {});
+      } finally {
+        await admin.end().catch(() => {});
+      }
     }
   });
 
@@ -221,6 +241,6 @@ test('RLS real: fecharMes agrega consumo_evento em consumo_mensal e a agregaçã
       await admin.query('DELETE FROM consumo_mensal WHERE tenant_id IN (SELECT id FROM tenant WHERE slug LIKE $1)', [`%-${marca}`]).catch(() => {});
       await admin.query('DELETE FROM consumo_evento WHERE tenant_id IN (SELECT id FROM tenant WHERE slug LIKE $1)', [`%-${marca}`]).catch(() => {});
       await admin.query('DELETE FROM tenant WHERE slug LIKE $1', [`%-${marca}`]).catch(() => {});
-      await admin.end();
+      await admin.end().catch(() => {});
     }
   });

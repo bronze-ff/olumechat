@@ -83,11 +83,16 @@ test('014: religa quem nunca teve decisão do operador, preserva quem foi deslig
       const por2 = Object.fromEntries(estado2.rows.map((r) => [r.slug, r.ia_habilitada]));
       assert.deepEqual(por2, por, 'rodar a 014 de novo não deveria mudar nada');
     } finally {
-      await admin.query(`DELETE FROM operador_auditoria WHERE tenant_id IN (
-        SELECT id FROM tenant WHERE slug LIKE $1)`, [`%-${marca}`]);
-      await admin.query(`DELETE FROM ia_config WHERE tenant_id IN (
-        SELECT id FROM tenant WHERE slug LIKE $1)`, [`%-${marca}`]);
-      await admin.query(`DELETE FROM tenant WHERE slug LIKE $1`, [`%-${marca}`]);
-      await admin.end();
+      // end() sempre, mesmo com a limpeza falhando: client aberto pendura o
+      // processo do node:test e trava a suíte inteira (FIL-98).
+      try {
+        await admin.query(`DELETE FROM operador_auditoria WHERE tenant_id IN (
+          SELECT id FROM tenant WHERE slug LIKE $1)`, [`%-${marca}`]).catch(() => {});
+        await admin.query(`DELETE FROM ia_config WHERE tenant_id IN (
+          SELECT id FROM tenant WHERE slug LIKE $1)`, [`%-${marca}`]).catch(() => {});
+        await admin.query(`DELETE FROM tenant WHERE slug LIKE $1`, [`%-${marca}`]).catch(() => {});
+      } finally {
+        await admin.end().catch(() => {});
+      }
     }
   });

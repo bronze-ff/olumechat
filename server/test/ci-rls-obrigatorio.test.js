@@ -23,8 +23,12 @@ const RUNNER = ler(__dirname, 'run-tests.js');
 
 // Recorta o bloco de um job do ci.yml (do nome do job até o próximo job no
 // mesmo nível de indentação).
+// A sentinela no fim é o que faz o ÚLTIMO job do arquivo também casar: sem ela
+// o recorte só termina em "próximo job" ou "linha de coluna 0 que não é
+// comentário", e o ci.yml acaba em comentário.
+const CI_COM_FIM = `${CI}\nfim-do-arquivo:\n`;
 function jobDe(nome) {
-  const m = CI.match(new RegExp(`^  ${nome}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:\\n|^[^\\s#])`, 'm'));
+  const m = CI_COM_FIM.match(new RegExp(`^  ${nome}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:\\n|^[^\\s#])`, 'm'));
   return m ? m[1] : null;
 }
 
@@ -61,6 +65,20 @@ test('CI: as URLs do job são diretas (o migrar recusa host com "-pooler")', () 
   for (const u of urls) {
     assert.ok(!/-pooler/.test(u), `scripts/migrar.js aborta contra pooler (o lock é de sessão): ${u}`);
   }
+});
+
+test('CI: o job tem timeout-minutes (trava vira vermelho, não job de 6h)', () => {
+  const job = jobDe('server-test-rls');
+  const m = job.match(/^    timeout-minutes: (\d+)$/m);
+  assert.ok(m, 'sem timeout-minutes um handle vazado leva o job ao teto de 6h do GitHub');
+  assert.ok(Number(m[1]) <= 20, `timeout-minutes ${m[1]} é folga demais para uma suíte de ~1 min`);
+});
+
+test('CI: publicar-imagens depende do portão de RLS', () => {
+  const job = jobDe('publicar-imagens');
+  assert.ok(job, 'job publicar-imagens sumiu');
+  assert.match(job, /needs: \[[^\]]*\bserver-test-rls\b/,
+    'imagem de produção não pode sair de um commit com o portão de isolamento vermelho');
 });
 
 test('runner: RLS_OBRIGATORIO=1 falha se algum teste foi pulado', () => {
