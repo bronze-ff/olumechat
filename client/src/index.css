@@ -580,6 +580,8 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 }
 
 .landing-preview-queue {
+  --landing-preview-step-size: 31px;
+  --landing-preview-step-row: 64px;
   border-right: 1px solid #d3e0db;
   background: #f3f8f6;
   padding: 18px 14px;
@@ -593,18 +595,19 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 }
 
 .landing-preview-queue ol {
-  position: relative;
   margin-top: 16px;
 }
 
-.landing-preview-queue ol::before {
+.landing-preview-queue li:not(:last-child) .landing-preview-step::after {
   position: absolute;
-  top: 22px;
-  bottom: 22px;
-  left: 15px;
+  top: 100%;
+  left: 50%;
   width: 1px;
+  height: calc(var(--landing-preview-step-row) - var(--landing-preview-step-size));
+  transform: translateX(-50%);
   background: #bfd0ca;
   content: "";
+  pointer-events: none;
 }
 
 .landing-preview-queue li {
@@ -614,7 +617,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 .landing-preview-queue button {
   display: flex;
   width: 100%;
-  min-height: 64px;
+  min-height: var(--landing-preview-step-row);
   align-items: center;
   gap: 9px;
   border-radius: 8px;
@@ -632,9 +635,9 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
   position: relative;
   z-index: 1;
   display: flex;
-  width: 31px;
-  height: 31px;
-  flex: 0 0 31px;
+  width: var(--landing-preview-step-size);
+  height: var(--landing-preview-step-size);
+  flex: 0 0 var(--landing-preview-step-size);
   align-items: center;
   justify-content: center;
   border: 1px solid #bfd0ca;
@@ -792,8 +795,8 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  color: #778f87;
-  font-size: 7px;
+  color: #4d625c;
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

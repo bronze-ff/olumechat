@@ -85,8 +85,9 @@ function ProductPreview() {
   return (
     <figure className="landing-product-wrap landing-enter landing-enter-delay">
       <div
-        className={`landing-product-frame is-stage-${etapa}`}
-        aria-label="Demonstração do caminho de uma conversa no Olume Chat"
+        className="landing-product-frame"
+        role="group"
+        aria-label="Demonstração interativa do caminho de uma conversa no Olume Chat"
       >
         <div className="landing-product-topbar">
           <div className="flex items-center gap-2">
@@ -327,7 +328,7 @@ export default function Landing() {
             <h2 className="landing-display max-w-[980px] text-[clamp(2.6rem,5vw,4.8rem)] leading-[0.94]">
               Quando ninguém vê o caminho, a conversa se perde.
             </h2>
-            <div className="landing-pain-story" aria-label="O problema de uma conversa sem responsável">
+            <div className="landing-pain-story">
               <span>Uma mensagem chega.</span>
               <span>Ninguém assume.</span>
               <span>O cliente conta tudo outra vez.</span>
