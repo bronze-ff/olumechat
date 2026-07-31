@@ -130,9 +130,23 @@ está em staging?" sem ninguém precisar abrir o Coolify.
 **A guarda falha fechada.** Se não der para ler o histórico ou comparar os commits (rede,
 rate limit, indisponibilidade), o job **para**. Não conseguir comparar é exatamente quando
 não se sabe se o candidato é obsoleto; deixar passar ali seria inverter a guarda no pior
-momento. Só dois casos identificados seguem adiante, e dizendo qual é: não existe registro
-ainda (primeira execução) ou o commit registrado sumiu do repositório (história reescrita).
-Pular um deploy é recuperável pelo próximo push; sobrescrever staging com versão velha, não.
+momento. Pular um deploy é recuperável pelo próximo push; sobrescrever staging com versão
+velha, não.
+
+Dois pontos onde "não sei" poderia virar "então segue", e não vira:
+
+- **Histórico vazio não é sinal verde.** Sem registro, a resposta é "não sei o que está no
+  ar" — não "não há nada no ar"; staging já roda uma versão. Enquanto a referência não
+  existe, a régua provisória é o topo da `main`: só o commit do topo deploya, e um rerun
+  antigo é dispensado. A régua vale só até nascer o primeiro registro (o próximo merge
+  normal faz isso) — como regra permanente ela descartaria trabalho bom.
+- **`404` no `compare` não diz quem sumiu.** Pode ser o commit registrado (história
+  reescrita → o candidato segue) ou o próprio candidato (história descartada → deployá-lo
+  colocaria em staging código que já não está na `main`). O workflow **pergunta por cada
+  ref** antes de decidir; se os dois existirem, ou se não der para confirmar, ele para.
+
+A referência **não** é semeada com a tag do Coolify, mesmo na primeira execução: intenção
+não vira evidência por ser a primeira, e uma referência falsa sobreviveria para sempre.
 
 O workflow fala com a API do Coolify por `ops.olumechat.com.br`, mandando o service token
 do Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) **junto** com o

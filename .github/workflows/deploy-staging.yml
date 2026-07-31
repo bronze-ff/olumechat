@@ -235,12 +235,48 @@ jobs:
           echo "Último deploy verificado em staging: ${VERIFICADO:-<nenhum>}"
           echo "Commit candidato: ${SHA_DISPARO}"
 
-          # CASO IDENTIFICADO: ainda não existe registro nenhum (primeira
-          # execução depois que este mecanismo entrou). Não há versão comprovada
-          # da qual regredir, e travar aqui bloquearia justamente o deploy
-          # legítimo que estabelece a referência.
+          dispensar() {
+            echo "seguir=nao" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploy dispensado: $1 Nada foi alterado — nem a tag, nem o container."
+            exit 0
+          }
+
+          # Histórico vazio NÃO é sinal verde.
+          #
+          # "Não há registro" significa "não sei o que está no ar", e não "não há
+          # nada no ar" — staging já roda uma versão. Deployar sem condição aqui
+          # deixaria a PRIMEIRA execução, que é a mais vulnerável, aceitar um
+          # rerun antigo e ainda gravá-lo como referência, jogando staging para
+          # trás. É o mesmo fail-open de sempre, com outra roupa.
+          #
+          # Enquanto não existe referência, a régua é o topo da `main`: só o
+          # commit que está no topo pode deployar. Um rerun antigo está atrás do
+          # topo e é dispensado. A regra é temporária de propósito — vale só até
+          # o primeiro deploy verificado nascer, e o próximo merge normal faz
+          # isso —, porque como regra permanente ela descartaria trabalho bom
+          # (é o defeito que a rodada anterior corrigiu).
+          #
+          # NÃO semeamos a referência com a tag do Coolify: `docker_registry_image_tag`
+          # é intenção, não evidência (um deploy que falhou depois do PATCH deixa
+          # ali um commit que nunca subiu), e semear a referência com intenção
+          # reintroduziria exatamente o bug que a troca por deployments corrigiu.
+          # Melhor uma régua temporária conservadora do que uma referência falsa
+          # que sobrevive para sempre.
           if [ -z "$VERIFICADO" ]; then
-            seguir "Nenhum deploy verificado registrado ainda — esta execução passa a ser a referência."
+            codigo="$(buscar "${API}/commits/main")"
+            if [ "$codigo" != "200" ]; then
+              echo "::error::não há deploy verificado registrado e também não consegui ler o topo da main (HTTP ${codigo}). A guarda falha FECHADA: sem nenhuma das duas referências, não há como saber se este commit é obsoleto."
+              exit 1
+            fi
+            TOPO="$(jq -r '.sha // ""' "$CORPO")"
+            if [ -z "$TOPO" ]; then
+              echo "::error::a API do GitHub respondeu 200 para o topo da main mas sem campo 'sha'. A guarda falha FECHADA."
+              exit 1
+            fi
+            if [ "$TOPO" != "$SHA_DISPARO" ]; then
+              dispensar "ainda não há deploy verificado registrado, então a régua provisória é o topo da main (${TOPO}), e ${SHA_DISPARO} não é ele. Enquanto não existe referência do que está no ar, só o topo pode deployar."
+            fi
+            seguir "Ainda não há deploy verificado registrado, e o candidato é o topo da main — segue, e esta execução passa a ser a referência."
           fi
 
           if [ "$VERIFICADO" = "$SHA_DISPARO" ]; then
@@ -254,11 +290,34 @@ jobs:
           case "$codigo" in
             200)
               ESTADO="$(jq -r '.status // ""' "$CORPO")" ;;
-            # CASO IDENTIFICADO: um dos commits não existe mais no repositório —
-            # história reescrita (force-push, rebase da main). Não há ordem a
-            # respeitar entre eles, e o candidato acabou de passar pela CI.
+            # 404 no compare NÃO identifica quem sumiu — e a diferença inverte a
+            # decisão. Se quem sumiu foi o VERIFICADO, a história foi reescrita e
+            # o candidato (que acabou de passar pela CI) deve seguir. Se quem
+            # sumiu foi o CANDIDATO, ele é de história descartada e seguir
+            # sobrescreveria um deployment da história nova com código que nem
+            # existe mais. Então aqui não se supõe: pergunta-se por cada ref.
             404)
-              seguir "O commit verificado (${VERIFICADO}) não existe mais no repositório — história reescrita. Seguindo com o candidato, que acabou de passar pela CI da main." ;;
+              codigo="$(buscar "${API}/commits/${SHA_DISPARO}")"
+              case "$codigo" in
+                404)
+                  dispensar "o próprio commit candidato (${SHA_DISPARO}) não existe mais no repositório — história descartada por force-push ou rebase. Deployá-lo colocaria em staging código que já não está na main." ;;
+                200) ;;
+                *)
+                  echo "::error::o compare devolveu 404 e não consegui confirmar se o candidato ${SHA_DISPARO} ainda existe (HTTP ${codigo}). A guarda falha FECHADA: sem saber QUEM sumiu, não dá para decidir."
+                  exit 1 ;;
+              esac
+
+              codigo="$(buscar "${API}/commits/${VERIFICADO}")"
+              case "$codigo" in
+                404)
+                  seguir "O commit verificado (${VERIFICADO}) não existe mais no repositório, e o candidato existe — história reescrita. O candidato acabou de passar pela CI da main, então segue." ;;
+                200)
+                  echo "::error::o compare de ${VERIFICADO}...${SHA_DISPARO} devolveu 404, mas os DOIS commits existem no repositório. Não sei explicar essa combinação, e explicação que falta não é permissão: a guarda falha FECHADA."
+                  exit 1 ;;
+                *)
+                  echo "::error::o compare devolveu 404 e não consegui confirmar se o verificado ${VERIFICADO} ainda existe (HTTP ${codigo}). A guarda falha FECHADA: sem saber QUEM sumiu, não dá para decidir."
+                  exit 1 ;;
+              esac ;;
             *)
               echo "::error::não consegui comparar ${VERIFICADO} com ${SHA_DISPARO} (HTTP ${codigo}). A guarda falha FECHADA: sem a comparação não há como saber se este commit é obsoleto. Nada foi alterado — o próximo push na main tenta de novo."
               exit 1 ;;
@@ -266,9 +325,7 @@ jobs:
 
           case "$ESTADO" in
             behind)
-              echo "seguir=nao" >> "$GITHUB_OUTPUT"
-              echo "::notice::Deploy dispensado: ${SHA_DISPARO} é ANTERIOR ao último verificado em staging (${VERIFICADO}). Provavelmente uma execução antiga da CI concluindo fora de ordem, ou um rerun. Nada foi alterado — nem a tag, nem o container."
-              exit 0 ;;
+              dispensar "${SHA_DISPARO} é ANTERIOR ao último verificado em staging (${VERIFICADO}). Provavelmente uma execução antiga da CI concluindo fora de ordem, ou um rerun." ;;
             ahead|identical|diverged)
               seguir "Candidato está '${ESTADO}' em relação ao último verificado — o deploy segue." ;;
             *)
