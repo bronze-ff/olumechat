@@ -10,6 +10,10 @@ const morgan = require('morgan');
 
 const { loadConfig } = require('./config');
 const db = require('./db/pool');
+// FIL-113: marcador da build que este processo está servindo. Lido de um
+// arquivo gravado na imagem em tempo de build — leia o cabeçalho de versao.js
+// antes de mexer, principalmente a parte de por que NÃO é variável de ambiente.
+const { versao } = require('./versao');
 const { buildWebhookRouter } = require('./webhook/routes');
 
 const cfg = loadConfig();
@@ -68,8 +72,21 @@ app.get('/exclusao-de-dados', (req, res) =>
 
 // Liveness confirma o processo; readiness também prova uma consulta real ao
 // banco. O balanceador só deve enviar tráfego a uma instância ready.
+//
+// FIL-113 — as duas respostas carregam `versao`, o marcador da build que está
+// respondendo. Sem ele, `200` prova ALCANCE (alguém atende este host e está
+// saudável) e nada sobre VERSÃO: um container antigo ainda disputando o
+// `Host()` do Traefik responde 200 exatamente igual (docs/AMBIENTES.md). Com
+// ele, o smoke de deploy compara com a tag que acabou de deployar e FALHA na
+// divergência.
+//
+// O formato do objeto está no cabeçalho de versao.js e é estável — o smoke do
+// deploy-staging.yml e o FIL-101 (promoção para produção) o consomem. Ausência
+// do campo, `sha: null` ou `origem: 'desconhecida'` significam "não sei que
+// versão sou" e devem ser lidos como FALHA por quem verifica, nunca como
+// "provavelmente é a certa".
 app.get('/health/live', (req, res) =>
-  res.json({ status: 'ok', service: 'olume-chat', ts: new Date().toISOString() })
+  res.json({ status: 'ok', service: 'olume-chat', versao, ts: new Date().toISOString() })
 );
 async function readiness(req, res) {
   // Estado do hub SSE/LISTEN-NOTIFY (FIL-93/P0.7) — só REPORTADO, nunca gate
@@ -82,10 +99,12 @@ async function readiness(req, res) {
   try {
     conn = await db.getConnection();
     await conn.execute('SELECT 1 AS ok');
-    return res.json({ status: 'ok', service: 'olume-chat', database: 'ok', hub: hubStatus, ts: new Date().toISOString() });
+    return res.json({ status: 'ok', service: 'olume-chat', database: 'ok', hub: hubStatus, versao, ts: new Date().toISOString() });
   } catch (err) {
     console.error('[health] readiness falhou:', err.message);
-    return res.status(503).json({ status: 'indisponivel', service: 'olume-chat', database: 'erro', hub: hubStatus });
+    // `versao` também no 503: quando o banco cai, a primeira pergunta é "qual
+    // build está atendendo?" — e é justamente a resposta que faltava em 2026-07-31.
+    return res.status(503).json({ status: 'indisponivel', service: 'olume-chat', database: 'erro', hub: hubStatus, versao });
   } finally {
     if (conn) await conn.close().catch(() => {});
   }
