@@ -74,10 +74,10 @@ produção economizaria um clique e removeria a única etapa que exige julgament
 
 ### Estado atual
 
-Os passos 1 a 7 já funcionam exatamente assim: a CI publica as imagens
-(FIL-99) e o workflow `deploy-staging.yml` leva o `sha-<commit>` para staging
-sozinho (FIL-100). Os passos 9 a 11 ainda são executados à mão contra a API do
-Coolify, até o FIL-101. O desenho está em
+O ciclo inteiro já funciona assim: a CI publica as imagens (FIL-99), o
+`deploy-staging.yml` leva o `sha-<commit>` para staging sozinho (FIL-100), a API
+e o frontend declaram qual build estão servindo (FIL-113) e o
+`deploy-producao.yml` promove sob aprovação (FIL-101). O desenho está em
 [`superpowers/specs/2026-07-30-deploy-automatizado-design.md`](superpowers/specs/2026-07-30-deploy-automatizado-design.md).
 
 ## §1 Branches
@@ -171,12 +171,20 @@ gh pr create --base main
 - **Não faça merge. Não toque na `main`.** O merge é do humano e é o portão da
   próxima onda.
 
-### Depois do merge: staging antes de produção
+### Depois do merge: staging sobe sozinho, você valida, você promove
 
 Resumo dos passos 6 a 11 da §0. Merge na `main` **não** é lançamento. O caminho é:
 
-1. deploy em **staging** (`staging.olumechat.com.br`) e validação com dados de teste;
-2. promoção para **produção** publicando **a mesma imagem** validada — nunca um rebuild.
+1. **staging sobe sozinho** com o commit mergeado, assim que a CI fica verde —
+   ninguém dispara nada. Guarde a tag `sha-<curto>` do resumo da execução;
+2. **valide em `staging.olumechat.com.br`** com dados de teste, conferindo antes
+   que você está olhando a versão nova (`/version.json`);
+3. **promova pelo Actions** → *Deploy produção* → informe aquele SHA → o job para
+   e pede aprovação → aprovado, produção recebe **a mesma imagem** validada, nunca
+   um rebuild.
+
+Deu ruim depois de promover? O mesmo workflow com o SHA anterior devolve a versão
+antiga — mas devolve o **código**, não o **schema** (§6).
 
 Mudança que só toca documentação pode ir direto. Qualquer coisa que toque código,
 schema ou configuração passa por staging. Ver [`AMBIENTES.md`](AMBIENTES.md).
@@ -232,9 +240,14 @@ implementa:
   `IA_CRYPTO_KEY` diferentes, de propósito.
 - **Nunca commite valor de variável de ambiente**, nem em exemplo. O
   `.env.example` leva placeholders.
-- Deploy e rollback são feitos no Coolify (`ops.olumechat.com.br`). Migração roda
-  no entrypoint do container, **antes** do servidor subir: falhou, o container
-  não fica pronto e a versão anterior continua atendendo.
+- **Staging sobe sozinho** a cada merge com CI verde; **produção só sobe por
+  aprovação**: Actions → *Deploy produção* → o SHA que você validou em staging →
+  aprovar. **Rollback é o mesmo workflow com um SHA anterior.** O Coolify
+  (`ops.olumechat.com.br`) continua servindo para diagnóstico e para o
+  procedimento de emergência, não para o deploy do dia a dia.
+- Migração roda no entrypoint do container, **antes** do servidor subir: falhou, o
+  container não fica pronto e a versão anterior continua atendendo. E rollback de
+  imagem **não** reverte migração — devolve o código, não o schema.
 - Variáveis `VITE_*` são **build-time**: mudou o valor, precisa rebuildar.
 
 ## §10 Segurança

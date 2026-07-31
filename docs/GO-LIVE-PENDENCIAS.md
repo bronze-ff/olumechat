@@ -21,7 +21,7 @@
 | SSH | só por chave, senha desabilitada, updates automáticos |
 | CI | 7 checks obrigatórios na `main`, incluindo RLS contra Postgres real |
 | Imagens | CI publica `sha-<commit>` no GHCR a cada push na `main` |
-| Staging | consome imagem do GHCR; produção ainda compila (FIL-105) |
+| Deploy | staging sobe sozinho após CI verde; produção é promovida pelo Actions, sob aprovação, com rollback por SHA |
 | Captação | formulário da landing grava lead no banco, com painel no operador |
 
 ## O caminho crítico até o primeiro cliente
@@ -56,12 +56,16 @@ por Embedded Signup e os antigos migram um a um, sem big bang.
 
 ### 2. Repositório de volta a privado
 
-Já pode ser feito. **A dependência antiga caiu:** o Coolify não precisa mais de GitHub App,
-porque staging consome imagem do GHCR e a VPS está autenticada por `docker login`. Depois
-que o FIL-105 converter produção, o Coolify não precisará de acesso nenhum ao repositório.
+Já pode ser feito, e **a dependência antiga caiu de vez**: instalar um GitHub App no Coolify
+**não é mais necessário para deploy nenhum**. Ele existia para o Coolify clonar o
+repositório e compilar na VPS; desde que os quatro ambientes viraram aplicações do tipo
+`dockerimage` (FIL-100 em staging, FIL-105 em produção), o Coolify só **puxa** imagem pronta
+do GHCR e não precisa de acesso nenhum ao código. Quem constrói é a CI, e quem promove é o
+workflow `Deploy produção` (FIL-101), falando com a API do Coolify — não com o repositório.
 
 Ao fechar o repositório, confirme que as imagens continuam sendo puxadas — o `docker login`
-usa um PAT com `read:packages`, que precisa continuar válido.
+da VPS usa um PAT com `read:packages`, que precisa continuar válido. É o único vínculo que
+sobrou entre o Coolify e o GitHub.
 
 ### 3. Caixa `admin@olumechat.com.br` e alias comercial
 
@@ -69,7 +73,16 @@ Usada no operador e na política do Cloudflare Access. **Nunca foi testado se o 
 `comercial@` entrega de verdade** — está no FIL-110, e é por onde chegam os leads da
 landing.
 
-### 4. Neon no plano Launch
+### 4. Ambiente `production` no GitHub, com revisor obrigatório (2 minutos)
+
+Settings → Environments → *New environment* → nome exato **`production`** → marque
+**Required reviewers** e adicione você. É o portão de aprovação inteiro do
+`deploy-producao.yml`: sem ele o GitHub cria o ambiente sozinho na primeira execução, **sem
+regra nenhuma**, e a promoção iria direto para produção sem ninguém aprovar. O workflow
+recusa a execução enquanto isso não estiver configurado — então, enquanto não for feito,
+**não há como promover para produção**.
+
+### 5. Neon no plano Launch
 
 PITR de 6 horas é risco alto com dado de cliente. Faz parte do FIL-110.
 
@@ -77,8 +90,6 @@ PITR de 6 horas é risco alto com dado de cliente. Faz parte do FIL-110.
 
 | Ticket | O quê | Por quê agora |
 |---|---|---|
-| **FIL-105** | Converter produção para deploy por imagem | Destrava o FIL-101 e tira o build da VPS |
-| **FIL-101** | Promoção para produção sob aprovação + rollback | Bloqueado pelo FIL-105. O FIL-113 saiu: a API e o frontend agora carregam o SHA da build, e o smoke de staging falha quando a versão servida não é a deployada (`AMBIENTES.md`) |
 | **FIL-106** | Monitoramento externo com alerta no celular | Hoje, se cair, ninguém sabe |
 | **FIL-110** | Smoke completo, teste de carga, Neon Launch | Portão do primeiro cliente |
 | **FIL-107** | Backup do Coolify fora da VPS | Hoje o backup mora no que ele protege |
