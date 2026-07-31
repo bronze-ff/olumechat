@@ -357,7 +357,7 @@ configurações, e uma restauração do provedor sobrescreve a VPS inteira.
 | Coolify self-hosted | R$ 0 de licença | consome recursos da VPS e exige manutenção própria |
 | Cloudflare DNS, proxy, CDN e SSL | R$ 0 no plano Free | migrar de plano apenas quando recursos/SLA pagos forem necessários |
 | Cloudflare Access | R$ 0 para a equipe inicial, dentro do limite Free | plano pago se a equipe ultrapassar o limite ou precisar de SLA/logs maiores |
-| GitHub Actions + GHCR | R$ 0 enquanto dentro da franquia | conta Free inclui 2.000 minutos/mês em repositório privado; excedente, artifacts e eventual mudança na política do GHCR são variáveis |
+| GitHub Actions + GHCR | R$ 0 enquanto dentro da franquia | conta Free inclui 2.000 minutos/mês em repositório privado; excedente, artifacts e eventual mudança na política do GHCR são variáveis. **Privatizar o repositório tem custo além dos minutos** — ver o aviso abaixo |
 | Neon de desenvolvimento | pode permanecer em US$ 0 dentro do Free | limitado por compute, armazenamento, transferência e janela de restore |
 | Neon de produção | reservar inicialmente **US$ 20–30/mês** no Launch | US$ 0,106 por CU-h, US$ 0,35 por GB-mês e histórico/transferência conforme uso |
 | Cloudflare R2 Standard | US$ 0 dentro da franquia | após 10 GB: US$ 0,015/GB-mês; US$ 4,50 por milhão de operações A e US$ 0,36 por milhão de operações B acima das franquias |
@@ -368,6 +368,19 @@ configurações, e uma restauração do provedor sobrescreve a VPS inteira.
 A reserva de US$ 20–30 para o Neon é uma estimativa operacional, não uma
 mensalidade fixa. Antes do go-live, registrar no documento o plano realmente
 contratado, limites de autoscaling e alerta de gasto.
+
+> ⚠️ **Privatizar o repositório no plano Free derruba o portão de aprovação de
+> produção.** Regras de proteção de environment — revisor obrigatório, política de
+> branch — e environment secrets só valem em repositório **público** no Free. O
+> `deploy-producao.yml` depende das duas coisas: o revisor obrigatório do environment
+> `production` e os segredos do Coolify guardados nele.
+>
+> A falha é silenciosa nos dois sentidos: ou a promoção passa a rodar **sem portão**, ou
+> ela falha por não achar os segredos — e nenhum dos dois se liga à causa dias depois.
+> Então privatizar exige, **antes**, uma decisão: **upgrade para Pro ou Team**, ou
+> **outro mecanismo de aprovação** com os segredos de volta ao nível do repositório (o
+> que reabre a exposição pré-aprovação que o FIL-101 fechou). O custo de privatizar não
+> é só a franquia de minutos.
 
 #### Custo-base recomendado
 

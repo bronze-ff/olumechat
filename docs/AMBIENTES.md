@@ -47,8 +47,9 @@ desabilitada). Portas abertas: 22, 80, 443 — e só.
 3. PR → CI verde (`server-test` + `server-test-rls` + `client-build`, exigidos pela proteção da `main`) → review
    cruzada → merge.
 4. **Deploy em staging** e validação com dados de teste.
-5. **Promoção para produção**: publique a **mesma imagem** validada em staging — nunca um
-   rebuild. Rebuildar é a forma clássica de "passou em staging e quebrou em produção".
+5. **Promoção para produção**: Actions → *Deploy produção* → o SHA validado → aprovar. Vai
+   ao ar a **mesma imagem** validada em staging — nunca um rebuild. Rebuildar é a forma
+   clássica de "passou em staging e quebrou em produção".
 
 O ciclo completo, com quem faz cada passo, está na **§0 do [`WORKFLOW.md`](WORKFLOW.md)**.
 
@@ -73,6 +74,12 @@ e testou.
 Isso resolve dois problemas de uma vez: o build sai da VPS (que estava disputando CPU com a
 produção no ar) e o Coolify deixa de precisar de acesso ao repositório — o que importa
 quando o repositório virar privado.
+
+> ⚠️ **Privatizar, porém, não é mais só uma decisão sobre o Coolify.** No plano Free,
+> regras de proteção de environment e environment secrets **só funcionam em repositório
+> público** — e a promoção para produção depende das duas coisas. Privatizar sem antes
+> subir para Pro/Team derruba o portão de aprovação em silêncio. Detalhe em
+> [`GO-LIVE-PENDENCIAS.md`](GO-LIVE-PENDENCIAS.md).
 
 **A cada push na `main`, a CI publica três imagens** com tag imutável `sha-<commit>`:
 
@@ -175,7 +182,8 @@ configuração — editável e copiada à mão quando uma aplicação é recriad
 nesta página) —, e um marcador declarável por fora do build pode mentir. É a mesma distinção
 entre `docker_registry_image_tag` (intenção) e o histórico de deployments (evidência).
 
-**Formato — trate como contrato estável.** O FIL-101 vai consumi-lo para promover produção.
+**Formato — trate como contrato estável.** O smoke de produção o consome para provar a
+promoção (FIL-101).
 O mesmo objeto aparece nos dois lados:
 
 | Onde | Como ler |
@@ -223,12 +231,121 @@ O marcador do frontend existe assim mesmo porque tem dois consumidores reais:
 
 - **a validação humana do passo 8** — abra `https://staging.olumechat.com.br/version.json`
   no navegador (o Access deixa você passar) e compare `tag` com a do deploy;
-- **o smoke de produção do FIL-101** — lá o domínio é público, então a mesma conferência
-  roda automática.
+- **o smoke de produção (FIL-101)** — lá o domínio é público, então a mesma conferência
+  roda automática, na seção seguinte.
 
-Produção continua fora deste workflow, de propósito: promoção é o FIL-101, sob aprovação.
+Produção continua fora deste workflow, de propósito: promoção é um workflow próprio, sob
+aprovação.
 
-### Deploy manual (fallback e produção)
+### Promoção para produção: pelo Actions, sob aprovação (FIL-101)
+
+**Produção não sobe sozinha, e isso é decisão do desenho.** Staging automático e produção
+sob aprovação separam **subir** de **lançar**: fica registrado quem promoveu, quando e qual
+SHA, e existe um momento explícito em que alguém olha para staging e decide.
+
+**Como promover** — Actions → **Deploy produção** → *Run workflow* → informe o **SHA
+validado em staging** (completo ou os 7 primeiros caracteres; ele está no resumo da execução
+do `Deploy staging` e na aba **Environments**) → *Run workflow*. O campo `primeiro` decide
+qual lado sobe antes; deixe em `backend` para promoção normal e use `frontend` para rollback
+(por quê, na seção de rollback abaixo).
+
+Não há build aqui. A imagem existe no GHCR desde que a CI daquele commit ficou verde, e é a
+**mesma** validada em staging — byte a byte. Promover é apontar a aplicação para
+`sha-<curto>` e disparar.
+
+São dois jobs, e a divisão é o que evita chamar alguém para aprovar uma promoção condenada:
+
+1. **`validar`** roda na hora, **não toca em nada** e **não referencia segredo nenhum** —
+   só o token embutido do run: confere o formato do SHA, resolve o commit no repositório,
+   exige que aquele commit tenha um **deploy verificado em staging** e prova que
+   `olumechat-server:sha-<curto>` **e** `olumechat-client-prod:sha-<curto>` existem no
+   GHCR. SHA digitado errado, commit que nunca passou pela CI ou que nunca chegou a
+   staging morrem aqui, antes da aprovação.
+
+   **"Staging antes de produção" virou invariante conferida**, e a evidência é o registro
+   de deployment do ambiente `staging` — não um run verde do `deploy-staging.yml`, que
+   também fica verde quando **dispensa** o deploy. Registro é evidência; run verde é
+   intenção. Rollback continua natural: qualquer registro histórico serve.
+
+   **Nenhum segredo de repositório aqui, e a regra é absoluta.** Um job sem `environment:`
+   roda a partir de qualquer branch, então tudo que ele referencia pode ser lido por quem
+   tem escrita no repositório, sem passar pelo revisor — vale para as credenciais do
+   Coolify e vale para qualquer PAT. Por isso os segredos (`COOLIFY_TOKEN`, `CF_ACCESS_*`)
+   são **do environment `production`**, e por isso até a conferência de que o portão de
+   aprovação existe roda **dentro** do job protegido, como primeiro passo, e não antes
+   dele.
+2. **`promover`** roda no GitHub Environment `production` e **fica parado** esperando o
+   revisor. Depois de aprovado, cada lado é deployado **e provado** antes de o outro
+   começar: grava a tag, dispara, espera o deployment terminar, exige o container
+   `running:healthy` **com a tag** e só então confere pela borda qual versão está sendo
+   servida. Os dois andam juntos de propósito — quando a ordem inverte, o que precisa
+   inverter é o par inteiro.
+
+**Configuração obrigatória, uma vez:** o ambiente `production` precisa existir em Settings →
+Environments com **Required reviewers**. Não é detalhe de conforto: um ambiente que não
+existe o GitHub cria sozinho na primeira execução que o referenciar, **sem regra nenhuma** —
+e a promoção iria direto para produção sem aprovação. Por isso o job `validar` recusa a
+execução enquanto não houver revisor obrigatório configurado.
+
+**O smoke prova versão, não alcance.** Os dois domínios de produção são públicos, então
+tanto a API quanto o frontend são conferidos por HTTP, com a janela de confirmações
+consecutivas do FIL-113:
+
+| Endereço | O que precisa ser verdade |
+|---|---|
+| `api.olumechat.com.br/health/ready` | 200 **e** `versao.sha` = SHA promovido, em 5 respostas consecutivas |
+| `api.olumechat.com.br/health/live` | 200 e a mesma versão |
+| `olumechat.com.br/version.json` | `sha` = SHA promovido, em 5 respostas consecutivas |
+| `olumechat.com.br/` | 200 |
+
+É a diferença prática para staging: lá o frontend fica atrás do Access e só o **container** é
+provado; aqui não sobra lacuna. Alternância entre builds reprova na hora com
+`ROTEAMENTO DIVIDIDO`.
+
+**Três guardas contra a aplicação errada.** Antes de gravar qualquer tag, o workflow exige
+que a aplicação seja do tipo `dockerimage`, que a imagem configurada seja **exatamente** o
+caminho esperado (`ghcr.io/bronze-ff/olumechat-client-prod`, **nunca** a variante
+`-staging`) e que um dos hostnames do domínio configurado seja **exatamente** o de
+produção. As duas comparações são de igualdade de propósito: por sufixo,
+`ghcr.io/outro-dono/olumechat-server` e `staging.olumechat.com.br` passariam. As aplicações
+antigas continuam existindo, paradas e sem domínio: deployar nelas terminaria **verde** sem
+trocar nada do que está no ar.
+
+No fim, o workflow registra um deployment do ambiente `production` apontando para o SHA
+promovido — a aba **Environments** passa a responder "qual commit está em produção?" sem
+ninguém abrir o Coolify.
+
+### Rollback: o mesmo workflow, com um SHA anterior e `primeiro: frontend`
+
+Não existe procedimento separado, e não existe código novo. Tag imutável no registry faz
+"voltar" e "avançar" serem a mesma operação: Actions → **Deploy produção** → o SHA antigo →
+**marque `primeiro: frontend`** → aprovar. Todos os portões continuam valendo — a imagem tem
+que existir, o container tem que ficar saudável, o smoke tem que provar a versão. Minutos, e
+sem rebuild.
+
+**Só a ordem muda, e muda porque o argumento se inverte.** Na promoção normal o backend vai
+primeiro: o frontend novo pode chamar rota que só existe na API nova. No rollback é o
+contrário — voltando, "backend primeiro" deixa a **API velha** no ar enquanto o **frontend
+novo** ainda atende, e é o frontend novo que chama a rota que a API velha não tem. Descer o
+frontend antes encurta essa janela.
+
+Quem escolhe é quem dispara; o workflow **não** tenta deduzir. Deduzir exigiria adivinhar a
+intenção a partir do SHA ("é mais antigo que o que está no ar?"), e errar a adivinhação
+inverteria a ordem de um deploy de produção em silêncio. A promoção já é manual e aprovada:
+quem digita o SHA sabe se está avançando ou voltando.
+
+> **Voltar a imagem NÃO volta a migração.** O entrypoint roda as migrações no boot; o
+> rollback devolve o **código**, não o **schema**. É exatamente por isso que expand/contract
+> é obrigatório: uma release que só adiciona coluna é reversível, uma que remove não é.
+> Reverter banco com cliente escrevendo é o pior cenário possível.
+
+### Deploy manual pela API — emergência apenas
+
+**Não é o caminho normal.** Use quando o Actions estiver indisponível ou o próprio workflow
+estiver quebrado. Pula a aprovação registrada, as guardas de aplicação, o smoke de versão e o
+registro em Environments — ou seja, coloca em produção uma versão que ninguém provou. Depois
+de usar, confira à mão o que o workflow conferiria: `api.olumechat.com.br/health/ready` e
+`olumechat.com.br/version.json` declarando a tag que você acabou de subir.
 
 Coolify → aplicação → Deploy. Ou pela API, de dentro da VPS:
 
@@ -259,10 +376,9 @@ As aplicações antigas — `frontend`/`backend` (`a13t9isqpv2kvk81icw31sd7`,
 com os containers **parados** (`docker stop`) e sem domínio, mantidas como rollback. Apontar um deploy para elas "funciona" sem trocar nada do que está no ar — falha
 silenciosa, a pior categoria.
 
-**Rollback:** com aplicação por imagem, é apontar `docker_registry_image_tag` para um
-`sha-` anterior e disparar. Sem rebuild e sem ambiguidade de cache. Migrações **não** são
-revertidas automaticamente — rollback devolve o código, não o schema (por isso
-expand/contract).
+**Rollback à mão** é a mesma coisa com um `sha-` anterior — e vale a mesma ressalva: só use
+quando o Actions não estiver disponível. O caminho normal é o workflow, que confere o que
+este `curl` não confere.
 
 ### Trocar uma aplicação para o tipo imagem
 
