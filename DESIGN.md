@@ -17,8 +17,10 @@ colors:
   primary-soft: "#EAFBF5"
   signal: "#5BD6AE"
   success: "#16856A"
+  success-on-dark: "#69DAB1"
   warning: "#B76A11"
   danger: "#C83C4A"
+  danger-on-dark: "#FFB4A9"
   info: "#1674A8"
 typography:
   family: "Segoe UI Variable, Segoe UI, ui-sans-serif, system-ui, sans-serif"
@@ -58,6 +60,11 @@ The product should feel complete before it feels expressive. Familiar controls, 
 - `primary` is reserved for primary actions, current navigation, focus, and links. Its soft tint may identify the current section without filling large areas.
 - `signal` appears in the Olume mark and rare brand moments, not destructive actions.
 - `success`, `warning`, `danger`, and `info` always accompany text or icon labels.
+- `success-on-dark` is the text and icon variant for deep-forest surfaces. The standard
+  `success` reaches only 3.94:1 over `ink`; this variant reaches 10.50:1.
+- `danger-on-dark` is the text and icon variant for deep-forest surfaces. The standard
+  `danger` reaches only 3.59:1 over `ink`, while this variant reaches 10.58:1 and keeps
+  error feedback at WCAG AA contrast.
 - `border` is the default divider. Elevation depends on surface contrast and borders, not large shadows.
 
 All text and controls must meet WCAG 2.2 AA contrast against their actual background.
