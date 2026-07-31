@@ -58,6 +58,9 @@ function JanelaBadge({ expiraIso }) {
 
 // Chip do departamento (bolinha colorida + nome) — deixa claro de qual fila é a
 // conversa sem precisar abri-la. Conversa sem departamento (bot/inbox geral) = "Geral".
+// #80978F é um cinza-esverdeado neutro só pra essa bolinha "sem departamento"
+// (não é token nem faz parte da paleta de departamento em Departamentos.jsx) —
+// dot decorativo ao lado de texto em token próprio, não carrega contraste sozinho.
 function DeptoBadge({ nome, cor }) {
   const geral = !nome;
   return (

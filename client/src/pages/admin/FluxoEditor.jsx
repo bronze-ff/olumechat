@@ -4,7 +4,12 @@ import api from '../../services/api';
 import Spinner from '../../components/ui/Spinner';
 import { formatPhone } from '../../utils/formatters';
 
-// Identidade visual por tipo de passo (cor do nó na timeline + chip).
+// Identidade visual por tipo de passo (cor do nó na timeline + chip) — paleta
+// categórica interna do editor de fluxo, não é o estado semântico do produto
+// (mensagem/transferir coincidem com primary/danger por associação intuitiva
+// verde=segue, vermelho=encerra, não por serem os tokens). Auditoria FIL-104:
+// 'menu' (#B7791F) com texto branco no hover dá 3.64:1, abaixo de AA — achado
+// correlato registrado fora do escopo deste ticket, ver PR.
 const TIPOS = [
   { id: 'mensagem', rotulo: 'Mensagem', icone: '💬', cor: '#1F7A60', desc: 'Envia um texto e segue pro próximo passo' },
   { id: 'menu', rotulo: 'Menu', icone: '🔢', cor: '#B7791F', desc: 'Cliente escolhe digitando o número' },
@@ -489,6 +494,9 @@ export default function FluxoEditor({ fluxoId, onClose, onSaved }) {
         {/* Coluna direita: preview em moldura de celular */}
         <aside className="hidden md:flex w-[400px] shrink-0 items-center justify-center p-5 bg-paper-200/60 border-l border-black/[0.05]">
           <div className="w-full max-w-[340px] h-[640px] max-h-full rounded-[2rem] bg-ink-950 p-[10px] shadow-2xl flex flex-col">
+            {/* #e5ddd3 e #d9fdd3 abaixo replicam de propósito o wallpaper e a
+                bolha do WhatsApp real (não são cor da Olume) — é o preview
+                "como o cliente vai ver", tem que parecer o app dele. */}
             <div className="rounded-[1.5rem] overflow-hidden flex-1 flex flex-col bg-[#e5ddd3]">
               {/* Header do chat */}
               <div className="shrink-0 bg-ink-900 text-white px-3 py-2.5 flex items-center gap-2.5">

@@ -7,15 +7,15 @@ export function BrandMark({ className = 'w-8 h-8', inverse = false }) {
         cy="29.5"
         r="21.5"
         fill="none"
-        stroke={inverse ? '#5BD6AE' : '#1F7A60'}
+        style={{ stroke: inverse ? 'var(--olume-signal)' : 'var(--olume-primary)' }}
         strokeWidth="9"
       />
       <path
         className={inverse ? '' : 'brand-mark-fill'}
         d="M16.6 44.6 12.4 58l14.2-7.5Z"
-        fill={inverse ? '#5BD6AE' : '#1F7A60'}
+        style={{ fill: inverse ? 'var(--olume-signal)' : 'var(--olume-primary)' }}
       />
-      <circle cx="32" cy="29.5" r="5" fill="#5BD6AE" />
+      <circle cx="32" cy="29.5" r="5" style={{ fill: 'var(--olume-signal)' }} />
     </svg>
   );
 }

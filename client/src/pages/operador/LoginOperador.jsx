@@ -40,7 +40,7 @@ export default function LoginOperador() {
       <section className="hidden lg:flex bg-ink-950 text-white p-10 xl:p-12 flex-col">
         <Brand inverse product={false} />
         <div className="mt-auto mb-auto max-w-md">
-          <span className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-[#5BD6AE]/35 bg-[#5BD6AE]/10 text-xs font-semibold text-[#7BE0C2]">
+          <span className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-brand-400/35 bg-brand-400/10 text-xs font-semibold text-brand-400">
             <Icon name="shield" size={15} />
             Acesso interno restrito
           </span>

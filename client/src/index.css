@@ -5,10 +5,23 @@
 @layer base {
   :root {
     color-scheme: light;
+    /* --olume-*: identidade fixa da marca (FIL-104) — ao contrário de
+       --color-*, NUNCA são redefinidas em html[data-theme="dark"]. Servem
+       pra superfície permanentemente escura (sidebar do operador, marca,
+       landing) onde o valor tem que ser idêntico nos dois temas do app. */
     --olume-ink: #071a15;
     --olume-ink-strong: #0b100e;
+    --olume-ink-muted: #4d625c;
+    --olume-neutral-soft: #778f87;
+    --olume-canvas: #f3f8f6;
+    --olume-surface-subtle: #e9efea;
+    --olume-border: #d3e0db;
+    --olume-border-strong: #bfd0ca;
     --olume-primary: #1f7a60;
+    --olume-primary-hover: #17664f;
+    --olume-primary-soft: #eafbf5;
     --olume-signal: #5bd6ae;
+    --olume-success: #16856a;
     --color-surface: 255 255 255;
     --color-ink-950: 7 26 21;
     --color-ink-900: 11 29 24;
@@ -105,11 +118,11 @@
 }
 
 html[data-theme="dark"] .brand-mark-stroke {
-  stroke: #5bd6ae;
+  stroke: var(--olume-signal);
 }
 
 html[data-theme="dark"] .brand-mark-fill {
-  fill: #5bd6ae;
+  fill: var(--olume-signal);
 }
 
 html[data-theme="dark"] {
@@ -352,7 +365,7 @@ html[data-theme="dark"] .text-purple-700 { color: rgb(var(--status-purple-text))
 }
 
 .product-sidebar {
-  background: #071a15;
+  background: var(--olume-ink);
 }
 
 /* Sidebar do produto é sempre escura (claro ou dark mode do app) — thumb
@@ -466,8 +479,8 @@ html {
 .landing-highlight {
   display: inline;
   padding-inline: 0.055em;
-  color: #071a15;
-  background: #5bd6ae;
+  color: var(--olume-ink);
+  background: var(--olume-signal);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
@@ -492,10 +505,10 @@ html {
 
 .landing-product-frame {
   overflow: hidden;
-  border: 1px solid #bfd0ca;
+  border: 1px solid var(--olume-border-strong);
   border-radius: var(--landing-radius-surface);
-  background: #f3f8f6;
-  color: #071a15;
+  background: var(--olume-canvas);
+  color: var(--olume-ink);
 }
 
 .landing-product-topbar {
@@ -503,7 +516,7 @@ html {
   height: 38px;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #d3e0db;
+  border-bottom: 1px solid var(--olume-border);
   padding-inline: 12px;
   background: #fff;
   font-size: 10px;
@@ -516,8 +529,8 @@ html {
   align-items: center;
   justify-content: center;
   border-radius: var(--landing-radius-control);
-  background: #071a15;
-  color: #5bd6ae;
+  background: var(--olume-ink);
+  color: var(--olume-signal);
   font-size: 11px;
   font-weight: 800;
 }
@@ -525,32 +538,32 @@ html {
 .landing-dark-input {
   width: 100%;
   min-height: 48px;
-  border: 1px solid #4d625c;
+  border: 1px solid var(--olume-ink-muted);
   border-radius: var(--landing-radius-control);
   background: var(--olume-ink-strong);
   padding: 0.75rem 0.875rem;
-  color: #f3f8f6;
+  color: var(--olume-canvas);
   font-size: 0.875rem;
   transition: border-color var(--landing-motion), background-color var(--landing-motion);
 }
 
 .landing-dark-input::placeholder {
-  color: #bfd0ca;
+  color: var(--olume-border-strong);
   opacity: 1;
 }
 
 .landing-dark-input:hover {
-  border-color: #778f87;
+  border-color: var(--olume-neutral-soft);
 }
 
 .landing-dark-input:focus {
-  border-color: #1f7a60;
-  background: #071a15;
+  border-color: var(--olume-primary);
+  background: var(--olume-ink);
 }
 
 .landing-dark-input option {
   background: var(--olume-ink-strong);
-  color: #f3f8f6;
+  color: var(--olume-canvas);
 }
 
 /* Landing premium — a conversa é a peça central da narrativa. */
@@ -563,13 +576,13 @@ html {
 .landing-preview-queue {
   --landing-preview-step-size: 31px;
   --landing-preview-step-row: 64px;
-  border-right: 1px solid #d3e0db;
-  background: #f3f8f6;
+  border-right: 1px solid var(--olume-border);
+  background: var(--olume-canvas);
   padding: 18px 14px;
 }
 
 .landing-preview-label {
-  color: #4d625c;
+  color: var(--olume-ink-muted);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -586,7 +599,7 @@ html {
   width: 1px;
   height: calc(var(--landing-preview-step-row) - var(--landing-preview-step-size));
   transform: translateX(-50%);
-  background: #bfd0ca;
+  background: var(--olume-border-strong);
   content: "";
   pointer-events: none;
 }
@@ -609,7 +622,7 @@ html {
 
 .landing-preview-queue button:hover,
 .landing-preview-queue button:focus-visible {
-  background: #e9efea;
+  background: var(--olume-surface-subtle);
 }
 
 .landing-preview-step {
@@ -621,10 +634,10 @@ html {
   flex: 0 0 var(--landing-preview-step-size);
   align-items: center;
   justify-content: center;
-  border: 1px solid #bfd0ca;
+  border: 1px solid var(--olume-border-strong);
   border-radius: 50%;
-  background: #f3f8f6;
-  color: #4d625c;
+  background: var(--olume-canvas);
+  color: var(--olume-ink-muted);
   font-size: 9px;
   font-weight: 800;
   transition: background-color var(--landing-motion), border-color var(--landing-motion), color var(--landing-motion);
@@ -636,27 +649,27 @@ html {
 }
 
 .landing-preview-queue strong {
-  color: #071a15;
+  color: var(--olume-ink);
   font-size: 9px;
 }
 
 .landing-preview-queue small {
   margin-top: 2px;
-  color: #4d625c;
+  color: var(--olume-ink-muted);
   font-size: 7px;
   line-height: 1.35;
 }
 
 .landing-preview-queue .is-current .landing-preview-step {
-  border-color: #1f7a60;
-  background: #1f7a60;
+  border-color: var(--olume-primary);
+  background: var(--olume-primary);
   color: #fff;
 }
 
 .landing-preview-queue .is-done .landing-preview-step {
-  border-color: #1f7a60;
-  background: #eafbf5;
-  color: #17664f;
+  border-color: var(--olume-primary);
+  background: var(--olume-primary-soft);
+  color: var(--olume-primary-hover);
 }
 
 .landing-preview-thread {
@@ -671,7 +684,7 @@ html {
   min-height: 60px;
   align-items: center;
   gap: 9px;
-  border-bottom: 1px solid #d3e0db;
+  border-bottom: 1px solid var(--olume-border);
   padding: 10px 13px;
 }
 
@@ -683,7 +696,7 @@ html {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: #071a15;
+  background: var(--olume-ink);
   color: #fff;
 }
 
@@ -698,16 +711,16 @@ html {
 
 .landing-preview-thread-head small {
   margin-top: 2px;
-  color: #4d625c;
+  color: var(--olume-ink-muted);
   font-size: 7px;
 }
 
 .landing-preview-state {
   margin-left: auto;
   border-radius: var(--landing-radius-control);
-  background: #eafbf5;
+  background: var(--olume-primary-soft);
   padding: 5px 7px;
-  color: #17664f;
+  color: var(--olume-primary-hover);
   font-size: 7px;
   font-weight: 700;
 }
@@ -716,7 +729,7 @@ html {
   display: flex;
   flex: 1;
   flex-direction: column;
-  background: #f3f8f6;
+  background: var(--olume-canvas);
   padding: 24px 18px 18px;
 }
 
@@ -730,14 +743,14 @@ html {
 
 .landing-preview-message.is-customer {
   background: #fff;
-  color: #071a15;
+  color: var(--olume-ink);
 }
 
 .landing-preview-message.is-team {
   margin-top: 14px;
   margin-left: auto;
-  background: #eafbf5;
-  color: #071a15;
+  background: var(--olume-primary-soft);
+  color: var(--olume-ink);
   opacity: 0.38;
   transform: translateY(5px);
   transition: opacity var(--landing-motion), transform var(--landing-motion);
@@ -751,11 +764,11 @@ html {
 .landing-preview-event {
   align-self: center;
   margin-top: 22px;
-  border: 1px solid #bfd0ca;
+  border: 1px solid var(--olume-border-strong);
   border-radius: var(--landing-radius-control);
   background: #fff;
   padding: 7px 10px;
-  color: #4d625c;
+  color: var(--olume-ink-muted);
   font-size: 7px;
   font-weight: 650;
   text-align: center;
@@ -766,7 +779,7 @@ html {
   min-height: 52px;
   align-items: center;
   gap: 8px;
-  border-top: 1px solid #d3e0db;
+  border-top: 1px solid var(--olume-border);
   padding: 9px 11px;
 }
 
@@ -774,7 +787,7 @@ html {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  color: #4d625c;
+  color: var(--olume-ink-muted);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -787,12 +800,12 @@ html {
   align-items: center;
   justify-content: center;
   border-radius: var(--landing-radius-control);
-  background: #e9efea;
-  color: #778f87;
+  background: var(--olume-surface-subtle);
+  color: var(--olume-neutral-soft);
 }
 
 .landing-preview-send.is-ready {
-  background: #1f7a60;
+  background: var(--olume-primary);
   color: #fff;
 }
 
@@ -800,36 +813,36 @@ html {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  border-left: 1px solid #d3e0db;
-  background: #f3f8f6;
+  border-left: 1px solid var(--olume-border);
+  background: var(--olume-canvas);
   padding: 18px 14px;
 }
 
 .landing-preview-context strong {
   display: block;
   margin-top: 5px;
-  color: #071a15;
+  color: var(--olume-ink);
   font-size: 10px;
 }
 
 .landing-preview-context dl {
   margin-top: 20px;
-  border-top: 1px solid #d3e0db;
+  border-top: 1px solid var(--olume-border);
 }
 
 .landing-preview-context dl > div {
-  border-bottom: 1px solid #d3e0db;
+  border-bottom: 1px solid var(--olume-border);
   padding-block: 10px;
 }
 
 .landing-preview-context dt {
-  color: #4d625c;
+  color: var(--olume-ink-muted);
   font-size: 7px;
 }
 
 .landing-preview-context dd {
   margin-top: 3px;
-  color: #071a15;
+  color: var(--olume-ink);
   font-size: 8px;
   font-weight: 700;
 }
@@ -837,9 +850,9 @@ html {
 .landing-preview-note {
   margin-top: auto;
   border-radius: var(--landing-radius-control);
-  background: #eafbf5;
+  background: var(--olume-primary-soft);
   padding: 9px;
-  color: #1f7a60;
+  color: var(--olume-primary);
   font-size: 7px;
   line-height: 1.5;
 }
@@ -848,7 +861,7 @@ html {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #4d625c;
+  color: var(--olume-ink-muted);
   font-size: 8px;
 }
 
@@ -856,7 +869,7 @@ html {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #16856a;
+  background: var(--olume-success);
 }
 
 .landing-product-wrap figcaption {
@@ -901,8 +914,8 @@ html[data-theme="dark"] .landing-proof-strip strong {
 
 .landing-pain-section,
 .landing-demo-section {
-  background: #071a15;
-  color: #f3f8f6;
+  background: var(--olume-ink);
+  color: var(--olume-canvas);
 }
 
 .landing-pain-story {
@@ -916,7 +929,7 @@ html[data-theme="dark"] .landing-proof-strip strong {
 .landing-pain-story span {
   min-height: 132px;
   padding: 28px 24px;
-  color: #e9efea;
+  color: var(--olume-surface-subtle);
   font-size: clamp(1.1rem, 2vw, 1.55rem);
   font-weight: 700;
   line-height: 1.3;
@@ -930,7 +943,7 @@ html[data-theme="dark"] .landing-proof-strip strong {
 .landing-resolution {
   margin-top: 30px;
   max-width: 720px;
-  color: #bfd0ca;
+  color: var(--olume-border-strong);
   font-size: 16px;
   line-height: 1.7;
 }
@@ -980,7 +993,7 @@ html[data-theme="dark"] .landing-proof-strip strong {
 }
 
 html[data-theme="dark"] .landing-journey li > span {
-  background: #1f7a60;
+  background: var(--olume-primary);
   color: #fff;
 }
 

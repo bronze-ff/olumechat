@@ -4,6 +4,10 @@ const ThemeContext = createContext(null);
 const STORAGE_KEY = 'olume:tema';
 const LEGACY_STORAGE_KEY = 'falatta:tema';
 
+// `amostra` precisa do valor literal de CADA tema pra montar o preview lado a
+// lado no seletor (FIL-104) — usar var() mostraria só o tema ativo nos dois
+// quadradinhos. Valores batem com os tokens de DESIGN.md (canvas/surface-subtle/
+// primary no claro; ink/surface/signal no escuro).
 export const THEMES = [
   { id: 'light', nome: 'Claro', descricao: 'Mineral, preciso e confortável', amostra: ['#f3f8f6', '#e9efea', '#1f7a60'] },
   { id: 'dark', nome: 'Escuro', descricao: 'Carvão esverdeado e menta', amostra: ['#071a15', '#111d1a', '#5bd6ae'] },
