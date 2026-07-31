@@ -249,22 +249,25 @@ Não há build aqui. A imagem existe no GHCR desde que a CI daquele commit ficou
 
 São dois jobs, e a divisão é o que evita chamar alguém para aprovar uma promoção condenada:
 
-1. **`validar`** roda na hora, **não toca em nada** e **não vê nenhum segredo de deploy**:
-   confere o formato do SHA, resolve o commit no repositório, exige que o ambiente
-   `production` tenha revisor obrigatório, exige que aquele commit tenha um **deploy
-   verificado em staging** e prova que `olumechat-server:sha-<curto>` **e**
-   `olumechat-client-prod:sha-<curto>` existem no GHCR. SHA digitado errado, commit que
-   nunca passou pela CI ou que nunca chegou a staging morrem aqui, antes da aprovação.
+1. **`validar`** roda na hora, **não toca em nada** e **não referencia segredo nenhum** —
+   só o token embutido do run: confere o formato do SHA, resolve o commit no repositório,
+   exige que aquele commit tenha um **deploy verificado em staging** e prova que
+   `olumechat-server:sha-<curto>` **e** `olumechat-client-prod:sha-<curto>` existem no
+   GHCR. SHA digitado errado, commit que nunca passou pela CI ou que nunca chegou a
+   staging morrem aqui, antes da aprovação.
 
    **"Staging antes de produção" virou invariante conferida**, e a evidência é o registro
    de deployment do ambiente `staging` — não um run verde do `deploy-staging.yml`, que
    também fica verde quando **dispensa** o deploy. Registro é evidência; run verde é
    intenção. Rollback continua natural: qualquer registro histórico serve.
 
-   Os segredos (`COOLIFY_TOKEN`, `CF_ACCESS_*`) são **do environment `production`**, não do
-   repositório. A diferença é de segurança, não de arrumação: no nível do repositório eles
-   chegariam a este job, que roda **antes** da aprovação, e quem tem escrita no repositório
-   poderia disparar o workflow de uma branch modificada e lê-los sem passar pelo revisor.
+   **Nenhum segredo de repositório aqui, e a regra é absoluta.** Um job sem `environment:`
+   roda a partir de qualquer branch, então tudo que ele referencia pode ser lido por quem
+   tem escrita no repositório, sem passar pelo revisor — vale para as credenciais do
+   Coolify e vale para qualquer PAT. Por isso os segredos (`COOLIFY_TOKEN`, `CF_ACCESS_*`)
+   são **do environment `production`**, e por isso até a conferência de que o portão de
+   aprovação existe roda **dentro** do job protegido, como primeiro passo, e não antes
+   dele.
 2. **`promover`** roda no GitHub Environment `production` e **fica parado** esperando o
    revisor. Depois de aprovado, cada lado é deployado **e provado** antes de o outro
    começar: grava a tag, dispara, espera o deployment terminar, exige o container

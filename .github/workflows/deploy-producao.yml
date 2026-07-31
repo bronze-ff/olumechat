@@ -20,21 +20,28 @@
 #
 # Dois jobs, e a divisão importa:
 #
-#   `validar`  — roda ANTES da aprovação, não toca em nada e NÃO VÊ SEGREDO DE
-#                DEPLOY. Confere o formato do SHA, resolve o commit no
-#                repositório, exige que o ambiente `production` tenha revisor
-#                obrigatório, exige que aquele commit tenha um deploy
-#                VERIFICADO em staging e prova que as imagens `sha-<curto>`
-#                EXISTEM no GHCR. O erro mais provável deste workflow é SHA
-#                digitado errado ou commit que nunca passou pela CI — e ninguém
-#                deve ser chamado para aprovar uma promoção que já se sabe que
-#                vai falhar.
+#   `validar`  — roda ANTES da aprovação, não toca em nada e NÃO REFERENCIA
+#                NENHUM SEGREDO DE REPOSITÓRIO: só o `github.token` do próprio
+#                run. Confere o formato do SHA, resolve o commit no repositório,
+#                exige que aquele commit tenha um deploy VERIFICADO em staging e
+#                prova que as imagens `sha-<curto>` EXISTEM no GHCR. O erro mais
+#                provável deste workflow é SHA digitado errado ou commit que
+#                nunca passou pela CI — e ninguém deve ser chamado para aprovar
+#                uma promoção que já se sabe que vai falhar.
+#
+#                A regra do "nenhum segredo aqui" é absoluta e custou duas
+#                rodadas de review: um job sem environment roda a partir de
+#                QUALQUER branch, então qualquer segredo que ele referencie pode
+#                ser lido por quem tem escrita no repositório, sem passar pelo
+#                revisor. Vale para credencial de deploy e vale para PAT.
 #
 #   `promover` — roda no GitHub Environment `production`, que exige revisor.
 #                Enquanto o Filippe não aprovar, o job fica parado e produção
-#                não muda. Depois de aprovado, cada lado é deployado E provado
-#                antes de passar para o outro, na ordem de `primeiro:` — com
-#                smoke que PROVA a versão servida nos dois domínios públicos.
+#                não muda. Antes de qualquer coisa, confere que o portão de
+#                aprovação existe mesmo e que os segredos estão lá; depois cada
+#                lado é deployado E provado antes de passar para o outro, na
+#                ordem de `primeiro:` — com smoke que PROVA a versão servida nos
+#                dois domínios públicos.
 name: Deploy produção
 
 on:
@@ -104,6 +111,12 @@ jobs:
       contents: read
       # Para consultar o manifesto das imagens no GHCR.
       packages: read
+      # Para ler o histórico de deployments do ambiente `staging` — a evidência
+      # de que este commit passou por lá. Declarar um bloco `permissions:` zera
+      # tudo que não está listado, então a ausência desta linha não daria um erro
+      # de configuração: daria 403 na API e mataria TODA promoção, mesmo com
+      # staging verde.
+      deployments: read
     outputs:
       completo: ${{ steps.entrada.outputs.completo }}
       curto: ${{ steps.entrada.outputs.curto }}
@@ -185,105 +198,6 @@ jobs:
           echo "Assunto: ${MENSAGEM}"
           echo "Tag das imagens: sha-${CURTO}"
 
-      # A aprovação humana é o portão inteiro deste workflow, e ela NÃO mora
-      # aqui: mora na configuração do GitHub Environment `production`.
-      #
-      # Um ambiente que não existe não bloqueia nada — o GitHub o cria sozinho
-      # na primeira execução que o referenciar, SEM regra nenhuma, e o job segue
-      # direto para produção. O mesmo vale para um ambiente que existe mas perdeu
-      # o revisor obrigatório. Nos dois casos o workflow pareceria funcionar, e a
-      # única coisa que teria sumido é justamente a que ele existe para garantir.
-      #
-      # Por isso o portão é conferido ANTES, e a falta dele é vermelho com a
-      # receita, não silêncio.
-      # FALHA FECHADA, sem exceção (review do Codex no PR #63). Só um caminho
-      # segue: HTTP 200 declarando pelo menos um revisor obrigatório. Erro de
-      # rede, 403, 5xx, JSON sem o campo — tudo reprova.
-      #
-      # A versão anterior deixava "não consegui ler" seguir com `::warning::`,
-      # argumentando que quem segura o job é a cláusula `environment:`. O
-      # argumento se desfaz no cenário que importa: se a regra foi REMOVIDA (ou o
-      # ambiente apagado), a cláusula `environment:` não segura nada — e é
-      # exatamente aí que a leitura pode falhar. O aviso viraria uma linha amarela
-      # no meio do log enquanto a promoção seguia direto para produção sem
-      # aprovação. Portão que some em silêncio é pior que portão que trava: pular
-      # uma promoção custa minutos, promover sem aprovação custa produção.
-      #
-      # Se o GITHUB_TOKEN não alcançar o endpoint, a saída é cadastrar
-      # GH_ENVIRONMENTS_TOKEN (ver env abaixo) — não afrouxar a guarda.
-      - name: Exigir que o ambiente production tenha revisor obrigatório
-        env:
-          # O token embutido basta para ler a configuração de um ambiente do
-          # próprio repositório. O segredo opcional é o plano B: se algum dia o
-          # GitHub passar a exigir uma permissão que `permissions:` não concede
-          # (a lista não tem nada específico de ambientes), cadastre um PAT
-          # clássico com escopo `repo` em GH_ENVIRONMENTS_TOKEN e o passo volta a
-          # ler. Ausente, cai no token embutido — nada a fazer no caso normal.
-          GH_TOKEN: ${{ secrets.GH_ENVIRONMENTS_TOKEN || github.token }}
-        run: |
-          set -euo pipefail
-
-          CORPO="$(mktemp)"
-          trap 'rm -f "$CORPO"' EXIT
-
-          RECEITA="Settings → Environments → production → marque 'Required reviewers' e adicione o revisor (crie o ambiente com esse nome exato, se não existir). Sem isso o GitHub roda a promoção SEM aprovação."
-          PLANO_B="Se o motivo for permissão do token, cadastre um PAT clássico com escopo 'repo' no segredo GH_ENVIRONMENTS_TOKEN — o passo passa a usá-lo. NÃO remova esta conferência: ela é o que garante que o portão de aprovação existe."
-
-          # Retentativa só no que é transitório: sem resposta, rate limit e 5xx.
-          # Um 4xx é definitivo — repetir só atrasaria o vermelho.
-          codigo=""
-          espera=5
-          for tentativa in 1 2 3; do
-            codigo="$(curl --silent --show-error --max-time 30 \
-              --output "$CORPO" --write-out '%{http_code}' \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header "Accept: application/vnd.github+json" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/environments/production" || true)"
-            codigo="${codigo:-000}"
-            case "$codigo" in
-              000|429|5??)
-                if [ "$tentativa" -lt 3 ]; then
-                  echo "Tentativa ${tentativa}: HTTP ${codigo} ao ler o ambiente — nova tentativa em ${espera}s."
-                  sleep "$espera"
-                  espera=$(( espera * 2 ))
-                fi ;;
-              *) break ;;
-            esac
-          done
-
-          case "$codigo" in
-            200) ;;
-            404)
-              echo "::error::o ambiente 'production' não existe neste repositório (HTTP 404). ${RECEITA}"
-              exit 1 ;;
-            401|403)
-              echo "::error::o GitHub recusou a leitura da configuração do ambiente 'production' (HTTP ${codigo}). Sem confirmar que a aprovação obrigatória está de pé, a promoção NÃO segue — se a regra tiver sido removida, seguir aqui colocaria a versão em produção sem ninguém aprovar. ${PLANO_B}"
-              exit 1 ;;
-            *)
-              echo "::error::não consegui ler a configuração do ambiente 'production' (HTTP ${codigo} após 3 tentativas). A guarda falha FECHADA: 'não sei se o portão existe' não é permissão para promover. Nada foi tocado — dispare de novo. ${PLANO_B}"
-              exit 1 ;;
-          esac
-
-          # `jq -e` reprova corpo que não é JSON: um HTML de proxy com 200 não
-          # pode virar "0 revisores" nem, pior, passar despercebido.
-          if ! jq -e . >/dev/null 2>&1 < "$CORPO"; then
-            echo "::error::a leitura do ambiente 'production' devolveu 200, mas o corpo não é JSON — não dá para confirmar o revisor obrigatório. A guarda falha FECHADA. Início da resposta: $(head -c 200 "$CORPO" | tr '\n' ' ')"
-            exit 1
-          fi
-
-          REVISORES="$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' "$CORPO")"
-          case "$REVISORES" in
-            ''|*[!0-9]*)
-              echo "::error::a resposta do ambiente 'production' não trouxe as regras de proteção num formato que eu saiba ler ('${REVISORES}'). A guarda falha FECHADA: formato que não sei interpretar não é permissão para promover."
-              exit 1 ;;
-          esac
-          if [ "$REVISORES" -lt 1 ]; then
-            echo "::error::o ambiente 'production' existe, mas NÃO tem revisor obrigatório configurado — a promoção iria direto para produção, sem ninguém aprovar. ${RECEITA}"
-            exit 1
-          fi
-          echo "Ambiente 'production' com ${REVISORES} revisor(es) obrigatório(s): a promoção vai parar para aprovação."
-
       # "STAGING ANTES DE PRODUÇÃO" é a regra de ouro do WORKFLOW.md §0, e até
       # aqui ela era só disciplina: o preflight aceitava qualquer SHA cujas
       # imagens existissem no GHCR — inclusive um commit que nunca foi exercitado
@@ -340,10 +254,15 @@ jobs:
           SEM_STAGING="Promova apenas SHAs que passaram por staging: deixe o deploy automático rodar (merge na main com a CI verde) e valide lá antes. Em emergência, o procedimento manual está em docs/AMBIENTES.md — mas aí a responsabilidade de conferir o que subiu é sua."
 
           codigo="$(buscar "${API}/deployments?environment=staging&sha=${SHA}&per_page=100")"
-          if [ "$codigo" != "200" ]; then
-            echo "::error::não consegui ler o histórico de deploys de staging (HTTP ${codigo} após 3 tentativas). A guarda falha FECHADA: sem confirmar que este SHA passou por staging, a promoção não segue. Nada foi tocado — dispare de novo."
-            exit 1
-          fi
+          case "$codigo" in
+            200) ;;
+            401|403)
+              echo "::error::o GitHub recusou a leitura do histórico de deploys (HTTP ${codigo}). Quase certamente falta 'deployments: read' no bloco 'permissions' deste job: declarar um bloco zera tudo que não está listado, então a permissão some sem dar erro de configuração — dá 403 aqui. Nada foi tocado."
+              exit 1 ;;
+            *)
+              echo "::error::não consegui ler o histórico de deploys de staging (HTTP ${codigo} após 3 tentativas). A guarda falha FECHADA: sem confirmar que este SHA passou por staging, a promoção não segue. Nada foi tocado — dispare de novo."
+              exit 1 ;;
+          esac
 
           if ! jq -e . >/dev/null 2>&1 < "$CORPO"; then
             echo "::error::o histórico de deploys de staging respondeu 200 com corpo que não é JSON. A guarda falha FECHADA. Início: $(head -c 200 "$CORPO" | tr '\n' ' ')"
@@ -379,7 +298,13 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # `github.token`, e não `secrets.GITHUB_TOKEN`: é o MESMO valor, mas
+          # escrito assim a regra deste job fica literal e sem exceção — nenhum
+          # `secrets.*` em job sem environment. O token embutido não é segredo de
+          # repositório (nasce e morre com o run, e o alcance dele é o bloco
+          # `permissions:` acima), mas uma regra com uma exceção "que não conta" é
+          # uma regra que alguém vai esticar depois.
+          password: ${{ github.token }}
 
       # AC 3 do ticket: SHA inexistente no GHCR falha ANTES de tocar em produção.
       # Aqui é mais forte do que o pedido — falha antes até de pedir aprovação.
@@ -487,6 +412,93 @@ jobs:
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
+      # ASSERÇÃO DE SANIDADE do portão de aprovação — e ela mora AQUI, dentro do
+      # job protegido, não antes dele.
+      #
+      # Ela já esteve no `validar`, onde chegava antes da aprovação. O problema
+      # não era a checagem: era o token. Ler a configuração de um ambiente pode
+      # exigir permissão que `permissions:` não concede, e a saída que eu tinha
+      # posto — um PAT no segredo `GH_ENVIRONMENTS_TOKEN` — colocava um segredo de
+      # repositório num job SEM environment. Ou seja, reabria exatamente o buraco
+      # que a review anterior fechou para as credenciais do Coolify: quem tem
+      # escrita no repositório dispara o workflow de uma branch modificada e lê o
+      # PAT, sem passar pelo revisor. Regra que ficou: JOB PRÉ-APROVAÇÃO NÃO
+      # REFERENCIA NENHUM SEGREDO DE REPOSITÓRIO. Só `github.token`.
+      #
+      # Aqui dentro ela usa só o token embutido do run e continua valendo a pena:
+      # o portão de verdade é a cláusula `environment:` do GitHub, mas ele some em
+      # silêncio se alguém apagar o ambiente (o GitHub recria sozinho, SEM regra
+      # nenhuma, na primeira execução que o referenciar) ou remover o revisor. Nos
+      # dois casos o job teria começado sem aprovação — e este passo, sendo o
+      # PRIMEIRO, para antes de tocar em qualquer coisa. Produção intacta.
+      #
+      # FALHA FECHADA. "Não sei se o portão existe" não é permissão para promover.
+      - name: Conferir que o portão de aprovação existe de verdade
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+
+          RECEITA="Settings → Environments → production → marque 'Required reviewers' e adicione o revisor (crie o ambiente com esse nome exato, se não existir). Sem isso o GitHub roda a promoção SEM aprovação."
+
+          # Retentativa só no que é transitório: sem resposta, rate limit e 5xx.
+          # Um 4xx é definitivo — repetir só atrasaria o vermelho.
+          codigo=""
+          espera=5
+          for tentativa in 1 2 3; do
+            codigo="$(curl --silent --show-error --max-time 30 \
+              --output "$CORPO" --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/environments/production" || true)"
+            codigo="${codigo:-000}"
+            case "$codigo" in
+              000|429|5??)
+                if [ "$tentativa" -lt 3 ]; then
+                  echo "Tentativa ${tentativa}: HTTP ${codigo} ao ler o ambiente — nova tentativa em ${espera}s."
+                  sleep "$espera"
+                  espera=$(( espera * 2 ))
+                fi ;;
+              *) break ;;
+            esac
+          done
+
+          case "$codigo" in
+            200) ;;
+            404)
+              echo "::error::o ambiente 'production' não existe neste repositório (HTTP 404) — ou seja, este job começou SEM aprovação nenhuma, porque o GitHub cria o ambiente sozinho, sem regra, quando um job o referencia. Nada foi tocado em produção. ${RECEITA}"
+              exit 1 ;;
+            401|403)
+              echo "::error::o GitHub recusou a leitura da configuração do ambiente 'production' (HTTP ${codigo}), então não dá para confirmar que a aprovação obrigatória está de pé. A guarda falha FECHADA e nada foi tocado em produção. Se o motivo for permissão do GITHUB_TOKEN para este endpoint, a correção é remover ESTA conferência do workflow — nunca cadastrar um PAT, que é segredo de repositório e volta a poder ser lido fora do portão."
+              exit 1 ;;
+            *)
+              echo "::error::não consegui ler a configuração do ambiente 'production' (HTTP ${codigo} após 3 tentativas). A guarda falha FECHADA: 'não sei se o portão existe' não é permissão para promover. Nada foi tocado em produção — dispare de novo."
+              exit 1 ;;
+          esac
+
+          # `jq -e` reprova corpo que não é JSON: um HTML de proxy com 200 não
+          # pode virar "0 revisores" nem, pior, passar despercebido.
+          if ! jq -e . >/dev/null 2>&1 < "$CORPO"; then
+            echo "::error::a leitura do ambiente 'production' devolveu 200, mas o corpo não é JSON — não dá para confirmar o revisor obrigatório. A guarda falha FECHADA. Início da resposta: $(head -c 200 "$CORPO" | tr '\n' ' ')"
+            exit 1
+          fi
+
+          REVISORES="$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' "$CORPO")"
+          case "$REVISORES" in
+            ''|*[!0-9]*)
+              echo "::error::a resposta do ambiente 'production' não trouxe as regras de proteção num formato que eu saiba ler ('${REVISORES}'). A guarda falha FECHADA: formato que não sei interpretar não é permissão para promover."
+              exit 1 ;;
+          esac
+          if [ "$REVISORES" -lt 1 ]; then
+            echo "::error::o ambiente 'production' existe, mas NÃO tem revisor obrigatório configurado — este job começou sem ninguém aprovar. Nada foi tocado em produção. ${RECEITA}"
+            exit 1
+          fi
+          echo "Portão confirmado: ambiente 'production' com ${REVISORES} revisor(es) obrigatório(s)."
+
       # Este passo mora AQUI, e não no `validar`, porque tocar nos segredos é o
       # que o portão de aprovação precisa cobrir (review do Codex no PR #63).
       # O preço é conhecido: um segredo faltando só aparece depois da aprovação.
