@@ -37,6 +37,15 @@ O humano faz três cliques e uma validação. Tudo entre 5 e 11 corre sozinho.
 
 ### O que validar no passo 8
 
+**Antes de qualquer coisa, confirme que você está olhando a versão nova.** A API já é
+provada automaticamente (o deploy falha se `api-staging.olumechat.com.br/health/ready` não
+declarar o commit deployado). O **frontend não é** — a landing de staging está atrás do
+Cloudflare Access sem exceção de caminho, e abrir uma só para o smoke trocaria uma garantia
+por um risco. Então abra `https://staging.olumechat.com.br/version.json` no navegador (o
+Access deixa você passar) e compare `tag` com a tag do deploy — ela está no resumo da
+execução do workflow. Divergiu, ou veio `"origem": "desconhecida"`? **Pare**: o que você
+validaria a seguir seria outra versão. Detalhe em [`AMBIENTES.md`](AMBIENTES.md).
+
 - **Funcionalidade nova** — exercitar o caminho novo. O banco de staging é
   outro, então pode criar dado à vontade; nada disso aparece em produção.
 - **Landing page** — abrir `staging.olumechat.com.br`, conferir o visual e
