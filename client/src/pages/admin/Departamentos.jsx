@@ -4,6 +4,11 @@ import api from '../../services/api';
 import Spinner from '../../components/ui/Spinner';
 import { useAuth } from '../../context/AuthContext';
 
+// Paleta categórica pra identificar departamentos (não é estado semântico —
+// não usa os tokens success/warning/danger/info do DESIGN.md). Mesma paleta
+// em components/TagsConversa.jsx (auditoria FIL-104: #47A987 com texto branco
+// dá só 2.88:1, abaixo de AA — achado correlato registrado fora do escopo
+// deste ticket, ver PR).
 const CORES = ['#1F7A60', '#47A987', '#B55343', '#9A6700', '#3E756C', '#65766F'];
 
 export default function Departamentos() {

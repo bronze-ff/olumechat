@@ -2,6 +2,10 @@ import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 
+// Paleta categórica pra identificar tags (não é estado semântico — não usa os
+// tokens success/warning/danger/info do DESIGN.md). Mesma paleta em
+// admin/Departamentos.jsx; se um dia sair daqui, extrair pra um módulo comum
+// em vez de duplicar de novo (auditoria FIL-104).
 const CORES = ['#1F7A60', '#47A987', '#B55343', '#9A6700', '#3E756C', '#65766F'];
 
 // Controle de tags da conversa: mostra as tags atuais (chips) e um seletor
