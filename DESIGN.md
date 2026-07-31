@@ -183,6 +183,29 @@ The public root route is a brand and acquisition surface, not an authenticated p
 - The demonstration form states that it opens the visitor's e-mail client and obtains its destination from `VITE_COMERCIAL_EMAIL`.
 - The public route supports the same Claro and Escuro preferences as every authenticated surface.
 
+## Illustrative UI Mocks vs. Social Proof
+
+Authenticated screens may include illustrative interface previews built from invented
+names, counts, or sample conversations — for example, the Login page's product preview
+panel, which shows "Ana Martins" and a queue count inside a clearly framed device
+mockup. This is legitimate: it depicts what the product looks like to someone who
+already has an account, visibly inside a UI frame, never presented as a fact about the
+company or its customers.
+
+The line that must never be crossed, on any screen, public or authenticated:
+
+- Never an aggregate number presented as a fact about the company (a real-looking
+  dashboard total or count outside a clearly labeled preview).
+- Never a testimonial or quote attributed to a customer.
+- Never a name presented as a real customer, case study, or logo.
+
+A mock stays on the legitimate side only while it is unmistakably an illustration of
+the interface itself. The moment a number, name, or quote could be read as a claim
+about the product or its customers, it falls under the rule established during the
+landing cleanup (PR #49): **nothing presented as fact about the product or its
+customers may be invented.** That rule applies to the whole app, not just the public
+route.
+
 ## Agent Prompt Guide
 
 When extending Olume Chat, begin with the existing workflow and semantic state. Use the divided shell, near-white canvas, white surfaces, operational-green actions, restrained mint signal, Inter typography, 6–10px radii, and border-led depth. Prefer a familiar product pattern over a novel control. Every new component must define keyboard focus, loading, empty, error, and responsive behavior.

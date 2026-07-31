@@ -7,12 +7,17 @@ import { formatPhone } from '../../utils/formatters';
 // Identidade visual por tipo de passo (cor do nó na timeline + chip) — paleta
 // categórica interna do editor de fluxo, não é o estado semântico do produto
 // (mensagem/transferir coincidem com primary/danger por associação intuitiva
-// verde=segue, vermelho=encerra, não por serem os tokens). Auditoria FIL-104:
-// 'menu' (#B7791F) com texto branco no hover dá 3.64:1, abaixo de AA — achado
-// correlato registrado fora do escopo deste ticket, ver PR.
+// verde=segue, vermelho=encerra, não por serem os tokens). Cada cor daqui
+// aparece em DOIS estados que exigem ≥ 4,5:1 (WCAG AA): texto branco sobre a
+// cor sólida (hover do chip) E a própria cor como texto sobre `${cor}0d`
+// composto sobre branco (rótulo da timeline) — o segundo é mais exigente
+// porque o fundo quase-branco reduz o contraste. Foi por isso que 'menu'
+// #B7791F (3,64:1 no hover / 3,44:1 na timeline) virou #96610B (5,24:1 no
+// hover / 4,90:1 na timeline) no FIL-112 — a primeira troca (#A0680E)
+// passava no hover mas só dava 4,39:1 na timeline, achado do review pós-PR.
 const TIPOS = [
   { id: 'mensagem', rotulo: 'Mensagem', icone: '💬', cor: '#1F7A60', desc: 'Envia um texto e segue pro próximo passo' },
-  { id: 'menu', rotulo: 'Menu', icone: '🔢', cor: '#B7791F', desc: 'Cliente escolhe digitando o número' },
+  { id: 'menu', rotulo: 'Menu', icone: '🔢', cor: '#96610B', desc: 'Cliente escolhe digitando o número' },
   { id: 'pergunta', rotulo: 'Pergunta', icone: '❓', cor: '#5B4B8A', desc: 'Captura uma resposta (ex.: código RCA)' },
   { id: 'consulta', rotulo: 'Consulta BD', icone: '🗄️', cor: '#0E7490', desc: 'Valida a resposta no banco (SELECT) e segue por encontrado/não encontrado' },
   { id: 'irfluxo', rotulo: 'Ir para fluxo', icone: '🔗', cor: '#7C3AED', desc: 'Continua o atendimento em OUTRO fluxo (variáveis preservadas)' },
@@ -71,6 +76,8 @@ export default function FluxoEditor({ fluxoId, onClose, onSaved }) {
   const [entrada, setEntrada] = useState('');
   const [simAtivo, setSimAtivo] = useState(false);
   const chatRef = useRef(null);
+
+  const empresa = localStorage.getItem('empresa') || 'Sua empresa';
 
   const numeros = useQuery({ queryKey: ['numeros'], queryFn: () => api.get('/numeros').then((r) => r.data) });
   const fluxosLista = useQuery({ queryKey: ['fluxos'], queryFn: () => api.get('/fluxos').then((r) => r.data) });
@@ -500,9 +507,9 @@ export default function FluxoEditor({ fluxoId, onClose, onSaved }) {
             <div className="rounded-[1.5rem] overflow-hidden flex-1 flex flex-col bg-[#e5ddd3]">
               {/* Header do chat */}
               <div className="shrink-0 bg-ink-900 text-white px-3 py-2.5 flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full navy-gradient flex items-center justify-center font-display font-bold text-xs">M</div>
+                <div className="w-8 h-8 rounded-full navy-gradient flex items-center justify-center font-display font-bold text-xs">{empresa.trim().slice(0, 1).toUpperCase()}</div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-semibold leading-tight truncate">Multicanal Atacado</p>
+                  <p className="text-[13px] font-semibold leading-tight truncate">{empresa}</p>
                   <p className="text-[10px] text-emerald-300 leading-tight">{simAtivo ? 'bot respondendo…' : 'online'}</p>
                 </div>
                 <button onClick={iniciarSim}
