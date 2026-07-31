@@ -95,8 +95,9 @@ A VPS está autenticada no GHCR (`docker login`, credencial em `/root/.docker/co
 workflow `.github/workflows/deploy-staging.yml`, que grava a tag `sha-<commit>` nas duas
 aplicações de staging (backend primeiro, frontend depois), espera cada deployment terminar,
 confere que cada container ficou `running:healthy` **com a tag deployada** e só fica verde
-se `api-staging.olumechat.com.br/health/ready` responder 200. CI vermelha, execução de PR ou
-push em outra branch não disparam nada.
+se `api-staging.olumechat.com.br/health/ready` responder 200 **declarando ser a build que
+acabou de subir** (FIL-113 — ver "Como se prova a versão que está no ar"). CI vermelha,
+execução de PR ou push em outra branch não disparam nada.
 
 O gate de saúde é o `HEALTHCHECK` do Dockerfile, não a configuração da UI do Coolify: o
 sufixo de `running:healthy` vem do `State.Health.Status` do Docker. `running:unhealthy` e
@@ -160,23 +161,70 @@ própria, `api-staging-health`, cobrindo **só** `api-staging.olumechat.com.br/h
 política de service token: sem os cabeçalhos o caminho devolve `403`, e a raiz da API
 continua fechada mesmo com o token.
 
-### O portão está incompleto — leia antes de promover
+### Como se prova a versão que está no ar (FIL-113)
 
-O deploy automático **não prova a versão que staging está servindo**. Isso importa porque é
-exatamente o que a promoção para produção pressupõe.
+`200` **não** prova versão: é compatível com "container velho e saudável" — exatamente o
+incidente da caixa de aviso mais abaixo, em que o deploy terminou verde, o `/health`
+respondia 200 e o mundo recebeu a versão anterior por horas. Provar exige que a **resposta**
+carregue um marcador, e agora ela carrega.
 
-- **`200` não prova versão.** É compatível com "container velho e saudável" — exatamente o
-  incidente da caixa de aviso abaixo. Provar exigiria que a resposta carregasse um marcador
-  de versão; nenhuma carrega hoje. É o **FIL-113**, registrado como **bloqueante do
-  FIL-101**: promover sob aprovação a partir de um staging cuja versão ninguém confirmou é
-  assinar embaixo de uma suposição.
-- **O frontend não é verificado por HTTP.** `staging.olumechat.com.br` está atrás do Access
-  sem exceção de caminho, e abrir buraco na landing de staging só para o smoke trocaria uma
-  garantia por um risco. Ele é coberto só pela conferência de estado no Coolify (container
-  `running:healthy` com a tag deployada), que prova o **container**, não o roteamento.
+**O marcador entra na imagem em tempo de build.** A CI passa `--build-arg
+OLUME_COMMIT_SHA=<commit>`; o `Dockerfile` do backend grava `/app/BUILD_SHA` e o do frontend
+gera `dist/version.json`. Não é variável de ambiente **de propósito**: variável do Coolify é
+configuração — editável e copiada à mão quando uma aplicação é recriada (a receita está
+nesta página) —, e um marcador declarável por fora do build pode mentir. É a mesma distinção
+entre `docker_registry_image_tag` (intenção) e o histórico de deployments (evidência).
 
-Até o FIL-113 entrar, a validação humana do passo 8 da §0 do `WORKFLOW.md` é o que cobre
-essa lacuna — e vale conferir, na tela, que o que você está olhando é mesmo a mudança nova.
+**Formato — trate como contrato estável.** O FIL-101 vai consumi-lo para promover produção.
+O mesmo objeto aparece nos dois lados:
+
+| Onde | Como ler |
+|---|---|
+| API | campo `versao` em `GET /health/live`, `/health/ready` e `/health` (também na resposta `503`) |
+| Frontend | corpo inteiro de `GET /version.json` |
+
+```json
+{ "sha": "0123456…", "curto": "0123456", "tag": "sha-0123456", "origem": "build" }
+{ "sha": null, "curto": null, "tag": null, "origem": "desconhecida" }
+```
+
+`tag` é **exatamente** a tag da imagem no GHCR, para comparar sem derivar nada.
+`desconhecida` — ou o campo ausente — significa "esta build não sabe quem é", e quem
+verifica **deve tratar como falha**: é o sintoma de uma imagem anterior ao FIL-113 ainda
+atendendo, ou de um build feito sem o build-arg. Nunca leia isso como "provavelmente é a
+certa".
+
+**O smoke de staging compara e falha, em duas fases.**
+
+1. **Aquecimento** — recheca até o timeout em vez de reprovar no primeiro 200 divergente:
+   logo depois de o container novo ficar saudável ainda há uma janela em que a borda entrega
+   a resposta do anterior, e vermelho intermitente é vermelho que ninguém lê. Divergência
+   que **persiste** falha, dizendo qual build respondeu.
+2. **Confirmação** — depois do primeiro acerto, exige mais 4 respostas **consecutivas** com
+   o mesmo SHA. Um acerto só não distingue "está servindo a build nova" de "está alternando
+   entre duas builds": no roteamento dividido as respostas se revezam, e sair no primeiro
+   acerto sairia verde exatamente no cenário que este portão existe para pegar. Qualquer
+   regressão nessa janela falha na hora com `ROTEAMENTO DIVIDIDO` — diagnóstico diferente de
+   "ainda subindo", mensagem diferente.
+
+Isso não elimina a chance de N acertos seguidos por sorte (nada elimina, sem controlar o
+balanceamento), mas com respostas alternadas ela cai para ~1/16. O que a segunda fase
+garante é que o portão não sai verde com **uma** amostra.
+
+#### O que continua sem prova: o frontend
+
+`staging.olumechat.com.br` está atrás do Access **sem exceção de caminho**, e abrir uma só
+para o smoke trocaria uma garantia por um risco — está fora do escopo de propósito. Do
+frontend, o workflow prova o **container** (`running:healthy` com a tag deployada), não o
+que o Traefik entrega. O workflow diz isso em voz alta, em `::warning::` e no resumo: a
+lacuna é declarada, nunca convertida em sucesso implícito.
+
+O marcador do frontend existe assim mesmo porque tem dois consumidores reais:
+
+- **a validação humana do passo 8** — abra `https://staging.olumechat.com.br/version.json`
+  no navegador (o Access deixa você passar) e compare `tag` com a do deploy;
+- **o smoke de produção do FIL-101** — lá o domínio é público, então a mesma conferência
+  roda automática.
 
 Produção continua fora deste workflow, de propósito: promoção é o FIL-101, sob aprovação.
 

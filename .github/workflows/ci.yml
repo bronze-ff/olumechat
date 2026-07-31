@@ -167,8 +167,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      # FIL-113: `--build-arg OLUME_COMMIT_SHA` é o que faz a imagem saber qual
+      # commit ela é. Sem ele a imagem sobe com `origem: "desconhecida"` e o
+      # smoke abaixo fica vermelho — de propósito: uma imagem sem marcador
+      # quebra o portão de versão do deploy, e isso tem que aparecer aqui, não
+      # em staging.
       - name: Build imagem do backend
-        run: docker build -t olume-chat-server:ci -f Dockerfile .
+        run: |
+          docker build -t olume-chat-server:ci -f Dockerfile . \
+            --build-arg OLUME_COMMIT_SHA=${{ github.sha }}
       # Segredos dummy DISTINTOS (32+ chars): sem eles, auth/secret.js e
       # operador/segredo.js tentam GERAR e gravar um segredo em
       # /app/server/.env — e a pasta pertence a root (0755), então o node
@@ -199,17 +206,37 @@ jobs:
             -e STORAGE_SIGNING_SECRET="${{ steps.dummy.outputs.storage_signing }}" \
             -e APP_URL=http://127.0.0.1:10000 \
             olume-chat-server:ci
-      - name: Smoke de /health/live
+      # FIL-113: além de "respondeu", este smoke prova que a resposta DIZ QUAL
+      # BUILD respondeu, e que o valor é o commit desta execução. É a garantia
+      # de que o marcador que o deploy vai comparar existe de verdade na imagem
+      # publicada — se alguém remover o build-arg, o cabeçalho de versao.js ou o
+      # campo da resposta, o vermelho aparece no PR, não no ar.
+      - name: Smoke de /health/live (e do marcador de versão)
+        env:
+          SHA_ESPERADO: ${{ github.sha }}
         run: |
+          set -euo pipefail
+          CORPO=""
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:10000/health/live; then
-              echo "[smoke] container respondeu ok"
-              exit 0
+            if CORPO="$(curl -fsS http://127.0.0.1:10000/health/live)"; then
+              echo "[smoke] container respondeu: ${CORPO}"
+              break
             fi
+            CORPO=""
             sleep 2
           done
-          echo "[smoke] container não respondeu em tempo hábil"
-          exit 1
+          if [ -z "$CORPO" ]; then
+            echo "::error::[smoke] container não respondeu em tempo hábil"
+            exit 1
+          fi
+          # `2>/dev/null || true`: corpo que não é JSON vira SERVIDO vazio e cai
+          # na mensagem abaixo, em vez de matar o passo com um erro cru do jq.
+          SERVIDO="$(printf '%s' "$CORPO" | jq -er '.versao.sha // ""' 2>/dev/null || true)"
+          if [ "$SERVIDO" != "$SHA_ESPERADO" ]; then
+            echo "::error::[smoke] a imagem respondeu com versao.sha='${SERVIDO:-<ausente>}', e o esperado era '${SHA_ESPERADO}'. Sem esse marcador correto o smoke de deploy não consegue provar a versão que está no ar (FIL-113) — confira o --build-arg OLUME_COMMIT_SHA no build acima, a gravação de /app/BUILD_SHA no Dockerfile e server/versao.js."
+            exit 1
+          fi
+          echo "[smoke] marcador de versão confere: ${SERVIDO}"
       - name: Logs do container (diagnóstico)
         if: always()
         run: docker logs backend-ci || true
@@ -247,12 +274,66 @@ jobs:
         run: |
           docker build -t olume-chat-client-staging:ci -f client/Dockerfile client \
             --build-arg VITE_API_URL=https://api-staging.olumechat.com.br/api \
-            --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br
+            --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br \
+            --build-arg OLUME_COMMIT_SHA=${{ github.sha }}
       - name: Build imagem do frontend (produção)
         run: |
           docker build -t olume-chat-client-prod:ci -f client/Dockerfile client \
             --build-arg VITE_API_URL=https://api.olumechat.com.br/api \
-            --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br
+            --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br \
+            --build-arg OLUME_COMMIT_SHA=${{ github.sha }}
+      # FIL-113: as DUAS imagens são conferidas, e por HTTP, não por `cat` no
+      # arquivo. O que precisa ser verdade é que o Nginx SERVE /version.json —
+      # um `location` mal ordenado devolveria index.html com 200, que é
+      # exatamente a falha silenciosa que este marcador existe para impedir.
+      #
+      # A de produção entra aqui porque é ela que o FIL-113 deixa pronta para o
+      # smoke de produção do FIL-101: descobrir lá que o marcador não é servido
+      # seria descobrir com cliente do outro lado.
+      #
+      # Uma resposta basta aqui, e isso NÃO contradiz a janela de confirmações
+      # consecutivas do deploy-staging.yml. Lá a pergunta é "quem está atendendo
+      # este host?", com Traefik na frente e a possibilidade real de dois
+      # containers disputando o mesmo `Host()` — respostas alternadas são o
+      # incidente. Aqui é `docker run` de UMA imagem, publicando UMA porta do
+      # runner, sem proxy e sem outro container no caminho: não há segundo
+      # respondente possível, então repetir a consulta mediria a mesma coisa
+      # cinco vezes.
+      - name: Provar que as duas imagens servem /version.json com o SHA do commit
+        env:
+          SHA_ESPERADO: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          conferir() {
+            local imagem="$1" nome="$2" corpo="" servido=""
+            docker run -d --name "verif-${nome}" -p 8080:80 "$imagem" >/dev/null
+            for i in $(seq 1 20); do
+              if corpo="$(curl -fsS http://127.0.0.1:8080/version.json)"; then break; fi
+              corpo=""
+              sleep 1
+            done
+            docker rm -f "verif-${nome}" >/dev/null
+
+            if [ -z "$corpo" ]; then
+              echo "::error::[${nome}] /version.json não respondeu. O Nginx precisa servir esse caminho para o marcador de versão (FIL-113) ser verificável — confira o location em client/nginx.conf."
+              return 1
+            fi
+            # `jq -e` também reprova corpo que não é JSON — o sintoma de
+            # /version.json ter caído no fallback de SPA e devolvido index.html.
+            servido="$(printf '%s' "$corpo" | jq -er '.sha // ""' 2>/dev/null || true)"
+            if [ "$servido" != "$SHA_ESPERADO" ]; then
+              echo "::error::[${nome}] /version.json trouxe sha='${servido:-<ausente ou não-JSON>}', e o esperado era '${SHA_ESPERADO}'. Corpo: $(printf '%s' "$corpo" | head -c 200 | tr '\n' ' ')"
+              return 1
+            fi
+            echo "[${nome}] /version.json confere: ${servido}"
+          }
+
+          conferir olume-chat-client-staging:ci staging
+          conferir olume-chat-client-prod:ci prod
+      - name: Encerrar containers de verificação
+        if: always()
+        run: docker rm -f verif-staging verif-prod 2>/dev/null || true
       # FIL-99 (review Codex, P1): frontend-image só CONSTRÓI — ver comentário
       # equivalente em backend-image. publicar-imagens é quem faz login e push.
       - name: Salvar imagens do frontend como artefatos

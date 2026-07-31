@@ -78,8 +78,7 @@ PITR de 6 horas é risco alto com dado de cliente. Faz parte do FIL-110.
 | Ticket | O quê | Por quê agora |
 |---|---|---|
 | **FIL-105** | Converter produção para deploy por imagem | Destrava o FIL-101 e tira o build da VPS |
-| **FIL-113** | Backend expõe marcador de versão para o smoke | Sem ele, ninguém confirma qual versão staging serve |
-| **FIL-101** | Promoção para produção sob aprovação + rollback | Bloqueado pelo FIL-113 (e pelo FIL-105) |
+| **FIL-101** | Promoção para produção sob aprovação + rollback | Bloqueado pelo FIL-105. O FIL-113 saiu: a API e o frontend agora carregam o SHA da build, e o smoke de staging falha quando a versão servida não é a deployada (`AMBIENTES.md`) |
 | **FIL-106** | Monitoramento externo com alerta no celular | Hoje, se cair, ninguém sabe |
 | **FIL-110** | Smoke completo, teste de carga, Neon Launch | Portão do primeiro cliente |
 | **FIL-107** | Backup do Coolify fora da VPS | Hoje o backup mora no que ele protege |

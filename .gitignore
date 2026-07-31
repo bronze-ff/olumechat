@@ -8,6 +8,10 @@ logs/
 media/
 server/media/
 client/dist/
+# FIL-113: marcador de versão gravado DENTRO da imagem em tempo de build
+# (Dockerfile). Se aparecer aqui na árvore de trabalho é build local — versionar
+# faria o dev servir uma versão fixa e mentirosa em /health/*.
+BUILD_SHA
 
 # Config local do agente / skills pessoais
 .claude/*
