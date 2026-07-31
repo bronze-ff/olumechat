@@ -20,13 +20,15 @@
 #
 # Dois jobs, e a divisão importa:
 #
-#   `validar`  — roda ANTES da aprovação, e não toca em nada. Confere o formato
-#                do SHA, resolve o commit no repositório, exige que o ambiente
-#                `production` tenha revisor obrigatório, confere os segredos e
-#                prova que as imagens `sha-<curto>` EXISTEM no GHCR. O erro mais
-#                provável deste workflow é SHA digitado errado ou commit que
-#                nunca passou pela CI — e ninguém deve ser chamado para aprovar
-#                uma promoção que já se sabe que vai falhar.
+#   `validar`  — roda ANTES da aprovação, não toca em nada e NÃO VÊ SEGREDO DE
+#                DEPLOY. Confere o formato do SHA, resolve o commit no
+#                repositório, exige que o ambiente `production` tenha revisor
+#                obrigatório, exige que aquele commit tenha um deploy
+#                VERIFICADO em staging e prova que as imagens `sha-<curto>`
+#                EXISTEM no GHCR. O erro mais provável deste workflow é SHA
+#                digitado errado ou commit que nunca passou pela CI — e ninguém
+#                deve ser chamado para aprovar uma promoção que já se sabe que
+#                vai falhar.
 #
 #   `promover` — roda no GitHub Environment `production`, que exige revisor.
 #                Enquanto o Filippe não aprovar, o job fica parado e produção
@@ -83,6 +85,16 @@ jobs:
   # ---------------------------------------------------------------------------
   # Tudo que dá para saber ANTES de acordar um humano para aprovar.
   # Este job não fala com o Coolify e não altera nada em lugar nenhum.
+  #
+  # E, desde a review do Codex no PR #63, ele também NÃO VÊ NENHUM SEGREDO DE
+  # DEPLOY. `COOLIFY_TOKEN` e o par `CF_ACCESS_*` moravam aqui, num job que roda
+  # ANTES da aprovação — então quem tivesse permissão de escrita no repositório
+  # podia disparar o workflow de uma branch com este arquivo modificado e
+  # imprimir as credenciais de produção, sem passar pelo revisor. O portão de
+  # aprovação protegia o DEPLOY, não os segredos.
+  #
+  # Agora tudo que precisa deles vive no job `promover`, que roda no environment
+  # `production`; aqui fica só o que o `GITHUB_TOKEN` do próprio run cobre.
   # ---------------------------------------------------------------------------
   validar:
     name: Validar antes de pedir aprovação
@@ -96,12 +108,8 @@ jobs:
       completo: ${{ steps.entrada.outputs.completo }}
       curto: ${{ steps.entrada.outputs.curto }}
       tag: ${{ steps.entrada.outputs.tag }}
-    env:
-      # IMAGEM_BACKEND e IMAGEM_FRONTEND vêm do `env:` do workflow — fonte única,
-      # compartilhada com o job `promover`.
-      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
-      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    # Sem `env:` de segredos, de propósito — ver o bloco acima. IMAGEM_BACKEND e
+    # IMAGEM_FRONTEND vêm do `env:` do workflow.
     steps:
       # O texto do input vai por `env`, nunca interpolado dentro do script:
       # `${{ inputs.sha }}` no meio de um `run` seria substituído ANTES do bash
@@ -276,18 +284,95 @@ jobs:
           fi
           echo "Ambiente 'production' com ${REVISORES} revisor(es) obrigatório(s): a promoção vai parar para aprovação."
 
-      - name: Conferir os segredos antes de pedir aprovação
+      # "STAGING ANTES DE PRODUÇÃO" é a regra de ouro do WORKFLOW.md §0, e até
+      # aqui ela era só disciplina: o preflight aceitava qualquer SHA cujas
+      # imagens existissem no GHCR — inclusive um commit que nunca foi exercitado
+      # em lugar nenhum. Agora é invariante conferida.
+      #
+      # A evidência NÃO é "existe um run verde do deploy-staging.yml para este
+      # SHA", e a diferença importa: aquele workflow também termina VERDE quando
+      # DISPENSA o deploy (commit mais antigo que o último verificado). Um run
+      # verde, ali, é compatível com "não fiz nada".
+      #
+      # A evidência é o registro de deployment do ambiente `staging`, que o
+      # deploy-staging.yml cria no FIM, depois de os containers ficarem
+      # `running:healthy` com a tag e de a API responder 200 declarando aquela
+      # build. É o mesmo princípio que o resto deste desenho aplica em todo
+      # lugar: registro é evidência, run verde é intenção.
+      #
+      # ROLLBACK continua natural: qualquer registro histórico serve, não só o
+      # mais recente. Um SHA que passou por staging semanas atrás tem o dele.
+      - name: Exigir que este SHA tenha passado por staging
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.entrada.outputs.completo }}
         run: |
           set -euo pipefail
-          faltando=()
-          [ -n "${COOLIFY_TOKEN}" ] || faltando+=(COOLIFY_TOKEN)
-          [ -n "${CF_ACCESS_CLIENT_ID}" ] || faltando+=(CF_ACCESS_CLIENT_ID)
-          [ -n "${CF_ACCESS_CLIENT_SECRET}" ] || faltando+=(CF_ACCESS_CLIENT_SECRET)
-          if [ ${#faltando[@]} -gt 0 ]; then
-            echo "::error::Segredo(s) ausente(s) no repositório: ${faltando[*]}. Sem eles o Cloudflare Access que protege ops.olumechat.com.br devolve 302 com a tela de login, e o deploy morre depois da aprovação — por um motivo que dava para saber antes. Cadastre em Settings → Secrets and variables → Actions."
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+          API="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+
+          # GET com retentativa só no transitório (sem resposta, 429, 5xx).
+          buscar() {
+            local url="$1" codigo="" tentativa espera=5
+            for tentativa in 1 2 3; do
+              codigo="$(curl --silent --show-error --max-time 30 \
+                --output "$CORPO" --write-out '%{http_code}' \
+                --header "Authorization: Bearer ${GH_TOKEN}" \
+                --header "Accept: application/vnd.github+json" \
+                --header "X-GitHub-Api-Version: 2022-11-28" \
+                "$url" || true)"
+              codigo="${codigo:-000}"
+              case "$codigo" in
+                000|429|5??)
+                  if [ "$tentativa" -lt 3 ]; then
+                    echo "Tentativa ${tentativa}: HTTP ${codigo} — nova tentativa em ${espera}s." >&2
+                    sleep "$espera"
+                    espera=$(( espera * 2 ))
+                  fi ;;
+                *) break ;;
+              esac
+            done
+            printf '%s' "$codigo"
+          }
+
+          SEM_STAGING="Promova apenas SHAs que passaram por staging: deixe o deploy automático rodar (merge na main com a CI verde) e valide lá antes. Em emergência, o procedimento manual está em docs/AMBIENTES.md — mas aí a responsabilidade de conferir o que subiu é sua."
+
+          codigo="$(buscar "${API}/deployments?environment=staging&sha=${SHA}&per_page=100")"
+          if [ "$codigo" != "200" ]; then
+            echo "::error::não consegui ler o histórico de deploys de staging (HTTP ${codigo} após 3 tentativas). A guarda falha FECHADA: sem confirmar que este SHA passou por staging, a promoção não segue. Nada foi tocado — dispare de novo."
             exit 1
           fi
-          echo "Os três segredos estão presentes."
+
+          if ! jq -e . >/dev/null 2>&1 < "$CORPO"; then
+            echo "::error::o histórico de deploys de staging respondeu 200 com corpo que não é JSON. A guarda falha FECHADA. Início: $(head -c 200 "$CORPO" | tr '\n' ' ')"
+            exit 1
+          fi
+
+          IDS="$(jq -r '.[]?.id // empty' "$CORPO")"
+          if [ -z "$IDS" ]; then
+            echo "::error::o commit ${SHA} NUNCA completou um deploy verificado em staging — não há registro nenhum do ambiente 'staging' para ele. Produção não recebe o que staging não recebeu. ${SEM_STAGING}"
+            exit 1
+          fi
+
+          # Um registro sem status `success` não conta: ele existe entre o
+          # `POST /deployments` e o `POST .../statuses`, e é justamente o que
+          # sobra quando o segundo falha.
+          for id in $IDS; do
+            codigo="$(buscar "${API}/deployments/${id}/statuses?per_page=100")"
+            if [ "$codigo" != "200" ]; then
+              echo "::error::não consegui ler os status do deployment ${id} de staging (HTTP ${codigo}). A guarda falha FECHADA."
+              exit 1
+            fi
+            if jq -e '[.[]? | select(.state == "success")] | length > 0' >/dev/null 2>&1 < "$CORPO"; then
+              echo "Staging comprovado: o deployment ${id} do ambiente 'staging' registra ${SHA} como verificado."
+              exit 0
+            fi
+          done
+
+          echo "::error::o commit ${SHA} tem registro de deploy em staging, mas nenhum com status 'success' — ou seja, staging chegou a ser apontado para ele e a verificação não terminou bem. Produção não recebe o que staging não confirmou. ${SEM_STAGING}"
+          exit 1
 
       - name: Login no GHCR
         uses: docker/login-action@v3
@@ -402,6 +487,24 @@ jobs:
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
+      # Este passo mora AQUI, e não no `validar`, porque tocar nos segredos é o
+      # que o portão de aprovação precisa cobrir (review do Codex no PR #63).
+      # O preço é conhecido: um segredo faltando só aparece depois da aprovação.
+      # Vale — o erro custa um clique a mais, e a alternativa custava expor
+      # credencial de produção a quem tem escrita no repositório.
+      - name: Conferir os segredos
+        run: |
+          set -euo pipefail
+          faltando=()
+          [ -n "${COOLIFY_TOKEN}" ] || faltando+=(COOLIFY_TOKEN)
+          [ -n "${CF_ACCESS_CLIENT_ID}" ] || faltando+=(CF_ACCESS_CLIENT_ID)
+          [ -n "${CF_ACCESS_CLIENT_SECRET}" ] || faltando+=(CF_ACCESS_CLIENT_SECRET)
+          if [ ${#faltando[@]} -gt 0 ]; then
+            echo "::error::Segredo(s) ausente(s): ${faltando[*]}. Sem eles o Cloudflare Access que protege ops.olumechat.com.br devolve 302 com a tela de login, e nada do que vier depois faz sentido. Eles são segredos do ENVIRONMENT 'production' (Settings → Environments → production → Environment secrets), não do repositório — se estiverem só no nível do repositório, este job não os enxerga. Nada foi tocado em produção."
+            exit 1
+          fi
+          echo "Os três segredos estão presentes."
+
       # Deploy e prova de versão de cada lado, na ordem escolhida em `primeiro:`.
       #
       # Os dois andam JUNTOS de propósito: quando a ordem inverte (rollback), o
@@ -418,6 +521,30 @@ jobs:
           trap 'rm -f "$CORPO"' EXIT
 
           erro() { echo "::error::$*"; }
+
+          # O campo `fqdn` do Coolify é uma LISTA separada por vírgula, e cada
+          # item pode vir com esquema, porta e caminho (`https://exemplo.com:443/`).
+          # Normalizar os dois lados com a mesma função é o que permite comparar
+          # por igualdade sem transformar diferença de formatação em falso
+          # negativo — e sem voltar ao substring, que aceitava subdomínio.
+          normalizar_host() {
+            local v="${1#*://}"
+            v="${v%%/*}"
+            v="${v%%\?*}"
+            v="${v%%:*}"
+            printf '%s' "$v" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'
+          }
+
+          host_na_lista() {
+            local lista="$1" esperado item
+            esperado="$(normalizar_host "$2")"
+            [ -n "$esperado" ] || return 1
+            while IFS= read -r item; do
+              [ -n "$item" ] || continue
+              [ "$(normalizar_host "$item")" = "$esperado" ] && return 0
+            done <<< "$(printf '%s' "$lista" | tr ',' '\n')"
+            return 1
+          }
 
           # Trilha do que REALMENTE aconteceu, para o resumo não precisar deduzir
           # de `outcome` de passo — que agora é um só. Cada marca é escrita
@@ -652,13 +779,18 @@ jobs:
               return 1
             fi
 
-            case "$fqdn" in
-              *"$host_esperado"*) ;;
-              *)
-                erro "${nome}: a aplicação ${uuid} está com o domínio '${fqdn:-<vazio>}', que não contém '${host_esperado}'. Uma aplicação de produção sem o domínio de produção não recebe tráfego — quase certamente este é o UUID de uma das aplicações antigas, desativadas e mantidas só como rollback (docs/AMBIENTES.md). Deployar nela terminaria VERDE sem mudar nada do que está no ar."
-                echo "::endgroup::"
-                return 1 ;;
-            esac
+            # Hostname EXATO, não substring (review do Codex no PR #63).
+            # `staging.olumechat.com.br` CONTÉM `olumechat.com.br`: a versão por
+            # substring aprovaria a aplicação de staging como se fosse a de
+            # produção, e o resultado seria promover a imagem `-prod` para o
+            # ambiente errado — com a guarda de imagem passando, porque o nome da
+            # imagem estaria certo. Domínio parecido é a forma mais fácil de
+            # errar aqui, então a comparação é de igualdade.
+            if ! host_na_lista "$fqdn" "$host_esperado"; then
+              erro "${nome}: a aplicação ${uuid} está com o domínio '${fqdn:-<vazio>}', e nenhum dos hostnames dessa lista é exatamente '${host_esperado}'. A comparação é exata de propósito — um subdomínio como 'staging.${host_esperado}' passaria por substring e apontaria a promoção para o ambiente errado. Uma aplicação de produção sem o domínio de produção não recebe tráfego: quase certamente este é o UUID de uma das aplicações antigas, desativadas e mantidas só como rollback (docs/AMBIENTES.md). Deployar nela terminaria VERDE sem mudar nada do que está no ar."
+              echo "::endgroup::"
+              return 1
+            fi
 
             codigo="$(chamar PATCH "${COOLIFY_API}/applications/${uuid}" "{\"docker_registry_image_tag\":\"${TAG}\"}")"
             validar_resposta "$codigo" "gravação da tag em ${nome}"

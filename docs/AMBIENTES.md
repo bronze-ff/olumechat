@@ -249,11 +249,22 @@ Não há build aqui. A imagem existe no GHCR desde que a CI daquele commit ficou
 
 São dois jobs, e a divisão é o que evita chamar alguém para aprovar uma promoção condenada:
 
-1. **`validar`** roda na hora e **não toca em nada**: confere o formato do SHA, resolve o
-   commit no repositório, exige que o ambiente `production` tenha revisor obrigatório,
-   confere os três segredos e prova que `olumechat-server:sha-<curto>` **e**
-   `olumechat-client-prod:sha-<curto>` existem no GHCR. SHA digitado errado ou commit que
-   nunca passou pela CI morre aqui, antes da aprovação.
+1. **`validar`** roda na hora, **não toca em nada** e **não vê nenhum segredo de deploy**:
+   confere o formato do SHA, resolve o commit no repositório, exige que o ambiente
+   `production` tenha revisor obrigatório, exige que aquele commit tenha um **deploy
+   verificado em staging** e prova que `olumechat-server:sha-<curto>` **e**
+   `olumechat-client-prod:sha-<curto>` existem no GHCR. SHA digitado errado, commit que
+   nunca passou pela CI ou que nunca chegou a staging morrem aqui, antes da aprovação.
+
+   **"Staging antes de produção" virou invariante conferida**, e a evidência é o registro
+   de deployment do ambiente `staging` — não um run verde do `deploy-staging.yml`, que
+   também fica verde quando **dispensa** o deploy. Registro é evidência; run verde é
+   intenção. Rollback continua natural: qualquer registro histórico serve.
+
+   Os segredos (`COOLIFY_TOKEN`, `CF_ACCESS_*`) são **do environment `production`**, não do
+   repositório. A diferença é de segurança, não de arrumação: no nível do repositório eles
+   chegariam a este job, que roda **antes** da aprovação, e quem tem escrita no repositório
+   poderia disparar o workflow de uma branch modificada e lê-los sem passar pelo revisor.
 2. **`promover`** roda no GitHub Environment `production` e **fica parado** esperando o
    revisor. Depois de aprovado, cada lado é deployado **e provado** antes de o outro
    começar: grava a tag, dispara, espera o deployment terminar, exige o container
@@ -283,8 +294,11 @@ provado; aqui não sobra lacuna. Alternância entre builds reprova na hora com
 `ROTEAMENTO DIVIDIDO`.
 
 **Três guardas contra a aplicação errada.** Antes de gravar qualquer tag, o workflow exige
-que a aplicação seja do tipo `dockerimage`, que a imagem configurada seja a esperada
-(`-prod`, **nunca** `-staging`) e que o domínio de produção esteja nela. As aplicações
+que a aplicação seja do tipo `dockerimage`, que a imagem configurada seja **exatamente** o
+caminho esperado (`ghcr.io/bronze-ff/olumechat-client-prod`, **nunca** a variante
+`-staging`) e que um dos hostnames do domínio configurado seja **exatamente** o de
+produção. As duas comparações são de igualdade de propósito: por sufixo,
+`ghcr.io/outro-dono/olumechat-server` e `staging.olumechat.com.br` passariam. As aplicações
 antigas continuam existindo, paradas e sem domínio: deployar nelas terminaria **verde** sem
 trocar nada do que está no ar.
 
