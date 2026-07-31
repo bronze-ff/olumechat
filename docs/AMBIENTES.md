@@ -113,8 +113,8 @@ curl -H "Authorization: Bearer $TOKEN" \
 | `backend-staging-img` | `jhp3osrkx1f3iu70c9imzmy1` | **dockerimage** |
 
 As aplicações `frontend-staging` e `backend-staging` (UUIDs `r130mr3erjseqn4shqdpnw2b` e
-`tnrnbyz08x1cgvwdkndwo8es`) são as **antigas**, mantidas paradas e sem domínio como
-rollback. Apontar um deploy para elas "funciona" sem trocar nada do que está no ar — falha
+`tnrnbyz08x1cgvwdkndwo8es`) são as **antigas**, com os containers **parados** (`docker stop`)
+e sem domínio, mantidas como rollback. Apontar um deploy para elas "funciona" sem trocar nada do que está no ar — falha
 silenciosa, a pior categoria.
 
 **Rollback:** com aplicação por imagem, é apontar `docker_registry_image_tag` para um
@@ -140,7 +140,36 @@ do Coolify não inclui `dockerimage`, que só nasce pela rota `POST /application
    tráfego. Falhou aqui, ninguém percebeu: o antigo continua atendendo.
 5. Só então mover o domínio (remover do antigo, gravar no novo) e redeployar para o Traefik
    pegar os labels.
-6. Manter o antigo parado alguns dias como rollback; só depois apagar.
+6. **`docker stop` no container antigo.** Este passo não é opcional e não é limpeza —
+   ver o aviso abaixo.
+7. Manter o antigo parado alguns dias como rollback; só depois apagar.
+
+> **Remover o domínio na configuração NÃO tira o container do roteamento.**
+>
+> Os labels do Traefik são gravados no container **no momento em que ele é criado**.
+> Mudar a configuração da aplicação no Coolify não reescreve o label de um container que
+> já está rodando. Enquanto o antigo estiver de pé, ele continua anunciando
+> `Host(...)` para o mesmo domínio, e o Traefik passa a ter **dois serviços disputando o
+> mesmo host**. Ele escolhe um — e pode escolher o antigo.
+>
+> O sintoma é cruel: o deploy termina verde, o container novo está saudável, o
+> `/health` responde 200, e mesmo assim o navegador mostra a versão velha. Parece cache,
+> e não é. Aconteceu de verdade na conversão do staging em 2026-07-31.
+>
+> Como confirmar quem está servindo, sem depender do navegador:
+>
+> ```bash
+> # todos os containers que reivindicam algum host
+> for c in $(docker ps --format '{{.Names}}'); do
+>   docker inspect $c --format '{{json .Config.Labels}}' | grep -oE 'Host\(`[^`]+`\)' | sed "s|^|$c -> |"
+> done
+>
+> # qual bundle o Traefik realmente entrega (compare com o do container novo)
+> curl -sk --resolve <dominio>:443:127.0.0.1 https://<dominio>/ | grep -oE 'assets/[^"]+\.js'
+> ```
+>
+> Testar por dentro do container (`docker exec`) prova que a imagem está certa, mas
+> **não** prova que é ela que o mundo recebe. A verificação que vale é através do Traefik.
 
 Em produção isso é **blue-green** e não precisa de janela de manutenção — a
 indisponibilidade real é a troca de domínio, alguns segundos. Atenção a um detalhe: o
