@@ -81,7 +81,6 @@ PITR de 6 horas é risco alto com dado de cliente. Faz parte do FIL-110.
 | **FIL-101** | Promoção para produção sob aprovação + rollback | Depende do FIL-105 (staging já sobe sozinho — FIL-100) |
 | **FIL-106** | Monitoramento externo com alerta no celular | Hoje, se cair, ninguém sabe |
 | **FIL-110** | Smoke completo, teste de carga, Neon Launch | Portão do primeiro cliente |
-| **FIL-102** | `backfill-mensagens.js` sem contexto de tenant | Vira P1 no dia do segundo cliente |
 | **FIL-107** | Backup do Coolify fora da VPS | Hoje o backup mora no que ele protege |
 | **FIL-104** | Cores semânticas para superfície escura | Acessibilidade e consistência |
 | **FIL-108** | `concurrency` na CI | Queima minutos e confunde diagnóstico |
