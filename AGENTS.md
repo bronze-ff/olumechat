@@ -3,8 +3,15 @@
 > **Fonte de verdade única.** `CLAUDE.md` contém apenas `@AGENTS.md` (import nativo do
 > Claude Code) — edite SEMPRE este arquivo; o Claude importa e os demais agentes (Codex,
 > Gemini, etc.) leem `AGENTS.md` nativamente. Skills: vivem em `.claude/skills/`; em cada
-> máquina, crie a junction `.agents/skills` → `.claude/skills` (fica fora do git):
-> `New-Item -ItemType Junction -Path .agents\skills -Target .claude\skills`
+> **checkout** (inclusive worktree — toda worktree do Orca nasce sem a junction, mesmo as
+> criadas em onda), crie a junction `.agents/skills` → `.claude/skills` (fica fora do git):
+> `New-Item -ItemType Junction -Path .agents\skills -Target .claude\skills`, ou rode
+> `powershell -File scripts/setup-worktree.ps1` (idempotente — cria só se faltar). Dá pra
+> automatizar por worktree criada pelo Orca: `orca repo show --json` expõe
+> `hookSettings.scripts.setup` (hoje roda `npm ci` e copia `.env.local`) — é config local de
+> cada instalação do Orca, não vai pro git, então some a chamada do script ali (Orca →
+> Settings do repo → Setup script) se quiser zero passo manual na sua máquina; o script e a
+> junction manual continuam sendo a rede de segurança para quem não configurou o hook.
 
 ## O que é
 
