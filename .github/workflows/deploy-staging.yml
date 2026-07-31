@@ -5,12 +5,19 @@
 # `publicar-imagens` do ci.yml publicou `sha-<commit>` no GHCR. CI vermelha,
 # execução de PR ou push em outra branch não disparam nada.
 #
-# O que este workflow faz, para cada aplicação de staging (backend PRIMEIRO,
-# frontend depois — o frontend só é útil com a API de pé):
+# Antes de tudo, recusa deploy de commit que já não é o topo da `main` — um run
+# antigo reexecutado empurraria staging de volta no tempo, e verde.
+#
+# Depois, para cada aplicação de staging (backend PRIMEIRO, frontend depois — o
+# frontend só é útil com a API de pé):
 #   1. PATCH gravando `docker_registry_image_tag` = sha-<commit curto>;
 #   2. dispara o deploy;
 #   3. espera a conclusão e FALHA se o deployment falhar;
-#   4. no fim, prova que staging está servindo.
+#   4. relê a aplicação e exige container `running` COM a tag deployada;
+#   5. no fim, exige 200 em /health/ready da API (pela borda do Access).
+#
+# O que ele NÃO prova está escrito no passo do smoke, e vale ler antes de
+# confiar: `200` é compatível com "container velho e saudável".
 #
 # NUNCA toca aplicação de produção. Os UUIDs abaixo são só de staging e estão
 # explícitos de propósito. Promoção para produção é o FIL-101, com aprovação
@@ -29,6 +36,11 @@ permissions:
 # Deploys de staging não se atropelam: uma execução por vez, na ordem em que os
 # merges entraram. Cancelar a que está no meio deixaria a aplicação com a tag
 # gravada e sem deployment — pior que esperar.
+#
+# ATENÇÃO: serializar NÃO é ordenar. O GitHub garante uma execução por vez, e
+# nada mais — quem chega depois pode ser de um commit ANTERIOR. Por isso existe
+# o passo "Rejeitar deploy de commit que já não é o topo da main", e é ele, não
+# esta cláusula, que impede staging de voltar no tempo.
 concurrency:
   group: deploy-staging
   cancel-in-progress: false
@@ -62,27 +74,14 @@ jobs:
       IMAGEM_FRONTEND: olumechat-client-staging
       HOST_API_STAGING: api-staging.olumechat.com.br
       HOST_FRONT_STAGING: staging.olumechat.com.br
-      VPS_IP: 179.198.105.75
       TIMEOUT_DEPLOY_S: '600'
+      TIMEOUT_ESTADO_S: '120'
       TIMEOUT_HTTP_S: '180'
       INTERVALO_POLL_S: '10'
       COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
-      - name: Conferir os segredos antes de tocar em qualquer coisa
-        run: |
-          set -euo pipefail
-          faltando=()
-          [ -n "${COOLIFY_TOKEN}" ] || faltando+=(COOLIFY_TOKEN)
-          [ -n "${CF_ACCESS_CLIENT_ID}" ] || faltando+=(CF_ACCESS_CLIENT_ID)
-          [ -n "${CF_ACCESS_CLIENT_SECRET}" ] || faltando+=(CF_ACCESS_CLIENT_SECRET)
-          if [ ${#faltando[@]} -gt 0 ]; then
-            echo "::error::Segredo(s) ausente(s) no repositório: ${faltando[*]}. Sem eles o Cloudflare Access devolve 302 com a tela de login e nada do que vier depois faz sentido. Cadastre em Settings → Secrets and variables → Actions."
-            exit 1
-          fi
-          echo "Os três segredos estão presentes."
-
       - name: Identificar o SHA que a CI publicou
         id: sha
         env:
@@ -95,10 +94,74 @@ jobs:
             echo "curto=${CURTO}"
             echo "tag=sha-${CURTO}"
           } >> "$GITHUB_OUTPUT"
-          echo "Commit da main: ${SHA_COMPLETO}"
-          echo "Tag que vai para staging: sha-${CURTO}"
+          echo "Commit da CI que disparou: ${SHA_COMPLETO}"
+          echo "Tag candidata: sha-${CURTO}"
+
+      # `workflow_run` dispara para QUALQUER execução da CI concluída com
+      # sucesso na `main` — inclusive uma ANTIGA. Dois caminhos levam lá: duas
+      # execuções terminando fora de ordem, ou alguém reexecutando um run velho.
+      # O segundo já aconteceu de verdade neste repositório: um `gh run rerun`
+      # de um commit anterior terminou DEPOIS de execuções mais novas. Sem esta
+      # guarda, o rerun empurraria o commit velho para staging e o job
+      # terminaria VERDE — staging voltaria no tempo em silêncio, e o portão
+      # "staging antes de produção" passaria a validar a coisa errada.
+      #
+      # A cláusula `concurrency` acima serializa, mas não ordena por commit.
+      #
+      # Deploy vencido NÃO é falha: sai verde e os passos seguintes não rodam.
+      # Falhar aqui encheria o histórico de vermelho para um caso normal, e
+      # vermelho que é normal deixa de ser lido.
+      #
+      # Se a `main` andar DEPOIS desta checagem, este deploy segue com o SHA
+      # antigo — e tudo bem: a execução do commit novo fica na fila do
+      # `concurrency` e entra logo em seguida. O estado final converge para o
+      # topo da `main`. O que a guarda impede é o inverso, que não converge:
+      # um run velho chegando por último e sobrescrevendo o novo.
+      - name: Rejeitar deploy de commit que já não é o topo da main
+        id: guarda
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA_DISPARO: ${{ steps.sha.outputs.completo }}
+        run: |
+          set -euo pipefail
+          TOPO=""
+          for tentativa in 1 2 3; do
+            TOPO="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha' 2>/dev/null || true)"
+            [ -n "$TOPO" ] && break
+            echo "Tentativa ${tentativa} de ler o topo da main falhou; nova tentativa em 5s."
+            sleep 5
+          done
+
+          if [ -z "$TOPO" ]; then
+            echo "::error::não consegui ler o SHA do topo da main pela API do GitHub. Sem isso não há como saber se este deploy ainda vale, e mandar um commit possivelmente obsoleto para staging é pior que parar."
+            exit 1
+          fi
+
+          if [ "$SHA_DISPARO" != "$TOPO" ]; then
+            echo "seguir=nao" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deploy dispensado: esta execução é do commit ${SHA_DISPARO}, e o topo da main agora é ${TOPO}. Um commit mais novo já é o que deve chegar a staging. Nada foi alterado — nem a tag, nem o container."
+            exit 0
+          fi
+
+          echo "seguir=sim" >> "$GITHUB_OUTPUT"
+          echo "${SHA_DISPARO} ainda é o topo da main — o deploy segue."
+
+      - name: Conferir os segredos antes de tocar em qualquer coisa
+        if: steps.guarda.outputs.seguir == 'sim'
+        run: |
+          set -euo pipefail
+          faltando=()
+          [ -n "${COOLIFY_TOKEN}" ] || faltando+=(COOLIFY_TOKEN)
+          [ -n "${CF_ACCESS_CLIENT_ID}" ] || faltando+=(CF_ACCESS_CLIENT_ID)
+          [ -n "${CF_ACCESS_CLIENT_SECRET}" ] || faltando+=(CF_ACCESS_CLIENT_SECRET)
+          if [ ${#faltando[@]} -gt 0 ]; then
+            echo "::error::Segredo(s) ausente(s) no repositório: ${faltando[*]}. Sem eles o Cloudflare Access devolve 302 com a tela de login e nada do que vier depois faz sentido. Cadastre em Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "Os três segredos estão presentes."
 
       - name: Deploy em staging (backend, depois frontend)
+        if: steps.guarda.outputs.seguir == 'sim'
         env:
           TAG: ${{ steps.sha.outputs.tag }}
         run: |
@@ -224,6 +287,46 @@ jobs:
             return 1
           }
 
+          # "Deployment finished" quer dizer que o Coolify terminou o trabalho —
+          # não que o container ficou de pé com a tag certa. Um container que
+          # sobe e morre em seguida, ou que voltou para a tag anterior, produz
+          # deployment verde e ambiente errado. Aqui se relê a aplicação e se
+          # EXIGE o que deveria ser verdade.
+          conferir_estado() {
+            local uuid="$1" nome="$2"
+            local limite=$(( SECONDS + TIMEOUT_ESTADO_S ))
+            local codigo estado tag_atual anterior=""
+            while [ "$SECONDS" -lt "$limite" ]; do
+              codigo="$(chamar GET "${COOLIFY_API}/applications/${uuid}")"
+              validar_resposta "$codigo" "releitura do estado de ${nome}"
+              estado="$(jq -r '.status // "desconhecido"' "$CORPO")"
+              tag_atual="$(jq -r '.docker_registry_image_tag // ""' "$CORPO")"
+
+              if [ "$tag_atual" != "$TAG" ]; then
+                erro "${nome}: depois do deploy a aplicação está com a tag '${tag_atual:-<vazia>}', e não '${TAG}'. Alguém ou algo trocou a tag no meio do caminho — staging não está no commit que este job deployou."
+                return 1
+              fi
+
+              # `running:unhealthy` é esperado aqui: o health check da UI do
+              # Coolify fica DESLIGADO de propósito (a imagem é slim e não tem
+              # curl/wget — docs/AMBIENTES.md). Por isso o gate é `running`, e
+              # a saúde de verdade quem prova é o smoke HTTP.
+              case "$estado" in
+                running*)
+                  echo "${nome}: container em '${estado}' com a tag ${TAG}."
+                  return 0 ;;
+              esac
+
+              if [ "$estado" != "$anterior" ]; then
+                echo "[$(date -u +%H:%M:%S)] ${nome}: estado '${estado}' — aguardando 'running'"
+                anterior="$estado"
+              fi
+              sleep 5
+            done
+            erro "${nome}: o deployment terminou, mas a aplicação não chegou a 'running' em ${TIMEOUT_ESTADO_S}s (último estado: ${estado})."
+            return 1
+          }
+
           deployar() {
             local nome="$1" uuid="$2" imagem_esperada="$3"
             echo "::group::${nome} → ${TAG}"
@@ -267,6 +370,7 @@ jobs:
             echo "Deployment disparado: ${deployment_uuid}"
 
             esperar_deployment "$deployment_uuid" "$nome"
+            conferir_estado "$uuid" "$nome"
             echo "::endgroup::"
           }
 
@@ -274,7 +378,19 @@ jobs:
           deployar "backend-staging-img" "$UUID_BACKEND" "$IMAGEM_BACKEND"
           deployar "frontend-staging-img" "$UUID_FRONTEND" "$IMAGEM_FRONTEND"
 
-      - name: Provar que staging está servindo
+      # O smoke da API vai pela BORDA da Cloudflare, com o service token.
+      #
+      # A primeira execução real deste workflow falhou aqui com HTTP 000: a
+      # tentativa anterior batia direto no origin da VPS (`--resolve`), e o
+      # runner do GitHub não alcança aquele endereço. Staging inteiro fica atrás
+      # do Cloudflare Access — não existe caminho anônimo.
+      #
+      # A infraestrutura foi ajustada para isto: existe uma aplicação do Access
+      # chamada `api-staging-health`, cobrindo SÓ `api-staging.olumechat.com.br/health`,
+      # com política de service token. O escopo é o caminho de health e nada
+      # além dele — a raiz da API de staging continua fechada mesmo com o token.
+      - name: Provar que a API de staging está no ar
+        if: steps.guarda.outputs.seguir == 'sim'
         env:
           TAG: ${{ steps.sha.outputs.tag }}
         run: |
@@ -283,43 +399,55 @@ jobs:
           CORPO="$(mktemp)"
           trap 'rm -f "$CORPO"' EXIT
 
-          # Por que a verificação bate no ORIGIN e não na borda da Cloudflare:
-          # `api-staging.olumechat.com.br` está atrás de uma aplicação PRÓPRIA do
-          # Cloudflare Access (aud diferente da de `ops.`), e o service token do
-          # CI só vale para `ops./api` — pela borda o runner recebe 302, nunca
-          # 200. Então resolvemos o Host direto no IP da VPS, que é a receita do
-          # próprio docs/AMBIENTES.md: ela passa pelo Traefik e prova o que ele
-          # ENTREGA para aquele host, e não só que o container subiu. É
-          # justamente a checagem que pega o caso dos dois containers
-          # disputando o mesmo Host().
-          # O `-k` é necessário porque o Traefik apresenta o certificado default
-          # auto-assinado (o TLS público termina na Cloudflare). Nada sensível
-          # trafega nesta chamada e o IP de destino é fixado por nós.
-          esperar_200() {
-            local rotulo="$1" host="$2" caminho="$3"
-            local limite=$(( SECONDS + TIMEOUT_HTTP_S ))
-            local codigo=""
-            while [ "$SECONDS" -lt "$limite" ]; do
-              codigo="$(curl --silent --insecure --max-time 15 \
-                --output "$CORPO" --write-out '%{http_code}' \
-                --resolve "${host}:443:${VPS_IP}" \
-                "https://${host}${caminho}" || true)"
-              codigo="${codigo:-000}"
-              if [ "$codigo" = "200" ]; then
-                echo "${rotulo}: 200 em https://${host}${caminho}"
-                head -c 400 "$CORPO"; echo
-                return 0
-              fi
-              echo "[$(date -u +%H:%M:%S)] ${rotulo}: HTTP ${codigo} — nova tentativa em 5s"
-              sleep 5
-            done
-            echo "::error::${rotulo}: https://${host}${caminho} não respondeu 200 em ${TIMEOUT_HTTP_S}s (último status: ${codigo}). Staging pode estar servindo a versão anterior — confira o container em ops.olumechat.com.br."
-            return 1
-          }
+          URL="https://${HOST_API_STAGING}/health/ready"
+          limite=$(( SECONDS + TIMEOUT_HTTP_S ))
+          codigo=""
 
-          esperar_200 "API de staging" "$HOST_API_STAGING" "/health/ready"
-          esperar_200 "Frontend de staging" "$HOST_FRONT_STAGING" "/"
-          echo "Staging está servindo ${TAG}."
+          while [ "$SECONDS" -lt "$limite" ]; do
+            codigo="$(curl --silent --max-time 15 \
+              --output "$CORPO" --write-out '%{http_code}' \
+              --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+              --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+              "$URL" || true)"
+            codigo="${codigo:-000}"
+
+            case "$codigo" in
+              200)
+                echo "API de staging: 200 em ${URL}"
+                head -c 400 "$CORPO"; echo
+                break ;;
+              # 403/302 aqui não é a API doente: é o Access recusando o token.
+              # Vale parar na hora, porque nenhuma espera conserta credencial.
+              401|403|301|302|303|307|308)
+                echo "::error::${URL} devolveu ${codigo} — o Cloudflare Access recusou o service token do CI. Confira se a aplicação 'api-staging-health' ainda cobre o caminho /health e se CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET continuam válidos. A API pode estar perfeitamente saudável: quem barrou foi o Access."
+                exit 1 ;;
+            esac
+
+            echo "[$(date -u +%H:%M:%S)] API de staging: HTTP ${codigo} — nova tentativa em 5s"
+            sleep 5
+          done
+
+          if [ "$codigo" != "200" ]; then
+            echo "::error::${URL} não respondeu 200 em ${TIMEOUT_HTTP_S}s (último status: ${codigo}). O deployment terminou e o container está 'running' com a tag ${TAG}, então o problema está entre o Traefik e o container — confira em ops.olumechat.com.br."
+            exit 1
+          fi
+
+          # O que este passo NÃO prova, dito em voz alta de propósito.
+          #
+          # `200` é compatível com "container VELHO e saudável": foi exatamente
+          # isso que aconteceu neste staging quando dois containers disputavam o
+          # mesmo Host() do Traefik (docs/AMBIENTES.md). Provar versão exigiria
+          # que a resposta carregasse um marcador de versão, e hoje nenhuma
+          # resposta do backend carrega — é o FIL-113.
+          #
+          # A tentativa de provar o frontend comparando o digest dos assets
+          # entregues com os da imagem morreu junto com o acesso ao origin:
+          # `staging.olumechat.com.br` está atrás do Access sem exceção de
+          # caminho, e abrir buraco na landing de staging só para o smoke seria
+          # trocar uma garantia por um risco. O que resta para o frontend é o
+          # `conferir_estado` do passo anterior: o container está 'running' com
+          # a tag deployada. Isso prova o CONTAINER, não o que o Traefik entrega.
+          echo "::warning::Verificado: os dois containers estão 'running' com a tag ${TAG}, e a API responde 200. NÃO verificado: que a resposta venha do container novo (nenhuma resposta carrega marcador de versão — FIL-113) nem o frontend por HTTP (inalcançável pelo Access, e a política da landing de staging não deve ser relaxada)."
 
       - name: Resumo
         if: always()
@@ -327,8 +455,19 @@ jobs:
           TAG: ${{ steps.sha.outputs.tag }}
           SHA_COMPLETO: ${{ github.event.workflow_run.head_sha }}
           RESULTADO: ${{ job.status }}
+          SEGUIR: ${{ steps.guarda.outputs.seguir }}
         run: |
           set -euo pipefail
+          if [ "${SEGUIR}" = "nao" ]; then
+            {
+              echo "## Deploy dispensado"
+              echo
+              echo "A CI que disparou este workflow é do commit \`${SHA_COMPLETO}\`, que já"
+              echo "não é o topo da \`main\`. Um commit mais novo é o que deve chegar a"
+              echo "staging — nada foi alterado."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo "## Deploy em staging — ${RESULTADO}"
             echo
@@ -338,6 +477,13 @@ jobs:
             echo "| Commit | \`${SHA_COMPLETO}\` |"
             echo "| Backend | \`${IMAGEM_BACKEND}\` → ${HOST_API_STAGING} |"
             echo "| Frontend | \`${IMAGEM_FRONTEND}\` → ${HOST_FRONT_STAGING} |"
+            echo
+            echo "**Verificado:** os dois containers em \`running\` com a tag acima, e"
+            echo "\`${HOST_API_STAGING}/health/ready\` em 200."
+            echo
+            echo "**Não verificado:** que a resposta venha do container novo — nenhuma"
+            echo "resposta do backend carrega marcador de versão (FIL-113) — nem o"
+            echo "frontend por HTTP, inalcançável pelo Cloudflare Access."
             echo
             echo "Produção não foi tocada — promoção é o FIL-101, com aprovação humana."
           } >> "$GITHUB_STEP_SUMMARY"

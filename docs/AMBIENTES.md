@@ -93,21 +93,39 @@ A VPS está autenticada no GHCR (`docker login`, credencial em `/root/.docker/co
 
 **Ninguém dispara staging à mão.** Todo push na `main` que deixa a CI verde aciona o
 workflow `.github/workflows/deploy-staging.yml`, que grava a tag `sha-<commit>` nas duas
-aplicações de staging (backend primeiro, frontend depois), espera cada deployment terminar
-e só fica verde se `api-staging.olumechat.com.br/health/ready` e
-`staging.olumechat.com.br` responderem 200. CI vermelha, execução de PR ou push em outra
-branch não disparam nada.
+aplicações de staging (backend primeiro, frontend depois), espera cada deployment terminar,
+confere que cada container ficou `running` **com a tag deployada** e só fica verde se
+`api-staging.olumechat.com.br/health/ready` responder 200. CI vermelha, execução de PR ou
+push em outra branch não disparam nada.
+
+**Serializar não é ordenar.** O gatilho `workflow_run` dispara para qualquer execução da CI
+concluída com sucesso na `main` — inclusive uma antiga, seja porque duas terminaram fora de
+ordem, seja porque alguém reexecutou um run velho (`gh run rerun`). Por isso o primeiro
+passo do workflow compara o `head_sha` com o topo atual da `main` pela API do GitHub e
+**dispensa** o deploy se ele já perdeu a validade — sai verde, sem tocar em nada. Sem essa
+guarda, um rerun empurra um commit obsoleto para staging e o job relata sucesso.
 
 O workflow fala com a API do Coolify por `ops.olumechat.com.br`, mandando o service token
 do Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) **junto** com o
 `Authorization: Bearer`. Faltando qualquer um dos três, o Access devolve `302` com a tela
 de login — e o workflow para com essa mensagem em vez de tentar ler JSON de um HTML.
 
-A verificação final bate no **origin** (`--resolve <host>:443:179.198.105.75`), e não na
-borda da Cloudflare: `api-staging` está atrás de uma aplicação **própria** do Access, que o
-service token do CI não cobre. É a mesma receita da caixa de aviso acima — e é ela que pega
-o caso de dois containers disputando o mesmo `Host()`, que checar o container por dentro
-não pega.
+**O smoke da API passa pelo Access.** O runner do GitHub não alcança o origin da VPS, e
+staging inteiro está atrás do Access — a primeira execução real do workflow falhou com
+`HTTP 000` justamente por tentar o caminho direto. A saída foi uma aplicação do Access
+própria, `api-staging-health`, cobrindo **só** `api-staging.olumechat.com.br/health`, com
+política de service token: sem os cabeçalhos o caminho devolve `403`, e a raiz da API
+continua fechada mesmo com o token.
+
+O que o smoke **não** prova, e é bom saber antes de confiar nele:
+
+- **Não prova versão.** `200` é compatível com "container velho e saudável" — exatamente o
+  incidente da caixa de aviso abaixo. Provar exigiria que a resposta carregasse um marcador
+  de versão; nenhuma carrega hoje. É o **FIL-113**.
+- **Não verifica o frontend por HTTP.** `staging.olumechat.com.br` está atrás do Access sem
+  exceção de caminho, e abrir buraco na landing de staging só para o smoke trocaria uma
+  garantia por um risco. O frontend é coberto só pela conferência de estado no Coolify
+  (container `running` com a tag deployada), que prova o **container**, não o roteamento.
 
 Produção continua fora deste workflow, de propósito: promoção é o FIL-101, sob aprovação.
 
