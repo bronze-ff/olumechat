@@ -93,21 +93,90 @@ A VPS está autenticada no GHCR (`docker login`, credencial em `/root/.docker/co
 
 **Ninguém dispara staging à mão.** Todo push na `main` que deixa a CI verde aciona o
 workflow `.github/workflows/deploy-staging.yml`, que grava a tag `sha-<commit>` nas duas
-aplicações de staging (backend primeiro, frontend depois), espera cada deployment terminar
-e só fica verde se `api-staging.olumechat.com.br/health/ready` e
-`staging.olumechat.com.br` responderem 200. CI vermelha, execução de PR ou push em outra
-branch não disparam nada.
+aplicações de staging (backend primeiro, frontend depois), espera cada deployment terminar,
+confere que cada container ficou `running:healthy` **com a tag deployada** e só fica verde
+se `api-staging.olumechat.com.br/health/ready` responder 200. CI vermelha, execução de PR ou
+push em outra branch não disparam nada.
+
+O gate de saúde é o `HEALTHCHECK` do Dockerfile, não a configuração da UI do Coolify: o
+sufixo de `running:healthy` vem do `State.Health.Status` do Docker. `running:unhealthy` e
+`running:starting` **não** passam — `starting` continua esperando dentro do timeout,
+`unhealthy` reprova. Sem isso o job terminaria verde com o container quebrado, ainda mais
+porque o frontend não tem smoke HTTP.
+
+**Serializar não é ordenar.** O gatilho `workflow_run` dispara para qualquer execução da CI
+concluída com sucesso na `main` — inclusive uma antiga, seja porque duas terminaram fora de
+ordem, seja porque alguém reexecutou um run velho (`gh run rerun`). Por isso o primeiro
+passo compara o commit candidato com o **último deploy verificado** e **dispensa** o deploy
+se o candidato for mais antigo — sai verde, sem tocar em nada.
+
+Duas escolhas nessa comparação valem explicação:
+
+- **A referência não é o topo da `main`.** Exigir "ser o topo" descartaria trabalho bom: se
+  a CI de A terminar depois de B chegar ao topo e a CI de B falhar, A nunca seria deployado
+  e staging congelaria numa versão antiga — trocaria "voltar no tempo" por "nunca avançar".
+- **A referência também não é a tag configurada no Coolify.**
+  `docker_registry_image_tag` é *intenção*, e quem a grava é o próprio workflow **antes** de
+  validar o deploy. Se um deploy falhar depois do PATCH, o campo aponta para um commit que
+  nunca subiu, e o commit seguinte é descartado por "ser mais antigo" que algo que não está
+  no ar. Intenção não é evidência.
+
+A referência é o **histórico de deployments do GitHub** do ambiente `staging`: o registro só
+é criado no fim do workflow, depois que os containers ficaram `running:healthy` com a tag e
+a API respondeu 200. Deploy que morreu no meio não deixa registro, então não envenena a
+comparação seguinte — e a aba **Environments** do repositório passa a responder "qual commit
+está em staging?" sem ninguém precisar abrir o Coolify.
+
+**A guarda falha fechada.** Se não der para ler o histórico ou comparar os commits (rede,
+rate limit, indisponibilidade), o job **para**. Não conseguir comparar é exatamente quando
+não se sabe se o candidato é obsoleto; deixar passar ali seria inverter a guarda no pior
+momento. Pular um deploy é recuperável pelo próximo push; sobrescrever staging com versão
+velha, não.
+
+Dois pontos onde "não sei" poderia virar "então segue", e não vira:
+
+- **Histórico vazio não é sinal verde.** Sem registro, a resposta é "não sei o que está no
+  ar" — não "não há nada no ar"; staging já roda uma versão. Enquanto a referência não
+  existe, a régua provisória é o topo da `main`: só o commit do topo deploya, e um rerun
+  antigo é dispensado. A régua vale só até nascer o primeiro registro (o próximo merge
+  normal faz isso) — como regra permanente ela descartaria trabalho bom.
+- **`404` no `compare` não diz quem sumiu.** Pode ser o commit registrado (história
+  reescrita → o candidato segue) ou o próprio candidato (história descartada → deployá-lo
+  colocaria em staging código que já não está na `main`). O workflow **pergunta por cada
+  ref** antes de decidir; se os dois existirem, ou se não der para confirmar, ele para.
+
+A referência **não** é semeada com a tag do Coolify, mesmo na primeira execução: intenção
+não vira evidência por ser a primeira, e uma referência falsa sobreviveria para sempre.
 
 O workflow fala com a API do Coolify por `ops.olumechat.com.br`, mandando o service token
 do Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) **junto** com o
 `Authorization: Bearer`. Faltando qualquer um dos três, o Access devolve `302` com a tela
 de login — e o workflow para com essa mensagem em vez de tentar ler JSON de um HTML.
 
-A verificação final bate no **origin** (`--resolve <host>:443:179.198.105.75`), e não na
-borda da Cloudflare: `api-staging` está atrás de uma aplicação **própria** do Access, que o
-service token do CI não cobre. É a mesma receita da caixa de aviso acima — e é ela que pega
-o caso de dois containers disputando o mesmo `Host()`, que checar o container por dentro
-não pega.
+**O smoke da API passa pelo Access.** O runner do GitHub não alcança o origin da VPS, e
+staging inteiro está atrás do Access — a primeira execução real do workflow falhou com
+`HTTP 000` justamente por tentar o caminho direto. A saída foi uma aplicação do Access
+própria, `api-staging-health`, cobrindo **só** `api-staging.olumechat.com.br/health`, com
+política de service token: sem os cabeçalhos o caminho devolve `403`, e a raiz da API
+continua fechada mesmo com o token.
+
+### O portão está incompleto — leia antes de promover
+
+O deploy automático **não prova a versão que staging está servindo**. Isso importa porque é
+exatamente o que a promoção para produção pressupõe.
+
+- **`200` não prova versão.** É compatível com "container velho e saudável" — exatamente o
+  incidente da caixa de aviso abaixo. Provar exigiria que a resposta carregasse um marcador
+  de versão; nenhuma carrega hoje. É o **FIL-113**, registrado como **bloqueante do
+  FIL-101**: promover sob aprovação a partir de um staging cuja versão ninguém confirmou é
+  assinar embaixo de uma suposição.
+- **O frontend não é verificado por HTTP.** `staging.olumechat.com.br` está atrás do Access
+  sem exceção de caminho, e abrir buraco na landing de staging só para o smoke trocaria uma
+  garantia por um risco. Ele é coberto só pela conferência de estado no Coolify (container
+  `running:healthy` com a tag deployada), que prova o **container**, não o roteamento.
+
+Até o FIL-113 entrar, a validação humana do passo 8 da §0 do `WORKFLOW.md` é o que cobre
+essa lacuna — e vale conferir, na tela, que o que você está olhando é mesmo a mudança nova.
 
 Produção continua fora deste workflow, de propósito: promoção é o FIL-101, sob aprovação.
 
