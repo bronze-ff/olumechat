@@ -9,12 +9,14 @@
 # ficou verde, e é a MESMA validada em staging — byte a byte. Promover é apontar
 # a aplicação do Coolify para `sha-<curto>` e disparar.
 #
-# ROLLBACK É ESTE MESMO WORKFLOW, com um SHA anterior. Não existe caminho
-# separado nem código novo: tag imutável no registry significa que "voltar" e
-# "avançar" são a mesma operação. O que rollback NÃO faz é reverter migração —
-# o entrypoint roda as migrações no boot, então voltar a imagem devolve o
-# código, não o schema. É por isso que expand/contract é obrigatório
-# (docs/AMBIENTES.md, docs/WORKFLOW.md §6).
+# ROLLBACK É ESTE MESMO WORKFLOW, com um SHA anterior e `primeiro: frontend`.
+# Não existe caminho separado nem código novo: tag imutável no registry
+# significa que "voltar" e "avançar" são a mesma operação. Só a ORDEM muda, e
+# muda porque o argumento se inverte — ver o bloco "A ORDEM" no passo de
+# promoção. O que rollback NÃO faz é reverter migração: o entrypoint roda as
+# migrações no boot, então voltar a imagem devolve o código, não o schema. É
+# por isso que expand/contract é obrigatório (docs/AMBIENTES.md,
+# docs/WORKFLOW.md §6).
 #
 # Dois jobs, e a divisão importa:
 #
@@ -28,8 +30,9 @@
 #
 #   `promover` — roda no GitHub Environment `production`, que exige revisor.
 #                Enquanto o Filippe não aprovar, o job fica parado e produção
-#                não muda. Depois de aprovado: backend primeiro, frontend
-#                depois, e smoke que PROVA a versão servida nos dois domínios.
+#                não muda. Depois de aprovado, cada lado é deployado E provado
+#                antes de passar para o outro, na ordem de `primeiro:` — com
+#                smoke que PROVA a versão servida nos dois domínios públicos.
 name: Deploy produção
 
 on:
@@ -39,6 +42,14 @@ on:
         description: 'Commit a promover — SHA completo ou os 7 primeiros caracteres, o mesmo validado em staging. Para ROLLBACK, informe um SHA anterior.'
         required: true
         type: string
+      primeiro:
+        description: 'Ordem de deploy. Promoção normal: backend (padrão). Rollback para SHA antigo: escolha frontend, para não deixar backend velho servindo com frontend novo durante a janela.'
+        required: false
+        type: choice
+        default: backend
+        options:
+          - backend
+          - frontend
 
 permissions:
   contents: read
@@ -371,15 +382,23 @@ jobs:
       INTERVALO_CONFIRMACAO_S: '2'
       TAG: ${{ needs.validar.outputs.tag }}
       SHA_ESPERADO: ${{ needs.validar.outputs.completo }}
+      # Qual lado sobe (e é provado) primeiro. Ver o bloco "A ORDEM" no passo de
+      # promoção: em rollback o argumento se inverte, e quem decide é quem
+      # dispara.
+      PRIMEIRO: ${{ inputs.primeiro }}
       COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
-      # Backend PRIMEIRO, frontend depois: o frontend novo pode pedir rotas que
-      # só existem na API nova, e o contrário (API nova com frontend velho) é o
-      # sentido que o expand/contract já cobre.
-      - name: Deploy em produção (backend, depois frontend)
-        id: deploy
+      # Deploy e prova de versão de cada lado, na ordem escolhida em `primeiro:`.
+      #
+      # Os dois andam JUNTOS de propósito: quando a ordem inverte (rollback), o
+      # que precisa inverter é o par inteiro — de nada adianta descer o frontend
+      # antes se a prova dele só rodasse depois do backend. Por isso não há um
+      # passo "deploy" e outro "smoke": há um laço sobre os dois lados, e cada
+      # lado é (deployar → provar).
+      - name: Promover e provar a versão, na ordem escolhida
+        id: promocao
         run: |
           set -euo pipefail
 
@@ -387,6 +406,16 @@ jobs:
           trap 'rm -f "$CORPO"' EXIT
 
           erro() { echo "::error::$*"; }
+
+          # Trilha do que REALMENTE aconteceu, para o resumo não precisar deduzir
+          # de `outcome` de passo — que agora é um só. Cada marca é escrita
+          # DEPOIS do fato correspondente, então um job que morre no meio deixa
+          # um rastro honesto: o resumo consegue dizer "o backend subiu e foi
+          # provado; o frontend não chegou a subir", que é a informação de que
+          # alguém precisa às 3 da manhã.
+          PROGRESSO="${RUNNER_TEMP}/progresso-promocao.txt"
+          : > "$PROGRESSO"
+          marcar() { echo "$1" >> "$PROGRESSO"; }
 
           # Uma requisição à API do Coolify. Ecoa o status HTTP; o corpo fica em
           # $CORPO. Os três cabeçalhos vão SEMPRE juntos: o Bearer é do Coolify,
@@ -634,234 +663,197 @@ jobs:
             echo "::endgroup::"
           }
 
-          echo "Promovendo ${TAG} (${SHA_ESPERADO}) para produção."
-          deployar "backend-prod-img" "$UUID_BACKEND" "$IMAGEM_BACKEND" "$HOST_API"
-          deployar "frontend-prod-img" "$UUID_FRONTEND" "$IMAGEM_FRONTEND" "$HOST_FRONT"
-
-      # FIL-113 — `200` NÃO prova versão: é compatível com "container velho e
-      # saudável". Foi literalmente o que aconteceu em 31/07/2026, quando dois
-      # containers disputaram o mesmo `Host()` do Traefik: deploy verde, /health
-      # em 200, e o mundo recebendo a versão anterior por horas
-      # (docs/AMBIENTES.md). Aqui o mundo é cliente, então o smoke exige que a
-      # resposta DIGA qual build respondeu.
-      #
-      # Duas fases, como no deploy-staging.yml:
-      #   1. aquecimento — recheca até o timeout, porque logo depois de o
-      #      container ficar saudável ainda há uma janela em que a borda entrega
-      #      a resposta do anterior. Vermelho intermitente é vermelho que
-      #      ninguém lê.
-      #   2. confirmação — depois do primeiro acerto, exige mais respostas
-      #      CONSECUTIVAS. Um acerto só não distingue "servindo a build nova" de
-      #      "alternando entre duas builds"; no roteamento dividido as respostas
-      #      se revezam, e sair no primeiro acerto sairia verde exatamente no
-      #      cenário que este portão existe para pegar.
-      #
-      # Diferente de staging, aqui NÃO vai cabeçalho do Access: `api.olumechat.com.br`
-      # é público, e é assim que o cliente chega. O smoke tem que percorrer o
-      # mesmo caminho que ele.
-      - name: Smoke da API — 200 e a VERSÃO promovida em /health/ready e /health/live
-        id: smoke_api
-        run: |
-          set -euo pipefail
-
-          CORPO="$(mktemp)"
-          trap 'rm -f "$CORPO"' EXIT
-
-          URL_READY="https://${HOST_API}/health/ready"
-          URL_LIVE="https://${HOST_API}/health/live"
+          # ------------------------------------------------------------------
+          # PROVAR A VERSÃO SERVIDA (FIL-113)
+          #
+          # `200` NÃO prova versão: é compatível com "container velho e
+          # saudável". Foi literalmente o que aconteceu em 31/07/2026, quando
+          # dois containers disputaram o mesmo `Host()` do Traefik — deploy
+          # verde, /health em 200, e o mundo recebendo a versão anterior por
+          # horas (docs/AMBIENTES.md). Aqui o mundo é cliente.
+          #
+          # Duas fases, como no deploy-staging.yml:
+          #   1. aquecimento — recheca até o timeout, porque logo depois de o
+          #      container ficar saudável ainda há uma janela em que a borda
+          #      entrega a resposta do anterior. Vermelho intermitente é vermelho
+          #      que ninguém lê.
+          #   2. confirmação — depois do primeiro acerto, exige mais respostas
+          #      CONSECUTIVAS. Um acerto só não distingue "servindo a build nova"
+          #      de "alternando entre duas builds"; no roteamento dividido as
+          #      respostas se revezam, e sair no primeiro acerto sairia verde
+          #      exatamente no cenário que este portão existe para pegar.
+          #
+          # Diferente de staging, aqui NÃO vai cabeçalho do Access: os dois
+          # domínios de produção são públicos, e é assim que o cliente chega. O
+          # smoke tem que percorrer o mesmo caminho que ele — e é por isso que em
+          # produção o frontend também é provado por HTTP, sem a lacuna que
+          # staging declara.
+          # ------------------------------------------------------------------
 
           # Uma consulta. Ecoa "<status HTTP>|<sha servido>"; o corpo fica em
           # $CORPO. O SHA só é extraído no 200 — em qualquer outro status o corpo
-          # não é resposta da API. `jq -e` reprova corpo que não é JSON, o
-          # sintoma de a resposta vir de um proxy ou tela de erro.
-          consultar() {
-            local url="$1" codigo sha=""
+          # não é resposta da aplicação. `jq -e` reprova corpo que não é JSON: o
+          # sintoma de a resposta vir de um proxy, de uma tela de erro ou (no
+          # frontend) do fallback de SPA devolvendo index.html com 200.
+          consultar_versao() {
+            local url="$1" filtro="$2" codigo sha=""
             codigo="$(curl --silent --max-time 15 \
               --output "$CORPO" --write-out '%{http_code}' "$url" || true)"
             codigo="${codigo:-000}"
             if [ "$codigo" = "200" ]; then
-              sha="$(jq -er '.versao.sha // ""' "$CORPO" 2>/dev/null || true)"
+              sha="$(jq -er "$filtro" "$CORPO" 2>/dev/null || true)"
             fi
             printf '%s|%s' "$codigo" "$sha"
           }
 
-          # ---------- FASE 1: esperar a build promovida aparecer ----------
-          codigo=""; servido=""; confere="nao"; houve_200="nao"
-          limite=$(( SECONDS + TIMEOUT_HTTP_S ))
-          while [ "$SECONDS" -lt "$limite" ]; do
-            resposta="$(consultar "$URL_READY")"
-            codigo="${resposta%%|*}"
-            servido="${resposta#*|}"
+          # O portão de versão, igual para os dois lados: só o marcador (campo
+          # `versao.sha` na API, `sha` no /version.json) e as causas prováveis do
+          # "200 sem marcador" mudam. Parametrizado de propósito — duplicar as
+          # duas fases seria duplicar a chance de elas divergirem.
+          provar_versao() {
+            local rotulo="$1" url="$2" filtro="$3" causas="$4"
+            local codigo="" servido="" confere="nao" houve_200="nao"
+            local resposta limite confirmadas
 
-            if [ "$codigo" = "200" ]; then
-              houve_200="sim"
-              if [ "$servido" = "$SHA_ESPERADO" ]; then
-                confere="sim"
-                echo "API de produção: 200 em ${URL_READY}, e a resposta veio da build ${TAG} (${SHA_ESPERADO})."
-                head -c 400 "$CORPO"; echo
-                break
+            limite=$(( SECONDS + TIMEOUT_HTTP_S ))
+            while [ "$SECONDS" -lt "$limite" ]; do
+              resposta="$(consultar_versao "$url" "$filtro")"
+              codigo="${resposta%%|*}"
+              servido="${resposta#*|}"
+
+              if [ "$codigo" = "200" ]; then
+                houve_200="sim"
+                if [ "$servido" = "$SHA_ESPERADO" ]; then
+                  confere="sim"
+                  echo "${rotulo}: 200 em ${url}, e a resposta veio da build ${TAG} (${SHA_ESPERADO})."
+                  head -c 400 "$CORPO"; echo
+                  break
+                fi
+                echo "[$(date -u +%H:%M:%S)] ${rotulo}: 200, mas a versão servida é '${servido:-<ausente ou não-JSON>}' — esperando ${SHA_ESPERADO}"
+              else
+                echo "[$(date -u +%H:%M:%S)] ${rotulo}: HTTP ${codigo} em ${url} — nova tentativa em 5s"
               fi
-              echo "[$(date -u +%H:%M:%S)] API: 200, mas a versão servida é '${servido:-<ausente>}' — esperando ${SHA_ESPERADO}"
-            else
-              echo "[$(date -u +%H:%M:%S)] API: HTTP ${codigo} em ${URL_READY} — nova tentativa em 5s"
-            fi
-            sleep 5
-          done
+              sleep 5
+            done
 
-          if [ "$confere" != "sim" ]; then
-            if [ "$houve_200" != "sim" ]; then
-              echo "::error::${URL_READY} não respondeu 200 em ${TIMEOUT_HTTP_S}s (último status: ${codigo}). O container está 'running:healthy' com a tag ${TAG} — saudável por dentro —, então o problema está entre o Cloudflare/Traefik e o container, ou o /health/ready está reprovando por dependência (banco). PRODUÇÃO PODE ESTAR FORA: confira ops.olumechat.com.br agora."
-            elif [ -z "$servido" ]; then
-              echo "::error::${URL_READY} respondeu 200, mas a resposta não diz QUAL build respondeu (sem 'versao.sha', ou com ele nulo/'origem: desconhecida'). Duas causas: (a) quem está atendendo é uma imagem anterior ao FIL-113 — na prática um container velho ainda disputando o Host() do Traefik, exatamente o incidente de 31/07/2026 (docs/AMBIENTES.md); (b) a imagem foi construída sem o build-arg OLUME_COMMIT_SHA. Nos dois casos NÃO dá para afirmar que produção está servindo ${TAG}. Últimos 400 bytes: $(head -c 400 "$CORPO" | tr '\n' ' ')"
-            else
-              echo "::error::${URL_READY} respondeu 200, mas quem atendeu foi a build ${servido}, e não ${SHA_ESPERADO} (${TAG}) — divergência que persistiu por ${TIMEOUT_HTTP_S}s. O container novo está 'running:healthy' com a tag certa, então há OUTRO container reivindicando o mesmo Host() do Traefik. Receita para confirmar e resolver: docs/AMBIENTES.md, seção 'Trocar uma aplicação para o tipo imagem'."
-            fi
-            exit 1
-          fi
-
-          # ---------- FASE 2: confirmar que NÃO é roteamento dividido ----------
-          echo "Confirmando ${CONFIRMACOES_VERSAO}x seguidas (intervalo de ${INTERVALO_CONFIRMACAO_S}s) que a borda não alterna entre builds."
-          confirmadas=1
-          while [ "$confirmadas" -lt "$CONFIRMACOES_VERSAO" ]; do
-            sleep "$INTERVALO_CONFIRMACAO_S"
-            resposta="$(consultar "$URL_READY")"
-            codigo="${resposta%%|*}"
-            servido="${resposta#*|}"
-
-            if [ "$codigo" != "200" ]; then
-              echo "::error::a build ${TAG} já tinha respondido em ${URL_READY}, mas no meio da janela de confirmação a borda devolveu HTTP ${codigo} (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). O deploy terminou e o container está 'running:healthy', então isto não é boot lento: ou há outro container atendendo o mesmo Host() do Traefik e ele está doente, ou a borda oscila. Produção NÃO está comprovadamente servindo ${TAG}."
-              exit 1
+            if [ "$confere" != "sim" ]; then
+              if [ "$houve_200" != "sim" ]; then
+                erro "${url} não respondeu 200 em ${TIMEOUT_HTTP_S}s (último status: ${codigo}). O container está 'running:healthy' com a tag ${TAG} — ou seja, saudável por dentro —, então o problema está entre o Cloudflare/Traefik e o container. PRODUÇÃO PODE ESTAR FORA: confira ${url} e ops.olumechat.com.br agora."
+              elif [ -z "$servido" ]; then
+                erro "${url} respondeu 200, mas a resposta não diz QUAL build respondeu. ${causas} Em qualquer um dos casos NÃO dá para afirmar que produção está servindo ${TAG}. Últimos 400 bytes: $(head -c 400 "$CORPO" | tr '\n' ' ')"
+              else
+                erro "${url} respondeu 200, mas quem atendeu foi a build ${servido}, e não ${SHA_ESPERADO} (${TAG}) — divergência que persistiu por ${TIMEOUT_HTTP_S}s. O container novo está 'running:healthy' com a tag certa, então há OUTRO container reivindicando o mesmo Host() do Traefik. Receita para confirmar e resolver: docs/AMBIENTES.md, seção 'Trocar uma aplicação para o tipo imagem'."
+              fi
+              return 1
             fi
 
-            if [ "$servido" != "$SHA_ESPERADO" ]; then
-              echo "::error::ROTEAMENTO DIVIDIDO em ${HOST_API}: a borda respondeu ${SHA_ESPERADO} (${TAG}) e, ${INTERVALO_CONFIRMACAO_S}s depois, '${servido:-<sem marcador>}' (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). Duas builds estão atendendo o MESMO Host(), e parte do tráfego de CLIENTE recebe a versão anterior — é o incidente de 31/07/2026, e é o motivo de um único acerto não bastar. Os labels do Traefik são gravados no container quando ele é CRIADO: remover o domínio na configuração não tira um container antigo do roteamento; é preciso pará-lo. Receita completa em docs/AMBIENTES.md."
-              exit 1
-            fi
+            echo "Confirmando ${CONFIRMACOES_VERSAO}x seguidas (intervalo de ${INTERVALO_CONFIRMACAO_S}s) que ${url} não alterna entre builds."
+            confirmadas=1
+            while [ "$confirmadas" -lt "$CONFIRMACOES_VERSAO" ]; do
+              sleep "$INTERVALO_CONFIRMACAO_S"
+              resposta="$(consultar_versao "$url" "$filtro")"
+              codigo="${resposta%%|*}"
+              servido="${resposta#*|}"
 
-            confirmadas=$(( confirmadas + 1 ))
-            echo "[$(date -u +%H:%M:%S)] confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}: ${SHA_ESPERADO}"
-          done
+              if [ "$codigo" != "200" ]; then
+                erro "a build ${TAG} já tinha respondido em ${url}, mas no meio da janela de confirmação a borda devolveu HTTP ${codigo} (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). O deploy terminou e o container está 'running:healthy', então isto não é boot lento: ou há outro container atendendo o mesmo Host() do Traefik e ele está doente, ou a borda oscila. Produção NÃO está comprovadamente servindo ${TAG}."
+                return 1
+              fi
 
-          # /health/live é o MESMO host que acabou de ser provado, inclusive
-          # contra roteamento dividido — repetir a janela de confirmações aqui
-          # mediria a mesma borda de novo. O que falta provar é só que este
-          # caminho responde (o ticket pede os três endereços em 200), e a
-          # conferência do marcador vem de graça junto.
-          resposta="$(consultar "$URL_LIVE")"
-          codigo="${resposta%%|*}"
-          servido="${resposta#*|}"
-          if [ "$codigo" != "200" ]; then
-            echo "::error::${URL_LIVE} respondeu HTTP ${codigo}. O /health/ready do mesmo host acabou de responder 200 declarando ${TAG}, então não é o container: é este caminho especificamente."
-            exit 1
-          fi
-          if [ "$servido" != "$SHA_ESPERADO" ]; then
-            echo "::error::${URL_LIVE} respondeu 200, mas declarando a build '${servido:-<ausente>}' em vez de ${SHA_ESPERADO}. O /health/ready do mesmo host declarou a build certa ${CONFIRMACOES_VERSAO}x seguidas — duas builds atendendo o mesmo Host() é a explicação, e este pedido caiu na outra."
-            exit 1
-          fi
-          echo "API de produção: ${URL_LIVE} também em 200, declarando ${SHA_ESPERADO}."
+              if [ "$servido" != "$SHA_ESPERADO" ]; then
+                erro "ROTEAMENTO DIVIDIDO em ${url}: a borda respondeu ${SHA_ESPERADO} (${TAG}) e, ${INTERVALO_CONFIRMACAO_S}s depois, '${servido:-<sem marcador>}' (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). Duas builds estão atendendo o MESMO Host(), e parte do tráfego de CLIENTE recebe a versão anterior — é exatamente o incidente de 31/07/2026, e é o motivo de um único acerto não bastar. Os labels do Traefik são gravados no container quando ele é CRIADO: remover o domínio na configuração não tira um container antigo do roteamento; é preciso pará-lo. Receita completa em docs/AMBIENTES.md."
+                return 1
+              fi
 
-      # Em produção o frontend TEM prova por HTTP — a diferença que importa em
-      # relação a staging. Lá `staging.olumechat.com.br` está atrás do Cloudflare
-      # Access sem exceção de caminho, e o deploy automático consegue provar só o
-      # container (`running:healthy` com a tag), não o que o Traefik entrega.
-      # Aqui o domínio é público, então a mesma conferência que o humano faz à
-      # mão em staging roda automática — e é justamente o frontend que sofreu o
-      # incidente de roteamento dividido de 31/07/2026.
-      - name: Smoke do frontend — a landing responde e serve a VERSÃO promovida
-        id: smoke_front
-        run: |
-          set -euo pipefail
-
-          CORPO="$(mktemp)"
-          trap 'rm -f "$CORPO"' EXIT
-
-          RAIZ="https://${HOST_FRONT}/"
-          URL_VERSAO="https://${HOST_FRONT}/version.json"
-
-          # `/version.json` traz o marcador na RAIZ do objeto (na API ele vem sob
-          # `versao`) — é o mesmo contrato do FIL-113, documentado em
-          # docs/AMBIENTES.md. `jq -e` também reprova corpo que não é JSON: o
-          # sintoma de o caminho ter caído no fallback de SPA e devolvido
-          # index.html com 200, que é exatamente a falha silenciosa que este
-          # marcador existe para impedir.
-          consultar() {
-            local codigo sha=""
-            codigo="$(curl --silent --max-time 15 \
-              --output "$CORPO" --write-out '%{http_code}' "$URL_VERSAO" || true)"
-            codigo="${codigo:-000}"
-            if [ "$codigo" = "200" ]; then
-              sha="$(jq -er '.sha // ""' "$CORPO" 2>/dev/null || true)"
-            fi
-            printf '%s|%s' "$codigo" "$sha"
+              confirmadas=$(( confirmadas + 1 ))
+              echo "[$(date -u +%H:%M:%S)] confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}: ${SHA_ESPERADO}"
+            done
           }
 
-          # ---------- FASE 1 ----------
-          codigo=""; servido=""; confere="nao"; houve_200="nao"
-          limite=$(( SECONDS + TIMEOUT_HTTP_S ))
-          while [ "$SECONDS" -lt "$limite" ]; do
-            resposta="$(consultar)"
+          provar_backend() {
+            provar_versao "API de produção" "https://${HOST_API}/health/ready" '.versao.sha // ""' \
+              "Duas causas: (a) quem está atendendo é uma imagem anterior ao FIL-113 — na prática um container velho ainda disputando o Host() do Traefik, exatamente o incidente de 31/07/2026 (docs/AMBIENTES.md); (b) a imagem foi construída sem o build-arg OLUME_COMMIT_SHA."
+
+            # /health/live é o MESMO host que acabou de ser provado, inclusive
+            # contra roteamento dividido — repetir a janela de confirmações aqui
+            # mediria a mesma borda de novo. O que falta provar é só que este
+            # caminho responde (o ticket pede os três endereços em 200), e a
+            # conferência do marcador vem de graça junto.
+            local url="https://${HOST_API}/health/live" resposta codigo servido
+            resposta="$(consultar_versao "$url" '.versao.sha // ""')"
             codigo="${resposta%%|*}"
             servido="${resposta#*|}"
-
-            if [ "$codigo" = "200" ]; then
-              houve_200="sim"
-              if [ "$servido" = "$SHA_ESPERADO" ]; then
-                confere="sim"
-                echo "Frontend de produção: ${URL_VERSAO} veio da build ${TAG} (${SHA_ESPERADO})."
-                head -c 400 "$CORPO"; echo
-                break
-              fi
-              echo "[$(date -u +%H:%M:%S)] frontend: 200, mas a versão servida é '${servido:-<ausente ou não-JSON>}' — esperando ${SHA_ESPERADO}"
-            else
-              echo "[$(date -u +%H:%M:%S)] frontend: HTTP ${codigo} em ${URL_VERSAO} — nova tentativa em 5s"
-            fi
-            sleep 5
-          done
-
-          if [ "$confere" != "sim" ]; then
-            if [ "$houve_200" != "sim" ]; then
-              echo "::error::${URL_VERSAO} não respondeu 200 em ${TIMEOUT_HTTP_S}s (último status: ${codigo}). O container está 'running:healthy' com a tag ${TAG}, então o problema está entre o Cloudflare/Traefik e o container. A LANDING PODE ESTAR FORA: confira https://${HOST_FRONT} agora."
-            elif [ -z "$servido" ]; then
-              echo "::error::${URL_VERSAO} respondeu 200, mas a resposta não diz QUAL build respondeu (sem 'sha', com ele nulo, ou corpo que nem é JSON). Três causas: (a) quem está atendendo é uma imagem anterior ao FIL-113; (b) a imagem foi construída sem o build-arg OLUME_COMMIT_SHA; (c) o Nginx caiu no fallback de SPA e devolveu index.html com 200. Nos três casos NÃO dá para afirmar que produção está servindo ${TAG}. Últimos 400 bytes: $(head -c 400 "$CORPO" | tr '\n' ' ')"
-            else
-              echo "::error::${URL_VERSAO} respondeu 200, mas quem atendeu foi a build ${servido}, e não ${SHA_ESPERADO} (${TAG}) — divergência que persistiu por ${TIMEOUT_HTTP_S}s. O container novo está 'running:healthy' com a tag certa, então há OUTRO container reivindicando o mesmo Host() do Traefik. Receita em docs/AMBIENTES.md."
-            fi
-            exit 1
-          fi
-
-          # ---------- FASE 2 ----------
-          echo "Confirmando ${CONFIRMACOES_VERSAO}x seguidas que ${HOST_FRONT} não alterna entre builds."
-          confirmadas=1
-          while [ "$confirmadas" -lt "$CONFIRMACOES_VERSAO" ]; do
-            sleep "$INTERVALO_CONFIRMACAO_S"
-            resposta="$(consultar)"
-            codigo="${resposta%%|*}"
-            servido="${resposta#*|}"
-
             if [ "$codigo" != "200" ]; then
-              echo "::error::a build ${TAG} já tinha respondido em ${URL_VERSAO}, mas no meio da janela de confirmação a borda devolveu HTTP ${codigo} (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). O deploy terminou e o container está 'running:healthy', então isto não é boot lento: ou há outro container atendendo o mesmo Host() do Traefik, ou a borda oscila."
-              exit 1
+              erro "${url} respondeu HTTP ${codigo}. O /health/ready do mesmo host acabou de responder 200 declarando ${TAG}, então não é o container: é este caminho especificamente."
+              return 1
             fi
-
             if [ "$servido" != "$SHA_ESPERADO" ]; then
-              echo "::error::ROTEAMENTO DIVIDIDO em ${HOST_FRONT}: a borda respondeu ${SHA_ESPERADO} (${TAG}) e, ${INTERVALO_CONFIRMACAO_S}s depois, '${servido:-<sem marcador>}' (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). Duas builds atendendo o MESMO Host(), e parte dos visitantes recebe a versão anterior — é o incidente de 31/07/2026. Os labels do Traefik são gravados na CRIAÇÃO do container: remover o domínio na configuração não tira o antigo do roteamento; é preciso pará-lo (docs/AMBIENTES.md)."
-              exit 1
+              erro "${url} respondeu 200, mas declarando a build '${servido:-<ausente>}' em vez de ${SHA_ESPERADO}. O /health/ready do mesmo host declarou a build certa ${CONFIRMACOES_VERSAO}x seguidas — duas builds atendendo o mesmo Host() é a explicação, e este pedido caiu na outra."
+              return 1
             fi
+            echo "API de produção: ${url} também em 200, declarando ${SHA_ESPERADO}."
+          }
 
-            confirmadas=$(( confirmadas + 1 ))
-            echo "[$(date -u +%H:%M:%S)] confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}: ${SHA_ESPERADO}"
+          provar_frontend() {
+            provar_versao "Frontend de produção" "https://${HOST_FRONT}/version.json" '.sha // ""' \
+              "Três causas: (a) quem está atendendo é uma imagem anterior ao FIL-113; (b) a imagem foi construída sem o build-arg OLUME_COMMIT_SHA; (c) o Nginx caiu no fallback de SPA e devolveu index.html com 200."
+
+            # O terceiro endereço do critério de aceite. `/version.json` já provou
+            # a versão, mas ele é um arquivo estático servido por um `location`
+            # próprio: a raiz é o que o visitante abre, e um `try_files` quebrado
+            # derrubaria a landing sem tocar no marcador.
+            local raiz="https://${HOST_FRONT}/" codigo
+            codigo="$(curl --silent --max-time 15 --output "$CORPO" --write-out '%{http_code}' "$raiz" || true)"
+            if [ "${codigo:-000}" != "200" ]; then
+              erro "${raiz} respondeu HTTP ${codigo:-000}. O /version.json do mesmo host acabou de responder 200 com a build certa, então o container e o roteamento estão de pé — quebrou a entrega do index.html (confira o try_files em client/nginx.conf)."
+              return 1
+            fi
+            echo "Frontend de produção: ${raiz} em 200."
+          }
+
+          # ------------------------------------------------------------------
+          # A ORDEM, e por que ela é uma entrada e não uma dedução.
+          #
+          # Promoção normal vai de backend para frontend: o frontend novo pode
+          # pedir rota que só existe na API nova, e o sentido contrário (API nova
+          # com frontend velho) é o que o expand/contract já cobre.
+          #
+          # ROLLBACK inverte o argumento. Voltando para um SHA antigo, "backend
+          # primeiro" deixa a API VELHA no ar enquanto o frontend NOVO ainda
+          # atende — e é o frontend novo que pode chamar rota que a API velha não
+          # tem. Descer o frontend antes encurta essa janela.
+          #
+          # Quem escolhe é quem dispara, por `primeiro:` — nada de detectar
+          # rollback sozinho. Detecção exigiria adivinhar a intenção a partir do
+          # SHA ("é mais antigo que o que está no ar?"), e errar essa adivinhação
+          # inverteria a ordem do deploy de produção em silêncio. A promoção já é
+          # manual e aprovada; quem digita o SHA sabe se está avançando ou
+          # voltando.
+          # ------------------------------------------------------------------
+          case "$PRIMEIRO" in
+            backend)  LADOS="backend frontend" ;;
+            frontend) LADOS="frontend backend" ;;
+            *)
+              erro "a entrada 'primeiro' veio como '${PRIMEIRO}', e só 'backend' ou 'frontend' são aceitos. Nada foi tocado."
+              exit 1 ;;
+          esac
+
+          echo "Promovendo ${TAG} (${SHA_ESPERADO}) para produção — ${PRIMEIRO} primeiro."
+
+          for lado in $LADOS; do
+            case "$lado" in
+              backend)
+                deployar "backend-prod-img" "$UUID_BACKEND" "$IMAGEM_BACKEND" "$HOST_API"
+                marcar "backend:deploy"
+                provar_backend
+                marcar "backend:versao" ;;
+              frontend)
+                deployar "frontend-prod-img" "$UUID_FRONTEND" "$IMAGEM_FRONTEND" "$HOST_FRONT"
+                marcar "frontend:deploy"
+                provar_frontend
+                marcar "frontend:versao" ;;
+            esac
           done
-
-          # O terceiro endereço do critério de aceite. `/version.json` já provou
-          # a versão, mas ele é um arquivo estático servido por um `location`
-          # próprio: a raiz é o que o visitante abre, e um `try_files` quebrado
-          # derrubaria a landing sem tocar no marcador.
-          codigo="$(curl --silent --max-time 15 --output "$CORPO" --write-out '%{http_code}' "$RAIZ" || true)"
-          if [ "${codigo:-000}" != "200" ]; then
-            echo "::error::${RAIZ} respondeu HTTP ${codigo:-000}. O /version.json do mesmo host acabou de responder 200 com a build certa, então o container e o roteamento estão de pé — quebrou a entrega do index.html (confira o try_files em client/nginx.conf)."
-            exit 1
-          fi
-          echo "Frontend de produção: ${RAIZ} em 200."
 
       # A evidência de qual commit está no ar, no mecanismo nativo do GitHub.
       #
@@ -941,22 +933,36 @@ jobs:
 
           echo "Registrado: deployment ${ID} do ambiente production em ${SHA_ESPERADO} (${TAG})."
 
-      # O resumo só pode afirmar o que ESTA execução verificou — cada linha
-      # depende do `outcome` do passo que a produziu. Um resumo que repete o
-      # texto do caminho feliz quando o job morreu no meio apresenta evidência
-      # falsa exatamente no momento em que alguém vai ler para entender o que
-      # houve.
+      # O resumo só pode afirmar o que ESTA execução verificou. Ele não deduz
+      # nada do `outcome` do passo de promoção — que é um só e diria apenas
+      # "falhou" —, e sim lê a trilha que aquele passo foi escrevendo DEPOIS de
+      # cada fato. Um resumo que repete o texto do caminho feliz quando o job
+      # morreu no meio apresenta evidência falsa exatamente no momento em que
+      # alguém vai ler para entender o que houve.
       - name: Resumo
         if: always()
         env:
           RESULTADO: ${{ job.status }}
-          R_DEPLOY: ${{ steps.deploy.outcome }}
-          R_SMOKE_API: ${{ steps.smoke_api.outcome }}
-          R_SMOKE_FRONT: ${{ steps.smoke_front.outcome }}
+          R_PROMOCAO: ${{ steps.promocao.outcome }}
           R_REGISTRO: ${{ steps.registro.outcome }}
           ATOR: ${{ github.actor }}
         run: |
           set -euo pipefail
+
+          PROGRESSO="${RUNNER_TEMP}/progresso-promocao.txt"
+          tem() { grep -qx "$1" "$PROGRESSO" 2>/dev/null; }
+
+          case "$PRIMEIRO" in
+            frontend) LADOS="frontend backend" ;;
+            *)        LADOS="backend frontend" ;;
+          esac
+
+          rotulo() {
+            case "$1" in
+              backend)  printf 'backend (`%s`)' "$HOST_API" ;;
+              frontend) printf 'frontend (`%s`)' "$HOST_FRONT" ;;
+            esac
+          }
 
           {
             echo "## Promoção para produção — ${RESULTADO}"
@@ -965,65 +971,70 @@ jobs:
             echo "|---|---|"
             echo "| Commit | \`${SHA_ESPERADO}\` |"
             echo "| Tag | \`${TAG}\` |"
+            echo "| Ordem | **${PRIMEIRO}** primeiro |"
             echo "| Disparado por | @${ATOR} |"
             echo
 
-            if [ "${R_DEPLOY}" != "success" ]; then
-              echo "Parou no deploy (\`${R_DEPLOY}\`). O log do passo diz se falhou nas guardas"
-              echo "(tipo da aplicação, imagem ou domínio — nesse caso **nada** foi tocado), ao"
-              echo "gravar a tag, no deployment, ou esperando o container ficar"
-              echo "\`running:healthy\`."
+            if tem "backend:versao" && tem "frontend:versao"; then
+              echo "### ✅ Produção está rodando \`${SHA_ESPERADO}\` (\`${TAG}\`)"
               echo
-              echo "**Não** assuma que produção está na tag acima. Se o backend subiu e o"
-              echo "frontend não, os dois estão em versões diferentes — confira"
-              echo "\`ops.olumechat.com.br\` e, se precisar, promova o SHA anterior por este"
-              echo "mesmo workflow."
-              exit 0
-            fi
-            if [ "${R_SMOKE_API}" != "success" ]; then
-              echo "Deploy concluído: os dois containers em \`running:healthy\` com a tag acima."
+              echo "**Verificado nesta execução:**"
               echo
-              echo "Parou no smoke da API (\`${R_SMOKE_API}\`) — o container está saudável por"
-              echo "dentro, mas a borda não confirmou a versão. O log diz qual das quatro coisas"
-              echo "aconteceu: não respondeu 200; respondeu 200 **sem** marcador de versão;"
-              echo "respondeu 200 declarando **outra** build; ou **alternou** entre builds"
-              echo "dentro da janela de confirmação (\`ROTEAMENTO DIVIDIDO\`)."
+              echo "- os dois containers em \`running:healthy\` com a tag acima;"
+              echo "- \`https://${HOST_API}/health/ready\` em 200 **declarando** essa build em"
+              echo "  **${CONFIRMACOES_VERSAO} respostas consecutivas** — sem sinal de roteamento dividido;"
+              echo "- \`https://${HOST_API}/health/live\` em 200 declarando a mesma build;"
+              echo "- \`https://${HOST_FRONT}/version.json\` servindo o mesmo commit, também em"
+              echo "  ${CONFIRMACOES_VERSAO} respostas consecutivas, e \`https://${HOST_FRONT}/\` em 200."
               echo
-              echo "**Cliente do outro lado:** confira \`https://${HOST_API}/health/ready\` agora."
-              exit 0
-            fi
-            if [ "${R_SMOKE_FRONT}" != "success" ]; then
-              echo "Deploy concluído e **API provada**: \`${HOST_API}\` responde 200 declarando"
-              echo "a build acima em ${CONFIRMACOES_VERSAO} respostas consecutivas."
-              echo
-              echo "Parou no smoke do frontend (\`${R_SMOKE_FRONT}\`) — a landing não confirmou a"
-              echo "versão. Como a API já está na versão nova e a landing pode não estar, este é"
-              echo "o estado mais delicado: confira \`https://${HOST_FRONT}/version.json\` agora."
-              exit 0
-            fi
-            if [ "${R_REGISTRO}" != "success" ]; then
-              echo "**Produção está na tag acima, e isso está provado** — containers em"
-              echo "\`running:healthy\`, API e landing servindo o commit acima."
-              echo
-              echo "O que falhou (\`${R_REGISTRO}\`) foi apenas **registrar** o deploy no ambiente"
-              echo "\`production\`. Nada a refazer no ar; a aba Environments é que ficou"
-              echo "desatualizada."
+              if [ "${R_REGISTRO}" != "success" ]; then
+                echo "> O que falhou (\`${R_REGISTRO}\`) foi apenas **registrar** o deploy no ambiente"
+                echo "> \`production\`. Nada a refazer no ar; a aba Environments é que ficou"
+                echo "> desatualizada."
+                echo
+              fi
+              echo "> **Rollback é este mesmo workflow** com um SHA anterior — e, nele, marque"
+              echo "> \`primeiro: frontend\`, para não deixar a API velha atendendo o frontend novo"
+              echo "> durante a janela. **Voltar a imagem não volta a migração:** o entrypoint roda"
+              echo "> as migrações no boot, então o rollback devolve o código, não o schema"
+              echo "> (\`docs/AMBIENTES.md\`)."
               exit 0
             fi
 
-            echo "### ✅ Produção está rodando \`${SHA_ESPERADO}\` (\`${TAG}\`)"
+            echo "### O que esta execução chegou a fazer"
             echo
-            echo "**Verificado nesta execução:**"
+            for lado in $LADOS; do
+              if tem "${lado}:deploy"; then
+                echo "- ✅ **$(rotulo "$lado")** — container \`running:healthy\` com a tag acima"
+              else
+                echo "- ⬜ **$(rotulo "$lado")** — **não** foi deployado nesta execução"
+                continue
+              fi
+              if tem "${lado}:versao"; then
+                echo "  - ✅ versão servida **provada** pela borda"
+              else
+                echo "  - ❌ versão servida **não** provada — o container está de pé, mas a borda não confirmou que é ele quem responde"
+              fi
+            done
             echo
-            echo "- os dois containers em \`running:healthy\` com a tag acima;"
-            echo "- \`https://${HOST_API}/health/ready\` em 200 **declarando** essa build em"
-            echo "  **${CONFIRMACOES_VERSAO} respostas consecutivas** — sem sinal de roteamento dividido;"
-            echo "- \`https://${HOST_API}/health/live\` em 200 declarando a mesma build;"
-            echo "- \`https://${HOST_FRONT}/version.json\` servindo o mesmo commit, também em"
-            echo "  ${CONFIRMACOES_VERSAO} respostas consecutivas, e \`https://${HOST_FRONT}/\` em 200."
+
+            if ! tem "backend:deploy" && ! tem "frontend:deploy"; then
+              echo "**Nada foi alterado em produção.** O passo parou nas guardas (tipo da"
+              echo "aplicação, imagem ou domínio) ou antes de gravar qualquer tag — o log do"
+              echo "passo \`Promover e provar\` diz onde."
+            elif tem "backend:deploy" && tem "frontend:deploy"; then
+              echo "**Os dois lados foram deployados, mas a versão no ar não está provada.**"
+              echo "O log diz qual das quatro coisas aconteceu no lado que falhou: não respondeu"
+              echo "200; respondeu 200 **sem** marcador de versão; respondeu 200 declarando"
+              echo "**outra** build; ou **alternou** entre builds dentro da janela de confirmação"
+              echo "(\`ROTEAMENTO DIVIDIDO\`)."
+            else
+              echo "> ⚠️ **Produção está com os dois lados em versões diferentes.** Um foi"
+              echo "> deployado e o outro não. Decida agora entre concluir (dispare este workflow"
+              echo "> de novo com o **mesmo** SHA — o lado que já subiu é um no-op) ou voltar"
+              echo "> (dispare com o SHA anterior e \`primeiro: frontend\`)."
+            fi
             echo
-            echo "> **Rollback é este mesmo workflow** com um SHA anterior — Actions → *Deploy"
-            echo "> produção* → *Run workflow* → o SHA antigo → aprovar. **Voltar a imagem não"
-            echo "> volta a migração:** o entrypoint roda as migrações no boot, então o rollback"
-            echo "> devolve o código, não o schema (\`docs/AMBIENTES.md\`)."
+            echo "**Confira agora:** \`https://${HOST_API}/health/ready\`,"
+            echo "\`https://${HOST_FRONT}/version.json\` e \`ops.olumechat.com.br\`."
           } >> "$GITHUB_STEP_SUMMARY"

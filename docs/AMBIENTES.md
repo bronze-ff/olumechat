@@ -239,7 +239,9 @@ SHA, e existe um momento explícito em que alguém olha para staging e decide.
 
 **Como promover** — Actions → **Deploy produção** → *Run workflow* → informe o **SHA
 validado em staging** (completo ou os 7 primeiros caracteres; ele está no resumo da execução
-do `Deploy staging` e na aba **Environments**) → *Run workflow*.
+do `Deploy staging` e na aba **Environments**) → *Run workflow*. O campo `primeiro` decide
+qual lado sobe antes; deixe em `backend` para promoção normal e use `frontend` para rollback
+(por quê, na seção de rollback abaixo).
 
 Não há build aqui. A imagem existe no GHCR desde que a CI daquele commit ficou verde, e é a
 **mesma** validada em staging — byte a byte. Promover é apontar a aplicação para
@@ -253,9 +255,11 @@ São dois jobs, e a divisão é o que evita chamar alguém para aprovar uma prom
    `olumechat-client-prod:sha-<curto>` existem no GHCR. SHA digitado errado ou commit que
    nunca passou pela CI morre aqui, antes da aprovação.
 2. **`promover`** roda no GitHub Environment `production` e **fica parado** esperando o
-   revisor. Depois de aprovado: backend primeiro, frontend depois — grava a tag, dispara,
-   espera o deployment terminar e exige o container `running:healthy` **com a tag** —, e só
-   então o smoke.
+   revisor. Depois de aprovado, cada lado é deployado **e provado** antes de o outro
+   começar: grava a tag, dispara, espera o deployment terminar, exige o container
+   `running:healthy` **com a tag** e só então confere pela borda qual versão está sendo
+   servida. Os dois andam juntos de propósito — quando a ordem inverte, o que precisa
+   inverter é o par inteiro.
 
 **Configuração obrigatória, uma vez:** o ambiente `production` precisa existir em Settings →
 Environments com **Required reviewers**. Não é detalhe de conforto: um ambiente que não
@@ -288,12 +292,24 @@ No fim, o workflow registra um deployment do ambiente `production` apontando par
 promovido — a aba **Environments** passa a responder "qual commit está em produção?" sem
 ninguém abrir o Coolify.
 
-### Rollback: o mesmo workflow, com um SHA anterior
+### Rollback: o mesmo workflow, com um SHA anterior e `primeiro: frontend`
 
 Não existe procedimento separado, e não existe código novo. Tag imutável no registry faz
 "voltar" e "avançar" serem a mesma operação: Actions → **Deploy produção** → o SHA antigo →
-aprovar. Todos os portões continuam valendo — a imagem tem que existir, o container tem que
-ficar saudável, o smoke tem que provar a versão. Minutos, e sem rebuild.
+**marque `primeiro: frontend`** → aprovar. Todos os portões continuam valendo — a imagem tem
+que existir, o container tem que ficar saudável, o smoke tem que provar a versão. Minutos, e
+sem rebuild.
+
+**Só a ordem muda, e muda porque o argumento se inverte.** Na promoção normal o backend vai
+primeiro: o frontend novo pode chamar rota que só existe na API nova. No rollback é o
+contrário — voltando, "backend primeiro" deixa a **API velha** no ar enquanto o **frontend
+novo** ainda atende, e é o frontend novo que chama a rota que a API velha não tem. Descer o
+frontend antes encurta essa janela.
+
+Quem escolhe é quem dispara; o workflow **não** tenta deduzir. Deduzir exigiria adivinhar a
+intenção a partir do SHA ("é mais antigo que o que está no ar?"), e errar a adivinhação
+inverteria a ordem de um deploy de produção em silêncio. A promoção já é manual e aprovada:
+quem digita o SHA sabe se está avançando ou voltando.
 
 > **Voltar a imagem NÃO volta a migração.** O entrypoint roda as migrações no boot; o
 > rollback devolve o **código**, não o **schema**. É exatamente por isso que expand/contract

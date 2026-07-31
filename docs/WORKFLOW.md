@@ -183,8 +183,10 @@ Resumo dos passos 6 a 11 da §0. Merge na `main` **não** é lançamento. O cami
    e pede aprovação → aprovado, produção recebe **a mesma imagem** validada, nunca
    um rebuild.
 
-Deu ruim depois de promover? O mesmo workflow com o SHA anterior devolve a versão
-antiga — mas devolve o **código**, não o **schema** (§6).
+Deu ruim depois de promover? O mesmo workflow com o SHA anterior e
+`primeiro: frontend` devolve a versão antiga — mas devolve o **código**, não o
+**schema** (§6). A ordem invertida no rollback tem motivo, explicado em
+[`AMBIENTES.md`](AMBIENTES.md).
 
 Mudança que só toca documentação pode ir direto. Qualquer coisa que toque código,
 schema ou configuração passa por staging. Ver [`AMBIENTES.md`](AMBIENTES.md).
@@ -242,7 +244,8 @@ implementa:
   `.env.example` leva placeholders.
 - **Staging sobe sozinho** a cada merge com CI verde; **produção só sobe por
   aprovação**: Actions → *Deploy produção* → o SHA que você validou em staging →
-  aprovar. **Rollback é o mesmo workflow com um SHA anterior.** O Coolify
+  aprovar. **Rollback é o mesmo workflow com um SHA anterior e
+  `primeiro: frontend`.** O Coolify
   (`ops.olumechat.com.br`) continua servindo para diagnóstico e para o
   procedimento de emergência, não para o deploy do dia a dia.
 - Migração roda no entrypoint do container, **antes** do servidor subir: falhou, o
