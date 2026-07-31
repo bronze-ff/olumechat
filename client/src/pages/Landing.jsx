@@ -83,7 +83,7 @@ function ProductPreview() {
   ];
 
   return (
-    <figure className="landing-product-wrap landing-enter landing-enter-delay">
+    <figure className="landing-product-wrap">
       <div
         className="landing-product-frame"
         role="group"
@@ -258,7 +258,7 @@ export default function Landing() {
       </a>
 
       <header className="landing-nav-wrap sticky top-0 z-50 px-3 pt-3 sm:px-5">
-        <div className="landing-nav mx-auto flex h-[58px] max-w-[1240px] items-center gap-4 rounded-full bg-[#071A15] px-3.5 text-white sm:px-5">
+        <div className="landing-nav mx-auto flex h-[58px] max-w-[1240px] items-center gap-4 rounded-xl border border-white/10 bg-[#071A15] px-3.5 text-white sm:px-5">
           <Link to="/" aria-label="Olume Chat, página inicial" className="shrink-0 rounded-md">
             <Brand inverse compact className="sm:hidden" />
             <Brand inverse className="hidden sm:flex" />
@@ -273,7 +273,7 @@ export default function Landing() {
             <Link to="/login" className="hidden min-h-10 items-center px-3 text-[13px] font-semibold text-white/75 hover:text-white md:inline-flex">
               Entrar
             </Link>
-            <a href="#demonstracao" className="landing-mint-action inline-flex min-h-10 items-center justify-center rounded-full bg-[#5BD6AE] px-3.5 text-xs font-bold text-[#071A15] hover:bg-[#7BE0C2] sm:px-5 sm:text-[13px]">
+            <a href="#demonstracao" className="landing-primary-action inline-flex min-h-11 items-center justify-center rounded-lg bg-[#1F7A60] px-3.5 text-xs font-bold text-white hover:bg-[#17664F] sm:px-5 sm:text-[13px]">
               <span className="hidden sm:inline">Solicitar demonstração</span>
               <span className="sm:hidden">Demonstração</span>
               <span className="ml-2" aria-hidden="true">→</span>
@@ -284,10 +284,9 @@ export default function Landing() {
 
       <main id="conteudo">
         <section id="produto" className="relative border-b border-paper-300">
-          <div className="mx-auto grid min-h-[calc(100svh-82px)] max-w-[1320px] items-center gap-12 px-5 py-14 sm:px-8 lg:grid-cols-[0.86fr_1.14fr] lg:gap-14 lg:py-16">
-            <div className="landing-enter relative z-10 max-w-[630px]">
-              <p className="mb-5 flex items-center gap-3 text-sm font-semibold text-stone-700">
-                <span className="h-2.5 w-2.5 bg-[#5BD6AE]" aria-hidden="true" />
+          <div className="mx-auto grid min-h-[calc(100svh-82px)] max-w-[1240px] items-center gap-12 px-5 py-14 sm:px-8 lg:grid-cols-[0.86fr_1.14fr] lg:gap-14 lg:py-16">
+            <div className="relative z-10 max-w-[630px]">
+              <p className="mb-5 text-sm font-semibold text-stone-700">
                 Atendimento que não perde o fio
               </p>
               <h1 className="landing-display max-w-[12ch] text-[clamp(3rem,5.2vw,5.1rem)] leading-[0.91] text-ink-950">
@@ -297,11 +296,11 @@ export default function Landing() {
                 WhatsApp, filas, equipe e automações em uma operação que todo mundo consegue acompanhar.
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-                <a href="#demonstracao" className="landing-cta landing-mint-action inline-flex min-h-12 items-center justify-center rounded-xl bg-[#5BD6AE] px-6 text-sm font-bold text-[#071A15] hover:bg-[#7BE0C2]">
+                <a href="#demonstracao" className="landing-cta landing-primary-action inline-flex min-h-12 items-center justify-center rounded-lg bg-[#1F7A60] px-6 text-sm font-bold text-white hover:bg-[#17664F]">
                   Solicitar demonstração <span className="ml-3" aria-hidden="true">→</span>
                 </a>
-                <a href="#como-funciona" className="landing-cta inline-flex min-h-12 items-center justify-center rounded-xl border border-ink-950 bg-transparent px-6 text-sm font-bold text-ink-950 hover:bg-ink-950 hover:text-white">
-                  Ver a plataforma
+                <a href="#como-funciona" className="inline-flex self-start items-center gap-2 py-2 text-sm font-bold text-ink-950 underline decoration-paper-500 underline-offset-4 hover:text-brand-800">
+                  Ver como funciona <span aria-hidden="true">↓</span>
                 </a>
               </div>
             </div>
@@ -334,7 +333,7 @@ export default function Landing() {
               <span>O cliente conta tudo outra vez.</span>
             </div>
             <p className="landing-resolution">
-              O Olume Chat mostra onde cada conversa está — e o que precisa acontecer depois.
+              O Olume Chat mostra onde cada conversa está e qual é o próximo passo.
             </p>
           </div>
         </section>
@@ -383,7 +382,7 @@ export default function Landing() {
               </p>
               <p className="mt-10 text-sm text-[#BFD0CA]">
                 Já usa o Olume Chat?{' '}
-                <Link to="/login" className="font-bold text-[#F3F8F6] underline decoration-[#5BD6AE] underline-offset-4">
+                <Link to="/login" className="font-bold text-[#F3F8F6] underline underline-offset-4 hover:text-white">
                   Entrar no sistema
                 </Link>
               </p>
@@ -400,7 +399,7 @@ export default function Landing() {
                     <p className="mt-1 text-sm leading-6 text-[#BFD0CA]">
                       {envio.estado === 'sucesso'
                         ? 'Nosso time comercial vai entrar em contato.'
-                        : 'Não conseguimos enviar automaticamente agora, então preparamos a mensagem no seu aplicativo de e-mail — é só confirmar o envio.'}
+                        : 'Não conseguimos enviar automaticamente agora. Preparamos a mensagem no seu aplicativo de e-mail para você confirmar o envio.'}
                     </p>
                   </div>
                 </div>
@@ -439,16 +438,16 @@ export default function Landing() {
                   <button
                     type="submit"
                     disabled={envio.estado === 'enviando'}
-                    className="landing-mint-action inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-[#5BD6AE] px-6 text-sm font-bold text-[#071A15] hover:bg-[#7BE0C2] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                    className="landing-primary-action inline-flex min-h-12 w-full items-center justify-center rounded-lg bg-[#1F7A60] px-6 text-sm font-bold text-white hover:bg-[#17664F] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                   >
                     {envio.estado === 'enviando' ? 'Enviando…' : 'Solicitar demonstração'}
                     {envio.estado !== 'enviando' && <span className="ml-3" aria-hidden="true">→</span>}
                   </button>
                   {envio.estado === 'erro' && (
-                    <p className="mt-3 text-xs leading-5 text-[#FFB4A9]" role="alert">{envio.erro}</p>
+                    <p className="mt-3 text-xs leading-5 text-[rgb(var(--color-danger-on-dark))]" role="alert">{envio.erro}</p>
                   )}
                   <p className="mt-4 text-xs leading-5 text-[#BFD0CA]">
-                    Ou escreva para <a className="text-[#F3F8F6] underline underline-offset-4 hover:text-[#5BD6AE]" href={`mailto:${emailComercial}`}>{emailComercial}</a>
+                    Ou escreva para <a className="text-[#F3F8F6] underline underline-offset-4 hover:text-white" href={`mailto:${emailComercial}`}>{emailComercial}</a>
                   </p>
                 </div>
               </form>

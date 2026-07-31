@@ -6,6 +6,7 @@
   :root {
     color-scheme: light;
     --olume-ink: #071a15;
+    --olume-ink-strong: #0b100e;
     --olume-primary: #1f7a60;
     --olume-signal: #5bd6ae;
     --color-surface: 255 255 255;
@@ -48,6 +49,7 @@
     --status-red-soft-strong: 254 226 226;
     --status-red-border: 254 202 202;
     --status-red-text: 185 28 28;
+    --color-danger-on-dark: 255 180 169;
     --status-amber-soft: 255 251 235;
     --status-amber-soft-strong: 254 243 199;
     --status-amber-border: 253 230 138;
@@ -56,6 +58,7 @@
     --status-green-soft-strong: 209 250 229;
     --status-green-border: 167 243 208;
     --status-green-text: 4 120 87;
+    --color-success-on-dark: 105 218 177;
     --status-purple-soft: 250 245 255;
     --status-purple-text: 126 34 206;
   }
@@ -398,7 +401,7 @@ html[data-theme="dark"] .text-purple-700 { color: rgb(var(--status-purple-text))
 }
 
 html[data-theme="dark"] .product-sidebar {
-  background: #091210;
+  background: var(--olume-ink-strong);
 }
 
 html[data-theme="dark"] .conversation-thread {
@@ -429,6 +432,9 @@ html {
 }
 
 .landing-page {
+  --landing-radius-control: 8px;
+  --landing-radius-surface: 12px;
+  --landing-motion: 150ms cubic-bezier(.22, 1, .36, 1);
   overflow: clip;
   font-family: "Archivo", "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
 }
@@ -442,7 +448,7 @@ html {
   font-weight: 900;
   font-stretch: 75%;
   font-variation-settings: "wdth" 75, "wght" 900;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.04em;
   word-spacing: 0.06em;
   text-transform: uppercase;
   text-wrap: balance;
@@ -454,9 +460,9 @@ html {
 
 .landing-nav {
   pointer-events: auto;
-  box-shadow: 0 6px 0 rgb(11 21 19 / 0.08);
 }
 
+/* O mint assina a marca e a promessa central; ações usam o verde operacional. */
 .landing-highlight {
   display: inline;
   padding-inline: 0.055em;
@@ -466,26 +472,18 @@ html {
   box-decoration-break: clone;
 }
 
-.landing-mint-action {
-  color: #071a15 !important;
+.landing-primary-action {
+  color: #fff !important;
 }
 
 .landing-cta {
-  transition: transform 180ms cubic-bezier(.22, 1, .36, 1), background-color 150ms ease, color 150ms ease;
+  transition: transform var(--landing-motion), background-color var(--landing-motion), color var(--landing-motion);
 }
 
 @media (hover: hover) {
   .landing-cta:hover {
-    transform: translateY(-2px);
+    transform: translateY(-1px);
   }
-}
-
-.landing-enter {
-  animation: landing-enter 0.7s cubic-bezier(.22, 1, .36, 1) both;
-}
-
-.landing-enter-delay {
-  animation-delay: 0.1s;
 }
 
 .landing-product-wrap {
@@ -495,10 +493,9 @@ html {
 .landing-product-frame {
   overflow: hidden;
   border: 1px solid #bfd0ca;
-  border-radius: 12px;
+  border-radius: var(--landing-radius-surface);
   background: #f3f8f6;
   color: #071a15;
-  box-shadow: 0 6px 0 rgb(11 21 19 / 0.08);
 }
 
 .landing-product-topbar {
@@ -518,28 +515,23 @@ html {
   height: 20px;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--landing-radius-control);
   background: #071a15;
   color: #5bd6ae;
   font-size: 11px;
   font-weight: 800;
 }
 
-html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
-  border-color: #bfd0ca;
-  color: #f3f8f6;
-}
-
 .landing-dark-input {
   width: 100%;
   min-height: 48px;
   border: 1px solid #4d625c;
-  border-radius: 10px;
-  background: #0b100e;
+  border-radius: var(--landing-radius-control);
+  background: var(--olume-ink-strong);
   padding: 0.75rem 0.875rem;
   color: #f3f8f6;
   font-size: 0.875rem;
-  transition: border-color 150ms ease, background-color 150ms ease;
+  transition: border-color var(--landing-motion), background-color var(--landing-motion);
 }
 
 .landing-dark-input::placeholder {
@@ -552,24 +544,13 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 }
 
 .landing-dark-input:focus {
-  border-color: #5bd6ae;
+  border-color: #1f7a60;
   background: #071a15;
 }
 
 .landing-dark-input option {
-  background: #0b100e;
+  background: var(--olume-ink-strong);
   color: #f3f8f6;
-}
-
-@keyframes landing-enter {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
 }
 
 /* Landing premium — a conversa é a peça central da narrativa. */
@@ -620,10 +601,10 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
   min-height: var(--landing-preview-step-row);
   align-items: center;
   gap: 9px;
-  border-radius: 8px;
+  border-radius: var(--landing-radius-control);
   padding: 8px 5px;
   text-align: left;
-  transition: background-color 180ms cubic-bezier(.22, 1, .36, 1);
+  transition: background-color var(--landing-motion);
 }
 
 .landing-preview-queue button:hover,
@@ -646,7 +627,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
   color: #4d625c;
   font-size: 9px;
   font-weight: 800;
-  transition: background-color 180ms cubic-bezier(.22, 1, .36, 1), border-color 180ms ease, color 180ms ease;
+  transition: background-color var(--landing-motion), border-color var(--landing-motion), color var(--landing-motion);
 }
 
 .landing-preview-queue strong,
@@ -673,7 +654,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 }
 
 .landing-preview-queue .is-done .landing-preview-step {
-  border-color: #5bd6ae;
+  border-color: #1f7a60;
   background: #eafbf5;
   color: #17664f;
 }
@@ -723,7 +704,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 
 .landing-preview-state {
   margin-left: auto;
-  border-radius: 6px;
+  border-radius: var(--landing-radius-control);
   background: #eafbf5;
   padding: 5px 7px;
   color: #17664f;
@@ -741,14 +722,13 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 
 .landing-preview-message {
   max-width: 78%;
-  border-radius: 10px;
+  border-radius: var(--landing-radius-control);
   padding: 10px 12px;
   font-size: 9px;
   line-height: 1.55;
 }
 
 .landing-preview-message.is-customer {
-  border-bottom-left-radius: 3px;
   background: #fff;
   color: #071a15;
 }
@@ -756,12 +736,11 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 .landing-preview-message.is-team {
   margin-top: 14px;
   margin-left: auto;
-  border-bottom-right-radius: 3px;
   background: #eafbf5;
   color: #071a15;
   opacity: 0.38;
   transform: translateY(5px);
-  transition: opacity 280ms cubic-bezier(.22, 1, .36, 1), transform 280ms cubic-bezier(.22, 1, .36, 1);
+  transition: opacity var(--landing-motion), transform var(--landing-motion);
 }
 
 .landing-preview-message.is-team.is-visible {
@@ -773,7 +752,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
   align-self: center;
   margin-top: 22px;
   border: 1px solid #bfd0ca;
-  border-radius: 6px;
+  border-radius: var(--landing-radius-control);
   background: #fff;
   padding: 7px 10px;
   color: #4d625c;
@@ -807,7 +786,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
   height: 28px;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--landing-radius-control);
   background: #e9efea;
   color: #778f87;
 }
@@ -857,7 +836,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
 
 .landing-preview-note {
   margin-top: auto;
-  border-radius: 6px;
+  border-radius: var(--landing-radius-control);
   background: #eafbf5;
   padding: 9px;
   color: #1f7a60;
@@ -877,7 +856,7 @@ html[data-theme="dark"] .landing-cta:not(.landing-mint-action) {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #5bd6ae;
+  background: #16856a;
 }
 
 .landing-product-wrap figcaption {
@@ -948,10 +927,6 @@ html[data-theme="dark"] .landing-proof-strip strong {
   border-left: 1px solid rgb(var(--color-stone-500) / 0.5);
 }
 
-.landing-pain-story span:last-child {
-  color: #5bd6ae;
-}
-
 .landing-resolution {
   margin-top: 30px;
   max-width: 720px;
@@ -1005,8 +980,8 @@ html[data-theme="dark"] .landing-proof-strip strong {
 }
 
 html[data-theme="dark"] .landing-journey li > span {
-  background: #5bd6ae;
-  color: #071a15;
+  background: #1f7a60;
+  color: #fff;
 }
 
 .landing-journey h3 {
@@ -1084,7 +1059,7 @@ html[data-theme="dark"] .landing-control-list dt {
   align-items: flex-start;
   gap: 12px;
   border: 1px solid rgb(var(--color-stone-500) / 0.5);
-  border-radius: 12px;
+  border-radius: var(--landing-radius-surface);
   padding: 20px;
 }
 
@@ -1096,8 +1071,8 @@ html[data-theme="dark"] .landing-control-list dt {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: rgb(91 214 174 / 0.15);
-  color: #5bd6ae;
+  background: rgb(22 133 106 / 0.18);
+  color: rgb(var(--color-success-on-dark));
 }
 
 @media (max-width: 767px) {
