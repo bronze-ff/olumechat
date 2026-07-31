@@ -194,13 +194,22 @@ verifica **deve tratar como falha**: é o sintoma de uma imagem anterior ao FIL-
 atendendo, ou de um build feito sem o build-arg. Nunca leia isso como "provavelmente é a
 certa".
 
-**O smoke de staging compara e falha.** Depois do deploy, o workflow exige que
-`api-staging.olumechat.com.br/health/ready` responda 200 **e** declare o commit que aquele
-job acabou de deployar. Ele recheca até o timeout em vez de reprovar no primeiro 200
-divergente: logo depois de o container novo ficar saudável ainda há uma janela em que a
-borda entrega a resposta do anterior, e vermelho intermitente é vermelho que ninguém lê.
-Divergência que **persiste** é o incidente de verdade, e aí falha dizendo qual build
-respondeu.
+**O smoke de staging compara e falha, em duas fases.**
+
+1. **Aquecimento** — recheca até o timeout em vez de reprovar no primeiro 200 divergente:
+   logo depois de o container novo ficar saudável ainda há uma janela em que a borda entrega
+   a resposta do anterior, e vermelho intermitente é vermelho que ninguém lê. Divergência
+   que **persiste** falha, dizendo qual build respondeu.
+2. **Confirmação** — depois do primeiro acerto, exige mais 4 respostas **consecutivas** com
+   o mesmo SHA. Um acerto só não distingue "está servindo a build nova" de "está alternando
+   entre duas builds": no roteamento dividido as respostas se revezam, e sair no primeiro
+   acerto sairia verde exatamente no cenário que este portão existe para pegar. Qualquer
+   regressão nessa janela falha na hora com `ROTEAMENTO DIVIDIDO` — diagnóstico diferente de
+   "ainda subindo", mensagem diferente.
+
+Isso não elimina a chance de N acertos seguidos por sorte (nada elimina, sem controlar o
+balanceamento), mas com respostas alternadas ela cai para ~1/16. O que a segunda fase
+garante é que o portão não sai verde com **uma** amostra.
 
 #### O que continua sem prova: o frontend
 

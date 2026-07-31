@@ -278,6 +278,15 @@ jobs:
       # A de produção entra aqui porque é ela que o FIL-113 deixa pronta para o
       # smoke de produção do FIL-101: descobrir lá que o marcador não é servido
       # seria descobrir com cliente do outro lado.
+      #
+      # Uma resposta basta aqui, e isso NÃO contradiz a janela de confirmações
+      # consecutivas do deploy-staging.yml. Lá a pergunta é "quem está atendendo
+      # este host?", com Traefik na frente e a possibilidade real de dois
+      # containers disputando o mesmo `Host()` — respostas alternadas são o
+      # incidente. Aqui é `docker run` de UMA imagem, publicando UMA porta do
+      # runner, sem proxy e sem outro container no caminho: não há segundo
+      # respondente possível, então repetir a consulta mediria a mesma coisa
+      # cinco vezes.
       - name: Provar que as duas imagens servem /version.json com o SHA do commit
         env:
           SHA_ESPERADO: ${{ github.sha }}

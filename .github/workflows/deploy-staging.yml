@@ -16,7 +16,9 @@
 #   3. espera a conclusão e FALHA se o deployment falhar;
 #   4. relê a aplicação e exige container `running:healthy` COM a tag deployada;
 #   5. no fim, exige que /health/ready da API responda 200 (pela borda do
-#      Access) E que a resposta declare a VERSÃO deployada (FIL-113).
+#      Access) declarando a VERSÃO deployada, e que faça isso em respostas
+#      CONSECUTIVAS (FIL-113) — um acerto só não distingue "servindo a build
+#      nova" de "alternando entre duas builds".
 #
 # A API está provada; o FRONTEND, não. `staging.olumechat.com.br` está atrás do
 # Cloudflare Access sem exceção de caminho, e abrir buraco na landing só para o
@@ -61,9 +63,11 @@ jobs:
     #
     # Pior caso do caminho de SUCESSO, somando as janelas de espera:
     #   2 × (TIMEOUT_DEPLOY_S + TIMEOUT_ESTADO_S)  = 2 × (600 + 300) = 1800s
-    #   + TIMEOUT_HTTP_S (smoke)                                     =  180s
+    #   + TIMEOUT_HTTP_S (fase 1 do smoke)                           =  180s
+    #   + janela de confirmação: (CONFIRMACOES_VERSAO - 1)
+    #     × (INTERVALO_CONFIRMACAO_S + 15s de --max-time)  = 4 × 17  =   68s
     #   + guarda, registro, resumo e overhead das requisições        = ~120s
-    #                                                          total = ~2100s (35min)
+    #                                                          total = ~2170s (37min)
     #
     # O teto do job precisa ficar ACIMA disso, com folga: se o GitHub matar o
     # job antes, ele morre sem smoke, sem registro e sem resumo — justamente na
@@ -110,6 +114,15 @@ jobs:
       TIMEOUT_ESTADO_S: '300'
       TIMEOUT_HTTP_S: '180'
       INTERVALO_POLL_S: '10'
+      # FIL-113 (review do PR #62) — quantas respostas CONSECUTIVAS com o SHA
+      # esperado o smoke exige antes de declarar a versão provada, e o intervalo
+      # entre elas. Um acerto só não distingue "está servindo a build nova" de
+      # "está alternando entre duas builds": no roteamento dividido as respostas
+      # se revezam, e sair no primeiro acerto sairia VERDE no cenário que este
+      # portão existe para pegar. Com respostas alternadas, N=5 derruba a chance
+      # de falso verde para ~1/16.
+      CONFIRMACOES_VERSAO: '5'
+      INTERVALO_CONFIRMACAO_S: '2'
       COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
@@ -611,13 +624,29 @@ jobs:
       # imagem em tempo de build (server/versao.js), e o passo exige que ele
       # seja o commit que ESTE job acabou de deployar.
       #
-      # Por que continuar RECHECANDO em vez de falhar na primeira divergência:
-      # logo depois de o container novo ficar saudável ainda existe uma janela
-      # em que a borda entrega a resposta do anterior. Falhar no primeiro
-      # `200` divergente transformaria essa janela em vermelho intermitente, e
-      # vermelho que é normal deixa de ser lido. Divergência que PERSISTE até o
-      # timeout é o incidente de verdade — e aí falha, dizendo qual versão
-      # respondeu.
+      # DUAS FASES, e a segunda existe por causa de um achado da review do PR #62.
+      #
+      # Fase 1 (aquecimento) — continuar RECHECANDO em vez de falhar na primeira
+      # divergência: logo depois de o container novo ficar saudável ainda existe
+      # uma janela em que a borda entrega a resposta do anterior. Falhar no
+      # primeiro `200` divergente transformaria essa janela em vermelho
+      # intermitente, e vermelho que é normal deixa de ser lido.
+      #
+      # Fase 2 (confirmação) — UM acerto não prova nada. No roteamento dividido,
+      # que é EXATAMENTE o incidente que este portão existe para pegar, dois
+      # containers atendem o mesmo `Host()` e as respostas ALTERNAM entre a build
+      # velha e a nova. Sair no primeiro acerto registraria staging como
+      # verificado enquanto metade do tráfego ainda recebe a versão anterior — o
+      # gate diria "provado" no cenário que ele deveria reprovar. Por isso o
+      # sucesso exige `CONFIRMACOES_VERSAO` respostas CONSECUTIVAS com o SHA
+      # esperado, e uma regressão para outra build DEPOIS do primeiro acerto
+      # falha na hora, com mensagem própria: alternância não é "ainda subindo",
+      # é roteamento dividido, e o diagnóstico é outro.
+      #
+      # Isso não elimina a chance de N acertos seguidos por sorte — nada elimina,
+      # sem controlar o balanceamento —, mas com respostas alternadas ela cai a
+      # ~1/2^(N-1). O que a fase 2 garante de verdade é que o gate não sai verde
+      # com UMA amostra.
       #
       # Ausência do marcador NÃO é "provavelmente é a certa": é o sintoma exato
       # de uma imagem anterior ao FIL-113 ainda atendendo, e reprova igual.
@@ -634,26 +663,47 @@ jobs:
           trap 'rm -f "$CORPO"' EXIT
 
           URL="https://${HOST_API_STAGING}/health/ready"
-          limite=$(( SECONDS + TIMEOUT_HTTP_S ))
           codigo=""
           servido=""
           confere="nao"
           houve_200="nao"
 
-          while [ "$SECONDS" -lt "$limite" ]; do
+          # Uma consulta. Ecoa "<status HTTP>|<sha servido>"; o corpo fica em
+          # $CORPO. O SHA só é extraído no 200 — em qualquer outro status o corpo
+          # não é resposta da API.
+          consultar() {
+            local codigo sha=""
             codigo="$(curl --silent --max-time 15 \
               --output "$CORPO" --write-out '%{http_code}' \
               --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
               --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
               "$URL" || true)"
             codigo="${codigo:-000}"
+            if [ "$codigo" = "200" ]; then
+              # `jq -e` reprova corpo que não é JSON — o sintoma de a resposta
+              # vir de um proxy/tela de erro em vez da API.
+              sha="$(jq -er '.versao.sha // ""' "$CORPO" 2>/dev/null || true)"
+            fi
+            printf '%s|%s' "$codigo" "$sha"
+          }
+
+          # 403/302 não é a API doente: é o Access recusando o token. Vale parar
+          # na hora, porque nenhuma espera conserta credencial.
+          barrar_access() {
+            echo "::error::${URL} devolveu $1 — o Cloudflare Access recusou o service token do CI. Confira se a aplicação 'api-staging-health' ainda cobre o caminho /health e se CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET continuam válidos. A API pode estar perfeitamente saudável: quem barrou foi o Access."
+            exit 1
+          }
+
+          # ---------- FASE 1: esperar a build nova aparecer ----------
+          limite=$(( SECONDS + TIMEOUT_HTTP_S ))
+          while [ "$SECONDS" -lt "$limite" ]; do
+            resposta="$(consultar)"
+            codigo="${resposta%%|*}"
+            servido="${resposta#*|}"
 
             case "$codigo" in
               200)
                 houve_200="sim"
-                # `jq -e` reprova corpo que não é JSON — o sintoma de a resposta
-                # vir de um proxy/tela de erro em vez da API.
-                servido="$(jq -er '.versao.sha // ""' "$CORPO" 2>/dev/null || true)"
                 if [ "$servido" = "$SHA_ESPERADO" ]; then
                   confere="sim"
                   echo "API de staging: 200 em ${URL}, e a resposta veio da build ${TAG} (${SHA_ESPERADO})."
@@ -661,11 +711,8 @@ jobs:
                   break
                 fi
                 echo "[$(date -u +%H:%M:%S)] API de staging: 200, mas a versão servida é '${servido:-<ausente>}' — esperando ${SHA_ESPERADO}" ;;
-              # 403/302 aqui não é a API doente: é o Access recusando o token.
-              # Vale parar na hora, porque nenhuma espera conserta credencial.
               401|403|301|302|303|307|308)
-                echo "::error::${URL} devolveu ${codigo} — o Cloudflare Access recusou o service token do CI. Confira se a aplicação 'api-staging-health' ainda cobre o caminho /health e se CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET continuam válidos. A API pode estar perfeitamente saudável: quem barrou foi o Access."
-                exit 1 ;;
+                barrar_access "$codigo" ;;
               *)
                 echo "[$(date -u +%H:%M:%S)] API de staging: HTTP ${codigo} — nova tentativa em 5s" ;;
             esac
@@ -684,6 +731,40 @@ jobs:
             exit 1
           fi
 
+          # ---------- FASE 2: confirmar que NÃO é roteamento dividido ----------
+          #
+          # A partir daqui, qualquer resposta que não seja a build esperada é
+          # evidência de que existe mais de um container atendendo o mesmo host —
+          # o container novo já provou estar de pé e servindo, então "ainda
+          # subindo" deixou de ser explicação possível. Falha na hora: alternar
+          # entre duas builds é um diagnóstico diferente de "não chegou lá", e
+          # merece mensagem diferente.
+          echo "Confirmando ${CONFIRMACOES_VERSAO}x seguidas (intervalo de ${INTERVALO_CONFIRMACAO_S}s) que a borda não alterna entre builds."
+          confirmadas=1
+          while [ "$confirmadas" -lt "$CONFIRMACOES_VERSAO" ]; do
+            sleep "$INTERVALO_CONFIRMACAO_S"
+            resposta="$(consultar)"
+            codigo="${resposta%%|*}"
+            servido="${resposta#*|}"
+
+            case "$codigo" in
+              200) ;;
+              401|403|301|302|303|307|308)
+                barrar_access "$codigo" ;;
+              *)
+                echo "::error::a build ${TAG} já tinha respondido em ${URL}, mas no meio da janela de confirmação a borda devolveu HTTP ${codigo} (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). O deploy terminou e o container está 'running:healthy', então isto não é boot lento: ou há outro container atendendo o mesmo Host() do Traefik e ele está doente, ou a borda oscila. Staging NÃO está comprovadamente servindo ${TAG}."
+                exit 1 ;;
+            esac
+
+            if [ "$servido" != "$SHA_ESPERADO" ]; then
+              echo "::error::ROTEAMENTO DIVIDIDO em ${HOST_API_STAGING}: a borda respondeu ${SHA_ESPERADO} (${TAG}) e, ${INTERVALO_CONFIRMACAO_S}s depois, '${servido:-<sem marcador>}' (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). Duas builds estão atendendo o MESMO Host(), e parte do tráfego recebe a versão anterior — é exatamente o incidente de 2026-07-31, e é o motivo de um único acerto não bastar. Os labels do Traefik são gravados no container quando ele é CRIADO: remover o domínio na configuração não tira um container antigo do roteamento; é preciso pará-lo. Receita completa em docs/AMBIENTES.md, seção 'Trocar uma aplicação para o tipo imagem'."
+              exit 1
+            fi
+
+            confirmadas=$(( confirmadas + 1 ))
+            echo "[$(date -u +%H:%M:%S)] confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}: ${SHA_ESPERADO}"
+          done
+
           # ------------------------------------------------------------------
           # A API está provada. O FRONTEND continua sem prova por HTTP, e isto
           # aqui é a limitação declarada — não uma ressalva de rodapé.
@@ -701,7 +782,7 @@ jobs:
           # passo 8 da §0 do WORKFLOW.md — que já passa pelo Access no navegador
           # — e o smoke de PRODUÇÃO do FIL-101, onde o domínio é público.
           # ------------------------------------------------------------------
-          echo "::warning::Frontend sem prova de versão por HTTP (limitação conhecida, fora do escopo do FIL-113). VERIFICADO nesta execução: os dois containers em 'running:healthy' com a tag ${TAG}, e ${URL} respondendo 200 declarando a build ${SHA_ESPERADO} — a versão da API está PROVADA. NÃO VERIFICADO: o que o Traefik entrega em https://${HOST_FRONT_STAGING}, inalcançável pelo Cloudflare Access. Para conferir à mão, abra https://${HOST_FRONT_STAGING}/version.json no navegador (o Access deixa você passar) e compare 'tag' com ${TAG}."
+          echo "::warning::Frontend sem prova de versão por HTTP (limitação conhecida, fora do escopo do FIL-113). VERIFICADO nesta execução: os dois containers em 'running:healthy' com a tag ${TAG}, e ${URL} respondendo 200 declarando a build ${SHA_ESPERADO} em ${CONFIRMACOES_VERSAO} respostas consecutivas — a versão da API está PROVADA, e sem sinal de roteamento dividido. NÃO VERIFICADO: o que o Traefik entrega em https://${HOST_FRONT_STAGING}, inalcançável pelo Cloudflare Access. Para conferir à mão, abra https://${HOST_FRONT_STAGING}/version.json no navegador (o Access deixa você passar) e compare 'tag' com ${TAG}."
 
       # O resumo só pode afirmar o que ESTA execução verificou. A versão
       # anterior rodava com `always()` e repetia o texto do caminho feliz
@@ -840,11 +921,13 @@ jobs:
               echo
               echo "Parou no smoke da API (\`${R_SMOKE}\`) — o container está saudável por"
               echo "dentro, mas a borda não confirmou a versão. O log do passo diz qual das"
-              echo "três coisas aconteceu: não respondeu 200; respondeu 200 **sem** marcador"
-              echo "de versão; ou respondeu 200 declarando **outra** build. As duas últimas"
-              echo "significam que quem atende \`${HOST_API_STAGING}\` **não** é o container"
-              echo "que este job deployou — procure outro container reivindicando o mesmo"
-              echo "\`Host()\` do Traefik (\`docs/AMBIENTES.md\`)."
+              echo "quatro coisas aconteceu: não respondeu 200; respondeu 200 **sem** marcador"
+              echo "de versão; respondeu 200 declarando **outra** build; ou **alternou** entre"
+              echo "a build certa e outra dentro da janela de confirmação (\`ROTEAMENTO"
+              echo "DIVIDIDO\`). Todas menos a primeira significam que quem atende"
+              echo "\`${HOST_API_STAGING}\` **não** é (só) o container que este job deployou —"
+              echo "procure outro container reivindicando o mesmo \`Host()\` do Traefik"
+              echo "(\`docs/AMBIENTES.md\`)."
               exit 0
             fi
             if [ "${R_REGISTRO}" != "success" ]; then
@@ -860,8 +943,9 @@ jobs:
 
             echo "**Verificado nesta execução:** os dois containers em \`running:healthy\` com a"
             echo "tag acima, e \`${HOST_API_STAGING}/health/ready\` respondendo 200 **declarando**"
-            echo "ser a build \`${SHA_COMPLETO}\` — a versão da API está provada, não suposta"
-            echo "(FIL-113)."
+            echo "ser a build \`${SHA_COMPLETO}\` em **${CONFIRMACOES_VERSAO} respostas consecutivas**"
+            echo "— a versão da API está provada, não suposta, e a borda não está alternando entre"
+            echo "duas builds (FIL-113)."
             echo
             echo "**Não verificado:** o que o Traefik entrega em \`${HOST_FRONT_STAGING}\`. A"
             echo "landing de staging está atrás do Cloudflare Access sem exceção de caminho, e"
