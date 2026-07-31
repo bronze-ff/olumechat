@@ -1,21 +1,29 @@
 export function BrandMark({ className = 'w-8 h-8', inverse = false }) {
   return (
     <svg className={className} viewBox="0 0 64 64" aria-hidden="true">
+      {/* stroke/fill como ATRIBUTO (não `style`) de propósito: um estilo
+          inline tem especificidade maior que qualquer seletor de classe e
+          anularia sem chance o override html[data-theme="dark"]
+          .brand-mark-stroke/.brand-mark-fill logo abaixo, que troca a marca
+          não-inversa de primary pra signal no tema escuro (achado da review
+          cruzada do FIL-104, PR #54). Atributo de apresentação SVG resolve
+          var() normalmente, e mantém a especificidade baixa que o override
+          depende pra vencer. */}
       <circle
         className={inverse ? '' : 'brand-mark-stroke'}
         cx="32"
         cy="29.5"
         r="21.5"
         fill="none"
-        style={{ stroke: inverse ? 'var(--olume-signal)' : 'var(--olume-primary)' }}
+        stroke={inverse ? 'var(--olume-signal)' : 'var(--olume-primary)'}
         strokeWidth="9"
       />
       <path
         className={inverse ? '' : 'brand-mark-fill'}
         d="M16.6 44.6 12.4 58l14.2-7.5Z"
-        style={{ fill: inverse ? 'var(--olume-signal)' : 'var(--olume-primary)' }}
+        fill={inverse ? 'var(--olume-signal)' : 'var(--olume-primary)'}
       />
-      <circle cx="32" cy="29.5" r="5" style={{ fill: 'var(--olume-signal)' }} />
+      <circle cx="32" cy="29.5" r="5" fill="var(--olume-signal)" />
     </svg>
   );
 }
