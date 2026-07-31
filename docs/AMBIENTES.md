@@ -94,16 +94,27 @@ A VPS está autenticada no GHCR (`docker login`, credencial em `/root/.docker/co
 **Ninguém dispara staging à mão.** Todo push na `main` que deixa a CI verde aciona o
 workflow `.github/workflows/deploy-staging.yml`, que grava a tag `sha-<commit>` nas duas
 aplicações de staging (backend primeiro, frontend depois), espera cada deployment terminar,
-confere que cada container ficou `running` **com a tag deployada** e só fica verde se
-`api-staging.olumechat.com.br/health/ready` responder 200. CI vermelha, execução de PR ou
+confere que cada container ficou `running:healthy` **com a tag deployada** e só fica verde
+se `api-staging.olumechat.com.br/health/ready` responder 200. CI vermelha, execução de PR ou
 push em outra branch não disparam nada.
+
+O gate de saúde é o `HEALTHCHECK` do Dockerfile, não a configuração da UI do Coolify: o
+sufixo de `running:healthy` vem do `State.Health.Status` do Docker. `running:unhealthy` e
+`running:starting` **não** passam — `starting` continua esperando dentro do timeout,
+`unhealthy` reprova. Sem isso o job terminaria verde com o container quebrado, ainda mais
+porque o frontend não tem smoke HTTP.
 
 **Serializar não é ordenar.** O gatilho `workflow_run` dispara para qualquer execução da CI
 concluída com sucesso na `main` — inclusive uma antiga, seja porque duas terminaram fora de
 ordem, seja porque alguém reexecutou um run velho (`gh run rerun`). Por isso o primeiro
-passo do workflow compara o `head_sha` com o topo atual da `main` pela API do GitHub e
-**dispensa** o deploy se ele já perdeu a validade — sai verde, sem tocar em nada. Sem essa
-guarda, um rerun empurra um commit obsoleto para staging e o job relata sucesso.
+passo compara o commit candidato com **o que está publicado** em staging (a tag no Coolify,
+via `compare` do GitHub) e **dispensa** o deploy se o candidato for mais antigo — sai verde,
+sem tocar em nada.
+
+A comparação é com o publicado, e não com o topo da `main`, de propósito: exigir "ser o
+topo" descartaria trabalho bom. Se a CI do commit A terminar depois de B chegar ao topo e a
+CI de B falhar, A nunca seria deployado e staging ficaria congelado numa versão antiga, em
+silêncio — trocaria "voltar no tempo" por "nunca avançar".
 
 O workflow fala com a API do Coolify por `ops.olumechat.com.br`, mandando o service token
 do Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) **junto** com o
@@ -117,15 +128,23 @@ própria, `api-staging-health`, cobrindo **só** `api-staging.olumechat.com.br/h
 política de service token: sem os cabeçalhos o caminho devolve `403`, e a raiz da API
 continua fechada mesmo com o token.
 
-O que o smoke **não** prova, e é bom saber antes de confiar nele:
+### O portão está incompleto — leia antes de promover
 
-- **Não prova versão.** `200` é compatível com "container velho e saudável" — exatamente o
+O deploy automático **não prova a versão que staging está servindo**. Isso importa porque é
+exatamente o que a promoção para produção pressupõe.
+
+- **`200` não prova versão.** É compatível com "container velho e saudável" — exatamente o
   incidente da caixa de aviso abaixo. Provar exigiria que a resposta carregasse um marcador
-  de versão; nenhuma carrega hoje. É o **FIL-113**.
-- **Não verifica o frontend por HTTP.** `staging.olumechat.com.br` está atrás do Access sem
-  exceção de caminho, e abrir buraco na landing de staging só para o smoke trocaria uma
-  garantia por um risco. O frontend é coberto só pela conferência de estado no Coolify
-  (container `running` com a tag deployada), que prova o **container**, não o roteamento.
+  de versão; nenhuma carrega hoje. É o **FIL-113**, registrado como **bloqueante do
+  FIL-101**: promover sob aprovação a partir de um staging cuja versão ninguém confirmou é
+  assinar embaixo de uma suposição.
+- **O frontend não é verificado por HTTP.** `staging.olumechat.com.br` está atrás do Access
+  sem exceção de caminho, e abrir buraco na landing de staging só para o smoke trocaria uma
+  garantia por um risco. Ele é coberto só pela conferência de estado no Coolify (container
+  `running:healthy` com a tag deployada), que prova o **container**, não o roteamento.
+
+Até o FIL-113 entrar, a validação humana do passo 8 da §0 do `WORKFLOW.md` é o que cobre
+essa lacuna — e vale conferir, na tela, que o que você está olhando é mesmo a mudança nova.
 
 Produção continua fora deste workflow, de propósito: promoção é o FIL-101, sob aprovação.
 
