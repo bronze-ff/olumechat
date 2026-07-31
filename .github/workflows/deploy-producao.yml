@@ -54,6 +54,24 @@ on:
 permissions:
   contents: read
 
+# FONTE ÚNICA dos caminhos de imagem — no nível do workflow porque os DOIS jobs
+# precisam da mesma grafia, e é essa igualdade que sustenta a garantia central:
+# "o que produção recebe é exatamente o que o preflight inspecionou no GHCR".
+#
+# O `validar` usa estes caminhos para provar que a imagem `sha-<curto>` existe; o
+# `promover` exige que a aplicação do Coolify esteja apontada para o MESMO
+# caminho, completo e exato, antes de gravar a tag. Duas grafias em dois lugares
+# poderiam divergir sem ninguém perceber — e a divergência não seria um erro
+# visível, seria o preflight validando uma imagem e produção recebendo outra.
+#
+# `-prod`, NUNCA `-staging`: as duas imagens de frontend saem do mesmo commit e
+# diferem só no `VITE_API_URL` embutido no bundle em build-time. Promover o
+# bundle de staging faria produção conversar com a API de staging, em silêncio e
+# para o mundo inteiro.
+env:
+  IMAGEM_BACKEND: ghcr.io/bronze-ff/olumechat-server
+  IMAGEM_FRONTEND: ghcr.io/bronze-ff/olumechat-client-prod
+
 # Uma promoção por vez. `cancel-in-progress: false` porque cancelar no meio
 # deixaria a aplicação com a tag gravada e sem deployment concluído — em
 # produção isso é pior do que esperar.
@@ -79,13 +97,8 @@ jobs:
       curto: ${{ steps.entrada.outputs.curto }}
       tag: ${{ steps.entrada.outputs.tag }}
     env:
-      REGISTRO: ghcr.io/bronze-ff
-      IMAGEM_BACKEND: olumechat-server
-      # `-prod`, NUNCA `-staging`: as duas imagens de frontend saem do mesmo
-      # commit e diferem só no `VITE_API_URL` embutido no bundle em build-time.
-      # Promover o bundle de staging faria produção conversar com a API de
-      # staging, em silêncio e para o mundo inteiro.
-      IMAGEM_FRONTEND: olumechat-client-prod
+      # IMAGEM_BACKEND e IMAGEM_FRONTEND vêm do `env:` do workflow — fonte única,
+      # compartilhada com o job `promover`.
       COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
@@ -310,8 +323,8 @@ jobs:
             fi
           }
 
-          conferir "${REGISTRO}/${IMAGEM_BACKEND}:${TAG}" "backend"
-          conferir "${REGISTRO}/${IMAGEM_FRONTEND}:${TAG}" "frontend"
+          conferir "${IMAGEM_BACKEND}:${TAG}" "backend"
+          conferir "${IMAGEM_FRONTEND}:${TAG}" "frontend"
 
           if [ ${#faltando[@]} -gt 0 ]; then
             echo "::error::imagem(ns) ausente(s) no GHCR: ${faltando[*]}. Nada foi tocado em produção. Duas causas prováveis: (a) o SHA está errado — confira o resumo da execução do 'Deploy staging' que você validou; (b) esse commit nunca chegou à main com a CI verde — as imagens sha-<curto> só são publicadas pelo job 'publicar-imagens' do ci.yml, e só quando a CI inteira passa num push na main."
@@ -364,9 +377,8 @@ jobs:
       # confusão em vermelho.
       UUID_BACKEND: psken5bkmwvyqobktly7tqnj
       UUID_FRONTEND: wjwktcp2rti9ioplif11f8ss
-      IMAGEM_BACKEND: olumechat-server
-      # `-prod`, nunca `-staging` — ver o comentário no job `validar`.
-      IMAGEM_FRONTEND: olumechat-client-prod
+      # IMAGEM_BACKEND e IMAGEM_FRONTEND vêm do `env:` do workflow — os MESMOS
+      # caminhos que o `validar` provou existirem no GHCR.
       HOST_API: api.olumechat.com.br
       HOST_FRONT: olumechat.com.br
       TIMEOUT_DEPLOY_S: '600'
@@ -606,15 +618,14 @@ jobs:
             #   tipo    — `dockerimage` é o único que promove imagem pronta; se
             #             vier build por Dockerfile, o UUID é de uma aplicação
             #             antiga e a "promoção" viraria um rebuild na VPS;
-            #   imagem  — separa backend de frontend e, principalmente,
-            #             `-prod` de `-staging`;
+            #   imagem  — separa backend de frontend, `-prod` de `-staging` e,
+            #             principalmente, o registro CONFIÁVEL de qualquer outro;
             #   domínio — uma aplicação de produção sem o domínio de produção não
             #             recebe tráfego: é a que está desativada.
             #
             # As três falham FECHADAS quando o campo vem vazio: ausência de
-            # informação não vira permissão. O `-z` em `imagem_esperada` não é
-            # paranoia — com a variável vazia o padrão do `case` viraria `*""`,
-            # que casa com qualquer coisa, e a guarda passaria a aprovar tudo,
+            # informação não vira permissão. O `-z` não é paranoia — variável
+            # vazia transformaria uma comparação em "aprova qualquer coisa",
             # calada.
             if [ -z "$imagem_esperada" ] || [ -z "$host_esperado" ]; then
               erro "${nome}: nome de imagem ou domínio esperado chegou vazio (variável de ambiente do workflow não definida). Sem eles as conferências aprovariam qualquer coisa — deploy abortado."
@@ -628,13 +639,18 @@ jobs:
               return 1
             fi
 
-            case "$imagem_atual" in
-              *"$imagem_esperada") ;;
-              *)
-                erro "${nome}: a aplicação está apontada para a imagem '${imagem_atual:-<vazia>}', e o esperado termina em '${imagem_esperada}'. Deploy abortado antes de gravar a tag."
-                echo "::endgroup::"
-                return 1 ;;
-            esac
+            # Caminho COMPLETO e EXATO, não sufixo (review do Codex no PR #63).
+            # Casar por sufixo aceitaria `ghcr.io/outro-dono/olumechat-server`:
+            # mesmo basename, registro diferente, imagem que o preflight do
+            # `validar` NUNCA inspecionou. A garantia central do desenho é "o que
+            # produção recebe é exatamente o que foi validado no GHCR", e ela vive
+            # inteira nesta igualdade — o workflow grava só a TAG, então o
+            # caminho da imagem é a única coisa que ele não controla.
+            if [ "$imagem_atual" != "$imagem_esperada" ]; then
+              erro "${nome}: a aplicação está apontada para a imagem '${imagem_atual:-<vazia>}', e o esperado é exatamente '${imagem_esperada}'. Deploy abortado antes de gravar a tag. A comparação é do caminho COMPLETO de propósito: mesmo basename em outro registro ou outro dono seria outra imagem, e o preflight do GHCR não a inspecionou. Se os dois valores acima só diferirem no prefixo do registro, corrija o campo no Coolify para o caminho completo — não afrouxe esta guarda."
+              echo "::endgroup::"
+              return 1
+            fi
 
             case "$fqdn" in
               *"$host_esperado"*) ;;
