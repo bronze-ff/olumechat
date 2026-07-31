@@ -12,7 +12,7 @@ Três ambientes isolados. **Nenhum segredo, banco ou bucket é compartilhado ent
 | Acesso | local | **Cloudflare Access** (só e-mail autorizado) | público |
 | Banco (Neon) | branch `main` | branch `staging` | branch `production` |
 | Mídia | disco local (`STORAGE_DRIVER=local`) | bucket `olume-media-staging` | bucket `olume-media-prod` |
-| Origem da imagem | build local | **imagem do GHCR** (`sha-<commit>`) | build na VPS (migra no FIL-101) |
+| Origem da imagem | build local | **imagem do GHCR** (`sha-<commit>`) | **imagem do GHCR** (`sha-<commit>`) |
 | Segredos | `server/.env` | próprios, no Coolify | próprios, no Coolify |
 | Código | sua branch de feature | `main` (após merge) | a mesma imagem validada em staging |
 
@@ -66,9 +66,9 @@ O ciclo completo, com quem faz cada passo, está na **§0 do [`WORKFLOW.md`](WOR
 
 ### De onde vem a imagem
 
-**Staging já não compila nada.** Desde 2026-07-30, as aplicações de staging são do tipo
-`dockerimage`: elas **puxam** do GHCR a imagem que a CI construiu e testou. Produção ainda
-compila do Dockerfile na VPS, e migra para o mesmo modelo no FIL-101.
+**Nada mais compila na VPS.** Staging desde 2026-07-30 e produção desde 2026-07-31, todas
+as aplicações são do tipo `dockerimage`: elas **puxam** do GHCR a imagem que a CI construiu
+e testou.
 
 Isso resolve dois problemas de uma vez: o build sai da VPS (que estava disputando CPU com a
 produção no ar) e o Coolify deixa de precisar de acesso ao repositório — o que importa
@@ -89,7 +89,29 @@ Coolify** — seriam configuração inerte, enganando quem lesse depois.
 
 A VPS está autenticada no GHCR (`docker login`, credencial em `/root/.docker/config.json`).
 
-### Deploy manual
+### Deploy em staging: automático (FIL-100)
+
+**Ninguém dispara staging à mão.** Todo push na `main` que deixa a CI verde aciona o
+workflow `.github/workflows/deploy-staging.yml`, que grava a tag `sha-<commit>` nas duas
+aplicações de staging (backend primeiro, frontend depois), espera cada deployment terminar
+e só fica verde se `api-staging.olumechat.com.br/health/ready` e
+`staging.olumechat.com.br` responderem 200. CI vermelha, execução de PR ou push em outra
+branch não disparam nada.
+
+O workflow fala com a API do Coolify por `ops.olumechat.com.br`, mandando o service token
+do Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) **junto** com o
+`Authorization: Bearer`. Faltando qualquer um dos três, o Access devolve `302` com a tela
+de login — e o workflow para com essa mensagem em vez de tentar ler JSON de um HTML.
+
+A verificação final bate no **origin** (`--resolve <host>:443:179.198.105.75`), e não na
+borda da Cloudflare: `api-staging` está atrás de uma aplicação **própria** do Access, que o
+service token do CI não cobre. É a mesma receita da caixa de aviso acima — e é ela que pega
+o caso de dois containers disputando o mesmo `Host()`, que checar o container por dentro
+não pega.
+
+Produção continua fora deste workflow, de propósito: promoção é o FIL-101, sob aprovação.
+
+### Deploy manual (fallback e produção)
 
 Coolify → aplicação → Deploy. Ou pela API, de dentro da VPS:
 
@@ -107,14 +129,17 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 | Aplicação | UUID | Tipo |
 |---|---|---|
-| `frontend` (produção) | `a13t9isqpv2kvk81icw31sd7` | dockerfile |
-| `backend` (produção) | `mwt9ycir685u4xvp3audof54` | dockerfile |
+| `frontend-prod-img` | `wjwktcp2rti9ioplif11f8ss` | **dockerimage** |
+| `backend-prod-img` | `psken5bkmwvyqobktly7tqnj` | **dockerimage** |
 | `frontend-staging-img` | `ywvuaupjy85ubam5w9z79tz9` | **dockerimage** |
 | `backend-staging-img` | `jhp3osrkx1f3iu70c9imzmy1` | **dockerimage** |
 
-As aplicações `frontend-staging` e `backend-staging` (UUIDs `r130mr3erjseqn4shqdpnw2b` e
-`tnrnbyz08x1cgvwdkndwo8es`) são as **antigas**, com os containers **parados** (`docker stop`)
-e sem domínio, mantidas como rollback. Apontar um deploy para elas "funciona" sem trocar nada do que está no ar — falha
+**Os quatro ambientes rodam por imagem** desde 2026-07-31. Nenhum compila na VPS.
+
+As aplicações antigas — `frontend`/`backend` (`a13t9isqpv2kvk81icw31sd7`,
+`mwt9ycir685u4xvp3audof54`) e `frontend-staging`/`backend-staging`
+(`r130mr3erjseqn4shqdpnw2b`, `tnrnbyz08x1cgvwdkndwo8es`) — compilavam do Dockerfile e estão
+com os containers **parados** (`docker stop`) e sem domínio, mantidas como rollback. Apontar um deploy para elas "funciona" sem trocar nada do que está no ar — falha
 silenciosa, a pior categoria.
 
 **Rollback:** com aplicação por imagem, é apontar `docker_registry_image_tag` para um

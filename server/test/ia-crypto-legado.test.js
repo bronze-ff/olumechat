@@ -16,6 +16,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { criptografar, descriptografar } = require('../ia/crypto');
+const { adulterarCipher } = require('./apoio/adulterar');
 
 const TENANT = 42;
 
@@ -59,15 +60,17 @@ test('descriptografar: blob NOVO (já cifrado com IA_CRYPTO_KEY) decifra normalm
 
 test('descriptografar: chamada com segredo EXPLÍCITO não usa o fallback legado — blob adulterado continua falhando', () => {
   const SEG = 'segredo-explicito-de-teste-com-32-chars-ok';
-  const [iv, tag, ct] = criptografar('x', TENANT, SEG).split(':');
-  const adulterado = `${iv}:${tag}:${ct.slice(0, -2)}00`;
+  const blob = criptografar('x', TENANT, SEG);
+  const adulterado = adulterarCipher(blob);
+  assert.notEqual(adulterado, blob);
   assert.throws(() => descriptografar(adulterado, TENANT, SEG));
 });
 
 test('descriptografar: sem IA_CRYPTO_KEY configurada (mundo pré-FIL-93) blob adulterado continua falhando — sem fallback fantasma', () => {
   comEnv({ IA_CRYPTO_KEY: undefined, JWT_SECRET: 'jwt-secret-unico-com-mais-de-32-caracteres' }, () => {
-    const [iv, tag, ct] = criptografar('x', TENANT).split(':');
-    const adulterado = `${iv}:${tag}:${ct.slice(0, -2)}00`;
+    const blob = criptografar('x', TENANT);
+    const adulterado = adulterarCipher(blob);
+    assert.notEqual(adulterado, blob);
     assert.throws(() => descriptografar(adulterado, TENANT));
   });
 });
