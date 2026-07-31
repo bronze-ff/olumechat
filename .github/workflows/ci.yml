@@ -6,6 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+# FIL-108: push novo num PR cancela o run anterior daquele PR (o ref de
+# pull_request é refs/pull/<n>/merge, único por PR). Na main o grupo leva o
+# run_id — cada run fica sozinho no próprio grupo e nunca é cancelado, nem
+# sequer ENFILEIRADO atrás de outro: push na main publica imagens no GHCR, e
+# run cancelado (em andamento ou na fila, que o GitHub também descarta quando
+# chega um terceiro) deixaria um commit sem as três imagens sha-<commit>.
+# O cancel-in-progress condicional é cinto e suspensório: com grupo único por
+# run na main ele nunca teria o que cancelar lá, mas fica explícito.
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && format('{0}-main-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 permissions:
   contents: read
 
