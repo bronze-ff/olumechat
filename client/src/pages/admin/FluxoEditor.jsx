@@ -7,12 +7,13 @@ import { formatPhone } from '../../utils/formatters';
 // Identidade visual por tipo de passo (cor do nó na timeline + chip) — paleta
 // categórica interna do editor de fluxo, não é o estado semântico do produto
 // (mensagem/transferir coincidem com primary/danger por associação intuitiva
-// verde=segue, vermelho=encerra, não por serem os tokens). Auditoria FIL-104:
-// 'menu' (#B7791F) com texto branco no hover dá 3.64:1, abaixo de AA — achado
-// correlato registrado fora do escopo deste ticket, ver PR.
+// verde=segue, vermelho=encerra, não por serem os tokens). Toda cor daqui
+// vira texto sobre branco no chip e fundo de texto branco no hover: precisa
+// medir ≥ 4,5:1 com branco (WCAG AA) — foi por isso que 'menu' #B7791F
+// (3,64:1) virou #A0680E (4,69:1) no FIL-112.
 const TIPOS = [
   { id: 'mensagem', rotulo: 'Mensagem', icone: '💬', cor: '#1F7A60', desc: 'Envia um texto e segue pro próximo passo' },
-  { id: 'menu', rotulo: 'Menu', icone: '🔢', cor: '#B7791F', desc: 'Cliente escolhe digitando o número' },
+  { id: 'menu', rotulo: 'Menu', icone: '🔢', cor: '#A0680E', desc: 'Cliente escolhe digitando o número' },
   { id: 'pergunta', rotulo: 'Pergunta', icone: '❓', cor: '#5B4B8A', desc: 'Captura uma resposta (ex.: código RCA)' },
   { id: 'consulta', rotulo: 'Consulta BD', icone: '🗄️', cor: '#0E7490', desc: 'Valida a resposta no banco (SELECT) e segue por encontrado/não encontrado' },
   { id: 'irfluxo', rotulo: 'Ir para fluxo', icone: '🔗', cor: '#7C3AED', desc: 'Continua o atendimento em OUTRO fluxo (variáveis preservadas)' },
