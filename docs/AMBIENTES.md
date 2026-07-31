@@ -12,6 +12,7 @@ Três ambientes isolados. **Nenhum segredo, banco ou bucket é compartilhado ent
 | Acesso | local | **Cloudflare Access** (só e-mail autorizado) | público |
 | Banco (Neon) | branch `main` | branch `staging` | branch `production` |
 | Mídia | disco local (`STORAGE_DRIVER=local`) | bucket `olume-media-staging` | bucket `olume-media-prod` |
+| Origem da imagem | build local | **imagem do GHCR** (`sha-<commit>`) | build na VPS (migra no FIL-101) |
 | Segredos | `server/.env` | próprios, no Coolify | próprios, no Coolify |
 | Código | sua branch de feature | `main` (após merge) | a mesma imagem validada em staging |
 
@@ -28,11 +29,11 @@ Infra comum aos dois ambientes hospedados: VPS Hostinger (`179.198.105.75`), Coo
 envia um código antes de qualquer coisa carregar. E-mails autorizados hoje:
 `filippe.ffr@gmail.com`, `ferferbrito@gmail.com`, `admin@olumechat.com.br`.
 Como o banco é outro, **é preciso criar um operador próprio de staging** (mesma receita,
-via terminal do container `backend-staging`).
+via terminal do container `backend-staging-img`).
 
 **Painel do Coolify** — `https://ops.olumechat.com.br`, também atrás do Access. Dali saem
-deploys, logs e rollback dos quatro aplicativos (`frontend`, `backend`, `frontend-staging`,
-`backend-staging`).
+deploys, logs e rollback dos aplicativos (`frontend`, `backend`, `frontend-staging-img`,
+`backend-staging-img`).
 
 **Servidor** — `ssh -i ~/.ssh/olume-vps root@179.198.105.75` (só por chave; senha
 desabilitada). Portas abertas: 22, 80, 443 — e só.
@@ -49,6 +50,8 @@ desabilitada). Portas abertas: 22, 80, 443 — e só.
 5. **Promoção para produção**: publique a **mesma imagem** validada em staging — nunca um
    rebuild. Rebuildar é a forma clássica de "passou em staging e quebrou em produção".
 
+O ciclo completo, com quem faz cada passo, está na **§0 do [`WORKFLOW.md`](WORKFLOW.md)**.
+
 ### Três regras que evitam quase toda dor
 
 - **Migração expand/contract.** Release N adiciona a coluna e passa a escrever nos dois
@@ -61,20 +64,90 @@ desabilitada). Portas abertas: 22, 80, 443 — e só.
 
 ## Operação
 
-**Deploy manual** (enquanto a automação da Onda 8 não existe): Coolify → aplicação → Deploy.
-Ou pela API, de dentro da VPS:
+### De onde vem a imagem
+
+**Staging já não compila nada.** Desde 2026-07-30, as aplicações de staging são do tipo
+`dockerimage`: elas **puxam** do GHCR a imagem que a CI construiu e testou. Produção ainda
+compila do Dockerfile na VPS, e migra para o mesmo modelo no FIL-101.
+
+Isso resolve dois problemas de uma vez: o build sai da VPS (que estava disputando CPU com a
+produção no ar) e o Coolify deixa de precisar de acesso ao repositório — o que importa
+quando o repositório virar privado.
+
+**A cada push na `main`, a CI publica três imagens** com tag imutável `sha-<commit>`:
+
+| Imagem | Onde roda |
+|---|---|
+| `ghcr.io/bronze-ff/olumechat-server` | backend, idêntica nos dois ambientes |
+| `ghcr.io/bronze-ff/olumechat-client-staging` | frontend de staging |
+| `ghcr.io/bronze-ff/olumechat-client-prod` | frontend de produção |
+
+São **duas** imagens de frontend do mesmo commit porque `VITE_API_URL` é build-time: o Vite
+embute a URL da API no bundle, então o bundle de staging apontaria para a API errada se
+fosse promovido. Por isso as aplicações de frontend **não têm variáveis `VITE_*` no
+Coolify** — seriam configuração inerte, enganando quem lesse depois.
+
+A VPS está autenticada no GHCR (`docker login`, credencial em `/root/.docker/config.json`).
+
+### Deploy manual
+
+Coolify → aplicação → Deploy. Ou pela API, de dentro da VPS:
 
 ```bash
+# aplicação por imagem: aponte a tag ANTES de disparar
+curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  "http://localhost:8000/api/v1/applications/<uuid>" \
+  -d '{"docker_registry_image_tag":"sha-abc1234"}'
+
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8000/api/v1/deploy?uuid=<uuid-da-aplicacao>&force=false"
+  "http://localhost:8000/api/v1/deploy?uuid=<uuid>&force=false"
 ```
 
-**UUIDs das aplicações:** `frontend` `a13t9isqpv2kvk81icw31sd7` · `backend`
-`mwt9ycir685u4xvp3audof54` · `frontend-staging` `r130mr3erjseqn4shqdpnw2b` ·
-`backend-staging` `tnrnbyz08x1cgvwdkndwo8es`.
+**UUIDs:**
 
-**Rollback:** Coolify → aplicação → Rollback → escolher o deploy anterior. Migrações **não**
-são revertidas automaticamente (por isso expand/contract).
+| Aplicação | UUID | Tipo |
+|---|---|---|
+| `frontend` (produção) | `a13t9isqpv2kvk81icw31sd7` | dockerfile |
+| `backend` (produção) | `mwt9ycir685u4xvp3audof54` | dockerfile |
+| `frontend-staging-img` | `ywvuaupjy85ubam5w9z79tz9` | **dockerimage** |
+| `backend-staging-img` | `jhp3osrkx1f3iu70c9imzmy1` | **dockerimage** |
+
+As aplicações `frontend-staging` e `backend-staging` (UUIDs `r130mr3erjseqn4shqdpnw2b` e
+`tnrnbyz08x1cgvwdkndwo8es`) são as **antigas**, mantidas paradas e sem domínio como
+rollback. Apontar um deploy para elas "funciona" sem trocar nada do que está no ar — falha
+silenciosa, a pior categoria.
+
+**Rollback:** com aplicação por imagem, é apontar `docker_registry_image_tag` para um
+`sha-` anterior e disparar. Sem rebuild e sem ambiguidade de cache. Migrações **não** são
+revertidas automaticamente — rollback devolve o código, não o schema (por isso
+expand/contract).
+
+### Trocar uma aplicação para o tipo imagem
+
+Uma aplicação que compila do Dockerfile **não pode ser convertida**: o enum `BuildPackTypes`
+do Coolify não inclui `dockerimage`, que só nasce pela rota `POST /applications/dockerimage`.
+É preciso **recriar** — e o UUID muda. Receita já executada em staging:
+
+1. Criar a nova aplicação pela rota de imagem, **sem domínio**. Ela sobe em paralelo, sem
+   receber tráfego.
+2. Copiar as variáveis de ambiente **por dentro do Coolify** (`php artisan tinker`,
+   modelo `EnvironmentVariable`, colunas polimórficas `resourceable_id` /
+   `resourceable_type`). A **API não devolve os valores** das variáveis — migrar por ela
+   cria um ambiente com credenciais vazias, e a falha aparece longe da causa.
+3. Apagar as cópias `is_preview = true` que o Coolify cria sozinho, senão o ambiente novo
+   fica diferente do antigo.
+4. Deployar e provar saúde **batendo direto no IP do container**, antes de qualquer
+   tráfego. Falhou aqui, ninguém percebeu: o antigo continua atendendo.
+5. Só então mover o domínio (remover do antigo, gravar no novo) e redeployar para o Traefik
+   pegar os labels.
+6. Manter o antigo parado alguns dias como rollback; só depois apagar.
+
+Em produção isso é **blue-green** e não precisa de janela de manutenção — a
+indisponibilidade real é a troca de domínio, alguns segundos. Atenção a um detalhe: o
+backend roda migração no boot, então a aplicação nova aplica migrações enquanto a antiga
+ainda atende. Sendo a mesma imagem, é no-op; com migração nova, as duas versões convivem
+por alguns minutos contra o mesmo schema — que é precisamente o que expand/contract existe
+para tornar seguro.
 
 **Backup:** dump do banco do Coolify + `.env` todo dia às 04:00 UTC em `/root/backups`
 (7 últimos). O Neon tem PITR próprio; o R2 guarda a mídia.
