@@ -73,14 +73,16 @@ Usada no operador e na política do Cloudflare Access. **Nunca foi testado se o 
 `comercial@` entrega de verdade** — está no FIL-110, e é por onde chegam os leads da
 landing.
 
-### 4. Ambiente `production` no GitHub, com revisor obrigatório (2 minutos)
+### 4. Ambiente `production` no GitHub — ✅ **feito em 2026-07-31**
 
-Settings → Environments → *New environment* → nome exato **`production`** → marque
-**Required reviewers** e adicione você. É o portão de aprovação inteiro do
-`deploy-producao.yml`: sem ele o GitHub cria o ambiente sozinho na primeira execução, **sem
-regra nenhuma**, e a promoção iria direto para produção sem ninguém aprovar. O workflow
-recusa a execução enquanto isso não estiver configurado — então, enquanto não for feito,
-**não há como promover para produção**.
+Revisor obrigatório `bronze-ff`, *admin bypass* desligado e deploy só a partir da `main`.
+É o portão de aprovação inteiro do `deploy-producao.yml`, e ele está de pé: a promoção
+para no *Review pending deployments* e nem admin passa sem aprovação registrada.
+
+**Não desfaça sem querer.** Apagar o ambiente não desliga o portão de forma visível — o
+GitHub o recria sozinho na primeira execução que o referenciar, **sem regra nenhuma**. Por
+isso o workflow confere a configuração antes de cada promoção e recusa se o revisor
+obrigatório não estiver lá.
 
 ### 5. Neon no plano Launch
 
