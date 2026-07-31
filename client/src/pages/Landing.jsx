@@ -258,7 +258,7 @@ export default function Landing() {
       </a>
 
       <header className="landing-nav-wrap sticky top-0 z-50 px-3 pt-3 sm:px-5">
-        <div className="landing-nav mx-auto flex h-[58px] max-w-[1240px] items-center gap-4 rounded-xl border border-white/10 bg-[#071A15] px-3.5 text-white sm:px-5">
+        <div className="landing-nav mx-auto flex h-[58px] max-w-[1240px] items-center gap-4 rounded-xl border border-white/10 bg-[var(--olume-ink)] px-3.5 text-white sm:px-5">
           <Link to="/" aria-label="Olume Chat, página inicial" className="shrink-0 rounded-md">
             <Brand inverse compact className="sm:hidden" />
             <Brand inverse className="hidden sm:flex" />
@@ -273,7 +273,7 @@ export default function Landing() {
             <Link to="/login" className="hidden min-h-10 items-center px-3 text-[13px] font-semibold text-white/75 hover:text-white md:inline-flex">
               Entrar
             </Link>
-            <a href="#demonstracao" className="landing-primary-action inline-flex min-h-11 items-center justify-center rounded-lg bg-[#1F7A60] px-3.5 text-xs font-bold text-white hover:bg-[#17664F] sm:px-5 sm:text-[13px]">
+            <a href="#demonstracao" className="landing-primary-action inline-flex min-h-11 items-center justify-center rounded-lg bg-[var(--olume-primary)] px-3.5 text-xs font-bold text-white hover:bg-[var(--olume-primary-hover)] sm:px-5 sm:text-[13px]">
               <span className="hidden sm:inline">Solicitar demonstração</span>
               <span className="sm:hidden">Demonstração</span>
               <span className="ml-2" aria-hidden="true">→</span>
@@ -296,7 +296,7 @@ export default function Landing() {
                 WhatsApp, filas, equipe e automações em uma operação que todo mundo consegue acompanhar.
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-                <a href="#demonstracao" className="landing-cta landing-primary-action inline-flex min-h-12 items-center justify-center rounded-lg bg-[#1F7A60] px-6 text-sm font-bold text-white hover:bg-[#17664F]">
+                <a href="#demonstracao" className="landing-cta landing-primary-action inline-flex min-h-12 items-center justify-center rounded-lg bg-[var(--olume-primary)] px-6 text-sm font-bold text-white hover:bg-[var(--olume-primary-hover)]">
                   Solicitar demonstração <span className="ml-3" aria-hidden="true">→</span>
                 </a>
                 <a href="#como-funciona" className="inline-flex self-start items-center gap-2 py-2 text-sm font-bold text-ink-950 underline decoration-paper-500 underline-offset-4 hover:text-brand-800">
@@ -377,12 +377,12 @@ export default function Landing() {
               <h2 className="landing-display max-w-[650px] text-[clamp(2.8rem,5vw,5rem)] leading-[0.94]">
                 Vamos olhar sua operação juntos.
               </h2>
-              <p className="mt-6 max-w-[500px] text-base leading-7 text-[#BFD0CA]">
+              <p className="mt-6 max-w-[500px] text-base leading-7 text-[var(--olume-border-strong)]">
                 Conte como sua equipe atende hoje. A demonstração parte da sua rotina.
               </p>
-              <p className="mt-10 text-sm text-[#BFD0CA]">
+              <p className="mt-10 text-sm text-[var(--olume-border-strong)]">
                 Já usa o Olume Chat?{' '}
-                <Link to="/login" className="font-bold text-[#F3F8F6] underline underline-offset-4 hover:text-white">
+                <Link to="/login" className="font-bold text-[var(--olume-canvas)] underline underline-offset-4 hover:text-white">
                   Entrar no sistema
                 </Link>
               </p>
@@ -393,10 +393,10 @@ export default function Landing() {
                 <div className="landing-demo-success">
                   <span aria-hidden="true"><Icon name="check" size={18} /></span>
                   <div>
-                    <p className="font-bold text-[#F3F8F6]">
+                    <p className="font-bold text-[var(--olume-canvas)]">
                       {envio.estado === 'sucesso' ? 'Recebemos!' : 'Abrimos seu e-mail.'}
                     </p>
-                    <p className="mt-1 text-sm leading-6 text-[#BFD0CA]">
+                    <p className="mt-1 text-sm leading-6 text-[var(--olume-border-strong)]">
                       {envio.estado === 'sucesso'
                         ? 'Nosso time comercial vai entrar em contato.'
                         : 'Não conseguimos enviar automaticamente agora. Preparamos a mensagem no seu aplicativo de e-mail para você confirmar o envio.'}
@@ -413,19 +413,19 @@ export default function Landing() {
                   <input type="text" name="site" tabIndex={-1} autoComplete="off" value={form.site} onChange={atualizar('site')} />
                 </label>
                 <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-[#E9EFEA]">Seu nome</span>
+                  <span className="mb-2 block text-sm font-medium text-[var(--olume-surface-subtle)]">Seu nome</span>
                   <input required value={form.nome} onChange={atualizar('nome')} autoComplete="name" className="landing-dark-input" placeholder="Como podemos chamar você?" />
                 </label>
                 <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-[#E9EFEA]">Empresa</span>
+                  <span className="mb-2 block text-sm font-medium text-[var(--olume-surface-subtle)]">Empresa</span>
                   <input required value={form.empresa} onChange={atualizar('empresa')} autoComplete="organization" className="landing-dark-input" placeholder="Nome da empresa" />
                 </label>
                 <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-[#E9EFEA]">E-mail de trabalho</span>
+                  <span className="mb-2 block text-sm font-medium text-[var(--olume-surface-subtle)]">E-mail de trabalho</span>
                   <input required type="email" value={form.email} onChange={atualizar('email')} autoComplete="email" className="landing-dark-input" placeholder="voce@empresa.com" />
                 </label>
                 <label className="block">
-                  <span className="mb-2 block text-sm font-medium text-[#E9EFEA]">Pessoas no atendimento</span>
+                  <span className="mb-2 block text-sm font-medium text-[var(--olume-surface-subtle)]">Pessoas no atendimento</span>
                   <select required value={form.equipe} onChange={atualizar('equipe')} className="landing-dark-input">
                     <option value="" disabled>Selecione</option>
                     <option>1 a 5 pessoas</option>
@@ -438,7 +438,7 @@ export default function Landing() {
                   <button
                     type="submit"
                     disabled={envio.estado === 'enviando'}
-                    className="landing-primary-action inline-flex min-h-12 w-full items-center justify-center rounded-lg bg-[#1F7A60] px-6 text-sm font-bold text-white hover:bg-[#17664F] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                    className="landing-primary-action inline-flex min-h-12 w-full items-center justify-center rounded-lg bg-[var(--olume-primary)] px-6 text-sm font-bold text-white hover:bg-[var(--olume-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                   >
                     {envio.estado === 'enviando' ? 'Enviando…' : 'Solicitar demonstração'}
                     {envio.estado !== 'enviando' && <span className="ml-3" aria-hidden="true">→</span>}
@@ -446,8 +446,8 @@ export default function Landing() {
                   {envio.estado === 'erro' && (
                     <p className="mt-3 text-xs leading-5 text-[rgb(var(--color-danger-on-dark))]" role="alert">{envio.erro}</p>
                   )}
-                  <p className="mt-4 text-xs leading-5 text-[#BFD0CA]">
-                    Ou escreva para <a className="text-[#F3F8F6] underline underline-offset-4 hover:text-white" href={`mailto:${emailComercial}`}>{emailComercial}</a>
+                  <p className="mt-4 text-xs leading-5 text-[var(--olume-border-strong)]">
+                    Ou escreva para <a className="text-[var(--olume-canvas)] underline underline-offset-4 hover:text-white" href={`mailto:${emailComercial}`}>{emailComercial}</a>
                   </p>
                 </div>
               </form>
