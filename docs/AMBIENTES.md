@@ -89,7 +89,29 @@ Coolify** — seriam configuração inerte, enganando quem lesse depois.
 
 A VPS está autenticada no GHCR (`docker login`, credencial em `/root/.docker/config.json`).
 
-### Deploy manual
+### Deploy em staging: automático (FIL-100)
+
+**Ninguém dispara staging à mão.** Todo push na `main` que deixa a CI verde aciona o
+workflow `.github/workflows/deploy-staging.yml`, que grava a tag `sha-<commit>` nas duas
+aplicações de staging (backend primeiro, frontend depois), espera cada deployment terminar
+e só fica verde se `api-staging.olumechat.com.br/health/ready` e
+`staging.olumechat.com.br` responderem 200. CI vermelha, execução de PR ou push em outra
+branch não disparam nada.
+
+O workflow fala com a API do Coolify por `ops.olumechat.com.br`, mandando o service token
+do Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) **junto** com o
+`Authorization: Bearer`. Faltando qualquer um dos três, o Access devolve `302` com a tela
+de login — e o workflow para com essa mensagem em vez de tentar ler JSON de um HTML.
+
+A verificação final bate no **origin** (`--resolve <host>:443:179.198.105.75`), e não na
+borda da Cloudflare: `api-staging` está atrás de uma aplicação **própria** do Access, que o
+service token do CI não cobre. É a mesma receita da caixa de aviso acima — e é ela que pega
+o caso de dois containers disputando o mesmo `Host()`, que checar o container por dentro
+não pega.
+
+Produção continua fora deste workflow, de propósito: promoção é o FIL-101, sob aprovação.
+
+### Deploy manual (fallback e produção)
 
 Coolify → aplicação → Deploy. Ou pela API, de dentro da VPS:
 

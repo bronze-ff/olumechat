@@ -65,9 +65,10 @@ produção economizaria um clique e removeria a única etapa que exige julgament
 
 ### Estado atual
 
-Os passos 1 a 5 já funcionam exatamente assim. Os passos 6 a 11 estão sendo
-automatizados (FIL-99 feito; FIL-100 e FIL-101 em andamento) — até lá, são
-executados à mão contra a API do Coolify. O desenho está em
+Os passos 1 a 7 já funcionam exatamente assim: a CI publica as imagens
+(FIL-99) e o workflow `deploy-staging.yml` leva o `sha-<commit>` para staging
+sozinho (FIL-100). Os passos 9 a 11 ainda são executados à mão contra a API do
+Coolify, até o FIL-101. O desenho está em
 [`superpowers/specs/2026-07-30-deploy-automatizado-design.md`](superpowers/specs/2026-07-30-deploy-automatizado-design.md).
 
 ## §1 Branches

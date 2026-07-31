@@ -1,0 +1,343 @@
+# FIL-100 — deploy automático em staging depois da CI verde.
+#
+# Gatilho: `workflow_run` do workflow "CI". Só age quando a CI terminou com
+# SUCESSO num PUSH na `main` — que é exatamente a condição em que o job
+# `publicar-imagens` do ci.yml publicou `sha-<commit>` no GHCR. CI vermelha,
+# execução de PR ou push em outra branch não disparam nada.
+#
+# O que este workflow faz, para cada aplicação de staging (backend PRIMEIRO,
+# frontend depois — o frontend só é útil com a API de pé):
+#   1. PATCH gravando `docker_registry_image_tag` = sha-<commit curto>;
+#   2. dispara o deploy;
+#   3. espera a conclusão e FALHA se o deployment falhar;
+#   4. no fim, prova que staging está servindo.
+#
+# NUNCA toca aplicação de produção. Os UUIDs abaixo são só de staging e estão
+# explícitos de propósito. Promoção para produção é o FIL-101, com aprovação
+# humana.
+name: Deploy staging
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Deploys de staging não se atropelam: uma execução por vez, na ordem em que os
+# merges entraram. Cancelar a que está no meio deixaria a aplicação com a tag
+# gravada e sem deployment — pior que esperar.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A cláusula que sustenta o critério "CI vermelha = nenhum deploy". O
+    # filtro `branches:` acima já limita o head_branch, mas repetir aqui deixa
+    # a regra legível em um lugar só — e `event == 'push'` é o que separa a CI
+    # da `main` (que publica imagem) da CI de PR (que não publica nada).
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    env:
+      COOLIFY_API: https://ops.olumechat.com.br/api/v1
+      # UUIDs recriados em 30/07/2026, quando as aplicações de staging viraram
+      # do tipo `dockerimage`. Os UUIDs anteriores pertencem às aplicações
+      # desativadas (listadas em docs/AMBIENTES.md) e não podem ser usados:
+      # deployar neles "funciona" sem trocar nada do que está no ar — falha
+      # silenciosa, a pior categoria.
+      UUID_BACKEND: jhp3osrkx1f3iu70c9imzmy1
+      UUID_FRONTEND: ywvuaupjy85ubam5w9z79tz9
+      IMAGEM_BACKEND: olumechat-server
+      # `-staging`, não `-prod`: as duas imagens de frontend saem do mesmo
+      # commit e diferem só no VITE_API_URL embutido no bundle. Trocar uma pela
+      # outra faz staging conversar com a API de PRODUÇÃO, em silêncio.
+      IMAGEM_FRONTEND: olumechat-client-staging
+      HOST_API_STAGING: api-staging.olumechat.com.br
+      HOST_FRONT_STAGING: staging.olumechat.com.br
+      VPS_IP: 179.198.105.75
+      TIMEOUT_DEPLOY_S: '600'
+      TIMEOUT_HTTP_S: '180'
+      INTERVALO_POLL_S: '10'
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      - name: Conferir os segredos antes de tocar em qualquer coisa
+        run: |
+          set -euo pipefail
+          faltando=()
+          [ -n "${COOLIFY_TOKEN}" ] || faltando+=(COOLIFY_TOKEN)
+          [ -n "${CF_ACCESS_CLIENT_ID}" ] || faltando+=(CF_ACCESS_CLIENT_ID)
+          [ -n "${CF_ACCESS_CLIENT_SECRET}" ] || faltando+=(CF_ACCESS_CLIENT_SECRET)
+          if [ ${#faltando[@]} -gt 0 ]; then
+            echo "::error::Segredo(s) ausente(s) no repositório: ${faltando[*]}. Sem eles o Cloudflare Access devolve 302 com a tela de login e nada do que vier depois faz sentido. Cadastre em Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "Os três segredos estão presentes."
+
+      - name: Identificar o SHA que a CI publicou
+        id: sha
+        env:
+          SHA_COMPLETO: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          CURTO="${SHA_COMPLETO:0:7}"
+          {
+            echo "completo=${SHA_COMPLETO}"
+            echo "curto=${CURTO}"
+            echo "tag=sha-${CURTO}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Commit da main: ${SHA_COMPLETO}"
+          echo "Tag que vai para staging: sha-${CURTO}"
+
+      - name: Deploy em staging (backend, depois frontend)
+        env:
+          TAG: ${{ steps.sha.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+
+          erro() { echo "::error::$*"; }
+
+          # Uma requisição à API do Coolify. Ecoa o status HTTP; o corpo fica em
+          # $CORPO. Os três cabeçalhos vão SEMPRE juntos: o Bearer é do Coolify,
+          # o par CF-Access-* é do Cloudflare Access que protege o ops.
+          # Sem `--location` de propósito: seguir o redirect do Access levaria à
+          # tela de login e devolveria 200 com HTML, que é a falha mais difícil
+          # de diagnosticar. Melhor enxergar o 302 cru.
+          chamar() {
+            local metodo="$1" url="$2" dados="${3:-}"
+            local args=(
+              --silent --show-error --max-time 30
+              --request "$metodo"
+              --output "$CORPO" --write-out '%{http_code}'
+              --header "Authorization: Bearer ${COOLIFY_TOKEN}"
+              --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}"
+              --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}"
+              --header "Accept: application/json"
+            )
+            if [ -n "$dados" ]; then
+              args+=(--header "Content-Type: application/json" --data "$dados")
+            fi
+            local codigo
+            codigo="$(curl "${args[@]}" "$url" || true)"
+            printf '%s' "${codigo:-000}"
+          }
+
+          # Traduz o status HTTP em mensagem que aponta a causa. O 302 é o erro
+          # mais provável deste workflow e ganha texto próprio.
+          validar_resposta() {
+            local codigo="$1" contexto="$2"
+            case "$codigo" in
+              200|201) ;;
+              000)
+                erro "${contexto}: nenhuma resposta HTTP (timeout ou falha de rede ao falar com ${COOLIFY_API})."
+                return 1 ;;
+              301|302|303|307|308)
+                erro "${contexto}: o Cloudflare Access respondeu ${codigo} — redirect para a tela de login, não JSON. Causa quase certa: CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET ausentes, trocados, revogados ou expirados (o service token vence em 30/07/2027), ou a aplicação do Access deixou de cobrir ops.olumechat.com.br/api."
+                return 1 ;;
+              401|403)
+                erro "${contexto}: ${codigo} do Coolify — o COOLIFY_TOKEN foi recusado (expirado, revogado ou sem a habilidade 'deploy'). O Access deixou passar, senão a resposta seria 302."
+                return 1 ;;
+              404)
+                erro "${contexto}: 404 — UUID desconhecido pelo Coolify. Os UUIDs de staging mudaram em 30/07/2026, quando as aplicações foram recriadas como 'dockerimage'; confira docs/AMBIENTES.md."
+                return 1 ;;
+              *)
+                erro "${contexto}: HTTP ${codigo} inesperado. Corpo: $(head -c 300 "$CORPO" | tr '\n' ' ')"
+                return 1 ;;
+            esac
+            if ! jq -e . >/dev/null 2>&1 < "$CORPO"; then
+              erro "${contexto}: HTTP ${codigo}, mas o corpo não é JSON. Início: $(head -c 300 "$CORPO" | tr '\n' ' ')"
+              return 1
+            fi
+          }
+
+          imprimir_log_deployment() {
+            local url linhas
+            url="$(jq -r '.deployment_url // ""' "$CORPO" 2>/dev/null || true)"
+            [ -n "$url" ] && echo "Deployment no Coolify: ${url}"
+            echo "----- log do deployment (últimas 200 linhas) -----"
+            linhas="$(jq -r 'try ((.logs // "[]") | fromjson) catch [] | .[]? | (.output // "")' "$CORPO" 2>/dev/null | tail -n 200 || true)"
+            if [ -n "$linhas" ]; then
+              printf '%s\n' "$linhas"
+            else
+              echo "(sem log estruturado; corpo bruto abaixo)"
+              head -c 2000 "$CORPO"; echo
+            fi
+            echo "-------------------------------------------------"
+          }
+
+          # Dispara o deploy. O Coolify trocou /deploy de GET para POST em
+          # versões recentes (o GET antigo passou a devolver 405 "This endpoint
+          # has changed to a POST request"). A instância atual atende no GET;
+          # o fallback existe para que uma atualização automática do Coolify não
+          # derrube o deploy sem explicação.
+          disparar_deploy() {
+            local uuid="$1" nome="$2" codigo
+            codigo="$(chamar GET "${COOLIFY_API}/deploy?uuid=${uuid}&force=false")"
+            if [ "$codigo" = "405" ]; then
+              echo "::warning::${nome}: o Coolify recusou GET /deploy (405) — esta versão só aceita POST. Repetindo com POST e seguindo em frente."
+              codigo="$(chamar POST "${COOLIFY_API}/deploy?uuid=${uuid}&force=false")"
+            fi
+            validar_resposta "$codigo" "disparo do deploy de ${nome}"
+          }
+
+          esperar_deployment() {
+            local deployment_uuid="$1" nome="$2"
+            local limite=$(( SECONDS + TIMEOUT_DEPLOY_S ))
+            local status="" anterior="" codigo
+            while [ "$SECONDS" -lt "$limite" ]; do
+              codigo="$(chamar GET "${COOLIFY_API}/deployments/${deployment_uuid}")"
+              validar_resposta "$codigo" "consulta do deployment ${deployment_uuid} (${nome})"
+              status="$(jq -r '.status // "desconhecido"' "$CORPO")"
+              if [ "$status" != "$anterior" ]; then
+                echo "[$(date -u +%H:%M:%S)] ${nome}: ${status}"
+                anterior="$status"
+              fi
+              case "$status" in
+                finished)
+                  echo "${nome}: deployment concluído."
+                  return 0 ;;
+                failed|cancelled-by-user)
+                  erro "${nome}: deployment terminou como '${status}'. Staging NÃO recebeu ${TAG}."
+                  imprimir_log_deployment
+                  return 1 ;;
+                queued|in_progress)
+                  ;;
+                *)
+                  echo "::warning::${nome}: status '${status}' fora do enum conhecido do Coolify; seguindo até o timeout." ;;
+              esac
+              sleep "$INTERVALO_POLL_S"
+            done
+            erro "${nome}: o deployment ${deployment_uuid} não terminou em ${TIMEOUT_DEPLOY_S}s (último status: ${status})."
+            imprimir_log_deployment
+            return 1
+          }
+
+          deployar() {
+            local nome="$1" uuid="$2" imagem_esperada="$3"
+            echo "::group::${nome} → ${TAG}"
+
+            local codigo
+            codigo="$(chamar GET "${COOLIFY_API}/applications/${uuid}")"
+            validar_resposta "$codigo" "leitura da aplicação ${nome}"
+
+            local nome_app imagem_atual tipo
+            nome_app="$(jq -r '.name // "?"' "$CORPO")"
+            imagem_atual="$(jq -r '.docker_registry_image_name // ""' "$CORPO")"
+            tipo="$(jq -r '.build_pack // "?"' "$CORPO")"
+            echo "Aplicação: ${nome_app} (uuid ${uuid}, build_pack ${tipo})"
+            echo "Imagem configurada: ${imagem_atual:-<vazia>}"
+
+            # Guarda contra a falha silenciosa que custa mais caro aqui: apontar
+            # o UUID certo para a imagem errada (o bundle de produção em
+            # staging, ou vice-versa). O nome da imagem já está correto no
+            # Coolify — este workflow só grava a TAG —, então divergência
+            # significa que alguém mexeu na aplicação e o deploy tem que parar.
+            case "$imagem_atual" in
+              *"$imagem_esperada") ;;
+              *)
+                erro "${nome}: a aplicação está apontada para a imagem '${imagem_atual:-<vazia>}', e o esperado termina em '${imagem_esperada}'. Deploy abortado antes de gravar a tag."
+                echo "::endgroup::"
+                return 1 ;;
+            esac
+
+            codigo="$(chamar PATCH "${COOLIFY_API}/applications/${uuid}" "{\"docker_registry_image_tag\":\"${TAG}\"}")"
+            validar_resposta "$codigo" "gravação da tag em ${nome}"
+            echo "Tag gravada: ${imagem_atual}:${TAG}"
+
+            disparar_deploy "$uuid" "$nome"
+            local deployment_uuid
+            deployment_uuid="$(jq -r '.deployments[0].deployment_uuid // ""' "$CORPO")"
+            if [ -z "$deployment_uuid" ]; then
+              erro "${nome}: o Coolify aceitou o disparo mas não devolveu deployment_uuid. Resposta: $(head -c 300 "$CORPO" | tr '\n' ' ')"
+              echo "::endgroup::"
+              return 1
+            fi
+            echo "Deployment disparado: ${deployment_uuid}"
+
+            esperar_deployment "$deployment_uuid" "$nome"
+            echo "::endgroup::"
+          }
+
+          echo "Levando ${TAG} para staging."
+          deployar "backend-staging-img" "$UUID_BACKEND" "$IMAGEM_BACKEND"
+          deployar "frontend-staging-img" "$UUID_FRONTEND" "$IMAGEM_FRONTEND"
+
+      - name: Provar que staging está servindo
+        env:
+          TAG: ${{ steps.sha.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+
+          # Por que a verificação bate no ORIGIN e não na borda da Cloudflare:
+          # `api-staging.olumechat.com.br` está atrás de uma aplicação PRÓPRIA do
+          # Cloudflare Access (aud diferente da de `ops.`), e o service token do
+          # CI só vale para `ops./api` — pela borda o runner recebe 302, nunca
+          # 200. Então resolvemos o Host direto no IP da VPS, que é a receita do
+          # próprio docs/AMBIENTES.md: ela passa pelo Traefik e prova o que ele
+          # ENTREGA para aquele host, e não só que o container subiu. É
+          # justamente a checagem que pega o caso dos dois containers
+          # disputando o mesmo Host().
+          # O `-k` é necessário porque o Traefik apresenta o certificado default
+          # auto-assinado (o TLS público termina na Cloudflare). Nada sensível
+          # trafega nesta chamada e o IP de destino é fixado por nós.
+          esperar_200() {
+            local rotulo="$1" host="$2" caminho="$3"
+            local limite=$(( SECONDS + TIMEOUT_HTTP_S ))
+            local codigo=""
+            while [ "$SECONDS" -lt "$limite" ]; do
+              codigo="$(curl --silent --insecure --max-time 15 \
+                --output "$CORPO" --write-out '%{http_code}' \
+                --resolve "${host}:443:${VPS_IP}" \
+                "https://${host}${caminho}" || true)"
+              codigo="${codigo:-000}"
+              if [ "$codigo" = "200" ]; then
+                echo "${rotulo}: 200 em https://${host}${caminho}"
+                head -c 400 "$CORPO"; echo
+                return 0
+              fi
+              echo "[$(date -u +%H:%M:%S)] ${rotulo}: HTTP ${codigo} — nova tentativa em 5s"
+              sleep 5
+            done
+            echo "::error::${rotulo}: https://${host}${caminho} não respondeu 200 em ${TIMEOUT_HTTP_S}s (último status: ${codigo}). Staging pode estar servindo a versão anterior — confira o container em ops.olumechat.com.br."
+            return 1
+          }
+
+          esperar_200 "API de staging" "$HOST_API_STAGING" "/health/ready"
+          esperar_200 "Frontend de staging" "$HOST_FRONT_STAGING" "/"
+          echo "Staging está servindo ${TAG}."
+
+      - name: Resumo
+        if: always()
+        env:
+          TAG: ${{ steps.sha.outputs.tag }}
+          SHA_COMPLETO: ${{ github.event.workflow_run.head_sha }}
+          RESULTADO: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Deploy em staging — ${RESULTADO}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Tag | \`${TAG:-?}\` |"
+            echo "| Commit | \`${SHA_COMPLETO}\` |"
+            echo "| Backend | \`${IMAGEM_BACKEND}\` → ${HOST_API_STAGING} |"
+            echo "| Frontend | \`${IMAGEM_FRONTEND}\` → ${HOST_FRONT_STAGING} |"
+            echo
+            echo "Produção não foi tocada — promoção é o FIL-101, com aprovação humana."
+          } >> "$GITHUB_STEP_SUMMARY"
