@@ -107,14 +107,32 @@ porque o frontend não tem smoke HTTP.
 **Serializar não é ordenar.** O gatilho `workflow_run` dispara para qualquer execução da CI
 concluída com sucesso na `main` — inclusive uma antiga, seja porque duas terminaram fora de
 ordem, seja porque alguém reexecutou um run velho (`gh run rerun`). Por isso o primeiro
-passo compara o commit candidato com **o que está publicado** em staging (a tag no Coolify,
-via `compare` do GitHub) e **dispensa** o deploy se o candidato for mais antigo — sai verde,
-sem tocar em nada.
+passo compara o commit candidato com o **último deploy verificado** e **dispensa** o deploy
+se o candidato for mais antigo — sai verde, sem tocar em nada.
 
-A comparação é com o publicado, e não com o topo da `main`, de propósito: exigir "ser o
-topo" descartaria trabalho bom. Se a CI do commit A terminar depois de B chegar ao topo e a
-CI de B falhar, A nunca seria deployado e staging ficaria congelado numa versão antiga, em
-silêncio — trocaria "voltar no tempo" por "nunca avançar".
+Duas escolhas nessa comparação valem explicação:
+
+- **A referência não é o topo da `main`.** Exigir "ser o topo" descartaria trabalho bom: se
+  a CI de A terminar depois de B chegar ao topo e a CI de B falhar, A nunca seria deployado
+  e staging congelaria numa versão antiga — trocaria "voltar no tempo" por "nunca avançar".
+- **A referência também não é a tag configurada no Coolify.**
+  `docker_registry_image_tag` é *intenção*, e quem a grava é o próprio workflow **antes** de
+  validar o deploy. Se um deploy falhar depois do PATCH, o campo aponta para um commit que
+  nunca subiu, e o commit seguinte é descartado por "ser mais antigo" que algo que não está
+  no ar. Intenção não é evidência.
+
+A referência é o **histórico de deployments do GitHub** do ambiente `staging`: o registro só
+é criado no fim do workflow, depois que os containers ficaram `running:healthy` com a tag e
+a API respondeu 200. Deploy que morreu no meio não deixa registro, então não envenena a
+comparação seguinte — e a aba **Environments** do repositório passa a responder "qual commit
+está em staging?" sem ninguém precisar abrir o Coolify.
+
+**A guarda falha fechada.** Se não der para ler o histórico ou comparar os commits (rede,
+rate limit, indisponibilidade), o job **para**. Não conseguir comparar é exatamente quando
+não se sabe se o candidato é obsoleto; deixar passar ali seria inverter a guarda no pior
+momento. Só dois casos identificados seguem adiante, e dizendo qual é: não existe registro
+ainda (primeira execução) ou o commit registrado sumiu do repositório (história reescrita).
+Pular um deploy é recuperável pelo próximo push; sobrescrever staging com versão velha, não.
 
 O workflow fala com a API do Coolify por `ops.olumechat.com.br`, mandando o service token
 do Cloudflare Access (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) **junto** com o
