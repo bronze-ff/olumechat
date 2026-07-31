@@ -72,6 +72,8 @@ export default function FluxoEditor({ fluxoId, onClose, onSaved }) {
   const [simAtivo, setSimAtivo] = useState(false);
   const chatRef = useRef(null);
 
+  const empresa = localStorage.getItem('empresa') || 'Sua empresa';
+
   const numeros = useQuery({ queryKey: ['numeros'], queryFn: () => api.get('/numeros').then((r) => r.data) });
   const fluxosLista = useQuery({ queryKey: ['fluxos'], queryFn: () => api.get('/fluxos').then((r) => r.data) });
   const deptos = useQuery({ queryKey: ['departamentos'], queryFn: () => api.get('/departamentos').then((r) => r.data) });
@@ -500,9 +502,9 @@ export default function FluxoEditor({ fluxoId, onClose, onSaved }) {
             <div className="rounded-[1.5rem] overflow-hidden flex-1 flex flex-col bg-[#e5ddd3]">
               {/* Header do chat */}
               <div className="shrink-0 bg-ink-900 text-white px-3 py-2.5 flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full navy-gradient flex items-center justify-center font-display font-bold text-xs">M</div>
+                <div className="w-8 h-8 rounded-full navy-gradient flex items-center justify-center font-display font-bold text-xs">{empresa.trim().slice(0, 1).toUpperCase()}</div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-semibold leading-tight truncate">Multicanal Atacado</p>
+                  <p className="text-[13px] font-semibold leading-tight truncate">{empresa}</p>
                   <p className="text-[10px] text-emerald-300 leading-tight">{simAtivo ? 'bot respondendo…' : 'online'}</p>
                 </div>
                 <button onClick={iniciarSim}
