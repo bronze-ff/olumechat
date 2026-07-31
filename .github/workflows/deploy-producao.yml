@@ -164,50 +164,89 @@ jobs:
       #
       # Por isso o portão é conferido ANTES, e a falta dele é vermelho com a
       # receita, não silêncio.
+      # FALHA FECHADA, sem exceção (review do Codex no PR #63). Só um caminho
+      # segue: HTTP 200 declarando pelo menos um revisor obrigatório. Erro de
+      # rede, 403, 5xx, JSON sem o campo — tudo reprova.
+      #
+      # A versão anterior deixava "não consegui ler" seguir com `::warning::`,
+      # argumentando que quem segura o job é a cláusula `environment:`. O
+      # argumento se desfaz no cenário que importa: se a regra foi REMOVIDA (ou o
+      # ambiente apagado), a cláusula `environment:` não segura nada — e é
+      # exatamente aí que a leitura pode falhar. O aviso viraria uma linha amarela
+      # no meio do log enquanto a promoção seguia direto para produção sem
+      # aprovação. Portão que some em silêncio é pior que portão que trava: pular
+      # uma promoção custa minutos, promover sem aprovação custa produção.
+      #
+      # Se o GITHUB_TOKEN não alcançar o endpoint, a saída é cadastrar
+      # GH_ENVIRONMENTS_TOKEN (ver env abaixo) — não afrouxar a guarda.
       - name: Exigir que o ambiente production tenha revisor obrigatório
         env:
-          GH_TOKEN: ${{ github.token }}
+          # O token embutido basta para ler a configuração de um ambiente do
+          # próprio repositório. O segredo opcional é o plano B: se algum dia o
+          # GitHub passar a exigir uma permissão que `permissions:` não concede
+          # (a lista não tem nada específico de ambientes), cadastre um PAT
+          # clássico com escopo `repo` em GH_ENVIRONMENTS_TOKEN e o passo volta a
+          # ler. Ausente, cai no token embutido — nada a fazer no caso normal.
+          GH_TOKEN: ${{ secrets.GH_ENVIRONMENTS_TOKEN || github.token }}
         run: |
           set -euo pipefail
 
           CORPO="$(mktemp)"
           trap 'rm -f "$CORPO"' EXIT
 
-          RECEITA="Settings → Environments → New environment → nome exato 'production' → marque 'Required reviewers' e adicione o revisor. Sem isso o GitHub cria o ambiente sozinho, sem regra, e a promoção iria para produção SEM aprovação."
+          RECEITA="Settings → Environments → production → marque 'Required reviewers' e adicione o revisor (crie o ambiente com esse nome exato, se não existir). Sem isso o GitHub roda a promoção SEM aprovação."
+          PLANO_B="Se o motivo for permissão do token, cadastre um PAT clássico com escopo 'repo' no segredo GH_ENVIRONMENTS_TOKEN — o passo passa a usá-lo. NÃO remova esta conferência: ela é o que garante que o portão de aprovação existe."
 
-          codigo="$(curl --silent --show-error --max-time 30 \
-            --output "$CORPO" --write-out '%{http_code}' \
-            --header "Authorization: Bearer ${GH_TOKEN}" \
-            --header "Accept: application/vnd.github+json" \
-            --header "X-GitHub-Api-Version: 2022-11-28" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/environments/production" || true)"
-          codigo="${codigo:-000}"
+          # Retentativa só no que é transitório: sem resposta, rate limit e 5xx.
+          # Um 4xx é definitivo — repetir só atrasaria o vermelho.
+          codigo=""
+          espera=5
+          for tentativa in 1 2 3; do
+            codigo="$(curl --silent --show-error --max-time 30 \
+              --output "$CORPO" --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/environments/production" || true)"
+            codigo="${codigo:-000}"
+            case "$codigo" in
+              000|429|5??)
+                if [ "$tentativa" -lt 3 ]; then
+                  echo "Tentativa ${tentativa}: HTTP ${codigo} ao ler o ambiente — nova tentativa em ${espera}s."
+                  sleep "$espera"
+                  espera=$(( espera * 2 ))
+                fi ;;
+              *) break ;;
+            esac
+          done
 
-          # Só duas respostas são conclusivas, e as duas param a promoção quando
-          # o portão não está lá. Qualquer OUTRO status vira `::warning::` e
-          # segue, de propósito — e a assimetria tem motivo.
-          #
-          # Esta conferência é cinto e suspensório: quem realmente segura o job é
-          # a cláusula `environment:` do `promover`. Transformar "não consegui
-          # ler" em vermelho tornaria a promoção — inclusive um ROLLBACK, que é a
-          # operação mais urgente que existe aqui — refém de um endpoint
-          # auxiliar. Nada garante que o GITHUB_TOKEN sempre poderá lê-lo: as
-          # permissões concedíveis a ele em `permissions:` não incluem nada
-          # específico de ambientes, e essa lista muda com o tempo. Pular a
-          # conferência devolve o comportamento a "o GitHub decide", que continua
-          # correto; travar o deploy por causa dela, não.
           case "$codigo" in
             200) ;;
             404)
-              echo "::error::o ambiente 'production' ainda não existe neste repositório. ${RECEITA}"
+              echo "::error::o ambiente 'production' não existe neste repositório (HTTP 404). ${RECEITA}"
+              exit 1 ;;
+            401|403)
+              echo "::error::o GitHub recusou a leitura da configuração do ambiente 'production' (HTTP ${codigo}). Sem confirmar que a aprovação obrigatória está de pé, a promoção NÃO segue — se a regra tiver sido removida, seguir aqui colocaria a versão em produção sem ninguém aprovar. ${PLANO_B}"
               exit 1 ;;
             *)
-              echo "::warning::não consegui ler a configuração do ambiente 'production' (HTTP ${codigo}) — NÃO foi verificado se a aprovação obrigatória está configurada. Quem segura o job continua sendo a regra do próprio GitHub; se ela não estiver lá, esta promoção NÃO vai parar para aprovação. Confira em Settings → Environments → production antes de seguir."
-              exit 0 ;;
+              echo "::error::não consegui ler a configuração do ambiente 'production' (HTTP ${codigo} após 3 tentativas). A guarda falha FECHADA: 'não sei se o portão existe' não é permissão para promover. Nada foi tocado — dispare de novo. ${PLANO_B}"
+              exit 1 ;;
           esac
 
+          # `jq -e` reprova corpo que não é JSON: um HTML de proxy com 200 não
+          # pode virar "0 revisores" nem, pior, passar despercebido.
+          if ! jq -e . >/dev/null 2>&1 < "$CORPO"; then
+            echo "::error::a leitura do ambiente 'production' devolveu 200, mas o corpo não é JSON — não dá para confirmar o revisor obrigatório. A guarda falha FECHADA. Início da resposta: $(head -c 200 "$CORPO" | tr '\n' ' ')"
+            exit 1
+          fi
+
           REVISORES="$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' "$CORPO")"
-          if [ "${REVISORES:-0}" -lt 1 ]; then
+          case "$REVISORES" in
+            ''|*[!0-9]*)
+              echo "::error::a resposta do ambiente 'production' não trouxe as regras de proteção num formato que eu saiba ler ('${REVISORES}'). A guarda falha FECHADA: formato que não sei interpretar não é permissão para promover."
+              exit 1 ;;
+          esac
+          if [ "$REVISORES" -lt 1 ]; then
             echo "::error::o ambiente 'production' existe, mas NÃO tem revisor obrigatório configurado — a promoção iria direto para produção, sem ninguém aprovar. ${RECEITA}"
             exit 1
           fi
