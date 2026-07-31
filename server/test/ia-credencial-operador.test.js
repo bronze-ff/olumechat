@@ -7,6 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { cifrar, decifrar } = require('../ia/credencialOperador');
 const { criptografar, descriptografar } = require('../ia/crypto');
+const { adulterarTag } = require('./apoio/adulterar');
 
 test('round-trip: cifra e decifra a chave do operador', () => {
   const blob = cifrar('sk-operador-abc123');
@@ -32,7 +33,7 @@ test('SEGURANÇA: blob de um tenant NÃO decifra pela função da credencial glo
 
 test('adulterar o blob (authTag) invalida a decifragem', () => {
   const blob = cifrar('sk-operador-xyz');
-  const [iv, tag, ct] = blob.split(':');
-  const tagAdulterada = tag.slice(0, -2) + (tag.slice(-2) === '00' ? '11' : '00');
-  assert.throws(() => decifrar(`${iv}:${tagAdulterada}:${ct}`));
+  const adulterado = adulterarTag(blob); // FIL-111: mudança relativa ao byte atual, nunca valor fixo
+  assert.notEqual(adulterado, blob);
+  assert.throws(() => decifrar(adulterado));
 });
