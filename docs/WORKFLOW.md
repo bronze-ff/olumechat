@@ -11,6 +11,65 @@ produção. `PORTE.md` é histórico do porte Oracle→Postgres, só para consul
 
 ---
 
+## §0 O ciclo completo — do pedido ao ar
+
+O mapa. As seções seguintes detalham cada etapa; esta responde "como uma ideia
+vira produção, e o que cabe a quem".
+
+**Vale igual para funcionalidade nova, mexida na landing e correção de bug.** O
+que muda é só o *passo 8* — o que se valida em staging.
+
+| # | O quê | Quem |
+|---|---|---|
+| 1 | Descrever o que se quer | humano |
+| 2 | Ticket no Linear, com escopo, fora-de-escopo e critérios de aceite | orquestrador |
+| 3 | Worktree de `origin/main` fresca; worker implementa e roda a suíte | agente |
+| 4 | PR contra `main` (§4) + review cruzada do Codex + triagem dos achados | agente |
+| 5 | **Merge** | **humano** |
+| 6 | CI roda os checks obrigatórios; se verde, publica `sha-<commit>` no GHCR | automático |
+| 7 | Staging sobe sozinho com esse SHA | automático |
+| 8 | **Validar em staging** | **humano** |
+| 9 | Actions → *Deploy produção* → informar o SHA validado | **humano** |
+| 10 | O job para e pede aprovação; aprovar libera | **humano** |
+| 11 | Produção recebe a mesma imagem + smoke nos três endereços | automático |
+
+O humano faz três cliques e uma validação. Tudo entre 5 e 11 corre sozinho.
+
+### O que validar no passo 8
+
+- **Funcionalidade nova** — exercitar o caminho novo. O banco de staging é
+  outro, então pode criar dado à vontade; nada disso aparece em produção.
+- **Landing page** — abrir `staging.olumechat.com.br`, conferir o visual e
+  testar o formulário de lead ponta a ponta (o lead tem que aparecer no painel
+  do operador de staging).
+- **Correção de bug** — **reproduzir o bug** e confirmar que sumiu. É a
+  validação mais importante das três: um fix que ninguém tentou quebrar é uma
+  hipótese, não uma correção.
+
+### Urgência
+
+Produção quebrada encurta o caminho, não o portão: o PR continua existindo e a
+CI continua sendo obrigatória, mas a validação em staging vira uma conferência
+rápida e a promoção acontece em seguida. Se a correção piorar, o rollback é o
+mesmo workflow do passo 9 com um SHA anterior — minutos.
+
+**Rollback devolve o código, não o schema.** Migração não é revertida
+automaticamente. É por isso que expand/contract (§6) é obrigatório.
+
+### Por que produção não sobe sozinha
+
+Staging automático e produção sob aprovação separam **subir** de **lançar**.
+Fica registrado quem promoveu, quando e qual versão exata — e existe um momento
+explícito em que alguém olha para staging e decide. Deploy automático até
+produção economizaria um clique e removeria a única etapa que exige julgamento.
+
+### Estado atual
+
+Os passos 1 a 5 já funcionam exatamente assim. Os passos 6 a 11 estão sendo
+automatizados (FIL-99 feito; FIL-100 e FIL-101 em andamento) — até lá, são
+executados à mão contra a API do Coolify. O desenho está em
+[`superpowers/specs/2026-07-30-deploy-automatizado-design.md`](superpowers/specs/2026-07-30-deploy-automatizado-design.md).
+
 ## §1 Branches
 
 Toda branch nasce de `origin/main` **fresca** (`git fetch origin main` antes de
@@ -104,7 +163,7 @@ gh pr create --base main
 
 ### Depois do merge: staging antes de produção
 
-Merge na `main` **não** é lançamento. O caminho é:
+Resumo dos passos 6 a 11 da §0. Merge na `main` **não** é lançamento. O caminho é:
 
 1. deploy em **staging** (`staging.olumechat.com.br`) e validação com dados de teste;
 2. promoção para **produção** publicando **a mesma imagem** validada — nunca um rebuild.
