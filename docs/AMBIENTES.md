@@ -75,6 +75,12 @@ Isso resolve dois problemas de uma vez: o build sai da VPS (que estava disputand
 produção no ar) e o Coolify deixa de precisar de acesso ao repositório — o que importa
 quando o repositório virar privado.
 
+> ⚠️ **Privatizar, porém, não é mais só uma decisão sobre o Coolify.** No plano Free,
+> regras de proteção de environment e environment secrets **só funcionam em repositório
+> público** — e a promoção para produção depende das duas coisas. Privatizar sem antes
+> subir para Pro/Team derruba o portão de aprovação em silêncio. Detalhe em
+> [`GO-LIVE-PENDENCIAS.md`](GO-LIVE-PENDENCIAS.md).
+
 **A cada push na `main`, a CI publica três imagens** com tag imutável `sha-<commit>`:
 
 | Imagem | Onde roda |

@@ -63,9 +63,22 @@ repositório e compilar na VPS; desde que os quatro ambientes viraram aplicaçõ
 do GHCR e não precisa de acesso nenhum ao código. Quem constrói é a CI, e quem promove é o
 workflow `Deploy produção` (FIL-101), falando com a API do Coolify — não com o repositório.
 
-Ao fechar o repositório, confirme que as imagens continuam sendo puxadas — o `docker login`
-da VPS usa um PAT com `read:packages`, que precisa continuar válido. É o único vínculo que
-sobrou entre o Coolify e o GitHub.
+> ⚠️ **Mas agora existe uma dependência NOVA, e ela é bloqueante: no plano Free, regras
+> de proteção de environment só valem em repositório PÚBLICO.** Privatizar hoje
+> derrubaria, **em silêncio**, as duas coisas de que a promoção para produção depende: o
+> **revisor obrigatório** do environment `production` e os **environment secrets** que o
+> `deploy-producao.yml` lê. O workflow não sumiria — ele passaria a rodar sem portão, ou
+> falharia sem os segredos. Nenhum dos dois é um erro fácil de ligar à causa dias depois.
+>
+> Antes de privatizar, uma das duas: **subir para Pro ou Team** (aí environment com
+> proteção funciona em repositório privado), ou **trocar o portão de aprovação por outro
+> mecanismo** e mover os segredos de volta para o nível do repositório — o que reabre a
+> exposição que o FIL-101 fechou, então não é uma troca barata. Enquanto nenhuma das duas
+> acontecer, **manter público é o que mantém o portão de pé**.
+
+Ao fechar o repositório, confirme também que as imagens continuam sendo puxadas — o
+`docker login` da VPS usa um PAT com `read:packages`, que precisa continuar válido. É o
+único vínculo que sobrou entre o Coolify e o GitHub.
 
 ### 3. Caixa `admin@olumechat.com.br` e alias comercial
 
