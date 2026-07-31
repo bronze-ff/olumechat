@@ -1,0 +1,990 @@
+# FIL-101 — promoção para PRODUÇÃO, sob aprovação humana, e rollback por SHA.
+#
+# Gatilho: SÓ `workflow_dispatch`. Produção não sobe sozinha, e isso é decisão
+# do desenho (docs/superpowers/specs/2026-07-30-deploy-automatizado-design.md),
+# não esquecimento: staging automático + produção sob aprovação separa SUBIR de
+# LANÇAR, e deixa registrado quem promoveu, quando e qual SHA.
+#
+# NÃO HÁ BUILD AQUI. A imagem já existe no GHCR desde que a CI daquele commit
+# ficou verde, e é a MESMA validada em staging — byte a byte. Promover é apontar
+# a aplicação do Coolify para `sha-<curto>` e disparar.
+#
+# ROLLBACK É ESTE MESMO WORKFLOW, com um SHA anterior. Não existe caminho
+# separado nem código novo: tag imutável no registry significa que "voltar" e
+# "avançar" são a mesma operação. O que rollback NÃO faz é reverter migração —
+# o entrypoint roda as migrações no boot, então voltar a imagem devolve o
+# código, não o schema. É por isso que expand/contract é obrigatório
+# (docs/AMBIENTES.md, docs/WORKFLOW.md §6).
+#
+# Dois jobs, e a divisão importa:
+#
+#   `validar`  — roda ANTES da aprovação, e não toca em nada. Confere o formato
+#                do SHA, resolve o commit no repositório, exige que o ambiente
+#                `production` tenha revisor obrigatório, confere os segredos e
+#                prova que as imagens `sha-<curto>` EXISTEM no GHCR. O erro mais
+#                provável deste workflow é SHA digitado errado ou commit que
+#                nunca passou pela CI — e ninguém deve ser chamado para aprovar
+#                uma promoção que já se sabe que vai falhar.
+#
+#   `promover` — roda no GitHub Environment `production`, que exige revisor.
+#                Enquanto o Filippe não aprovar, o job fica parado e produção
+#                não muda. Depois de aprovado: backend primeiro, frontend
+#                depois, e smoke que PROVA a versão servida nos dois domínios.
+name: Deploy produção
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit a promover — SHA completo ou os 7 primeiros caracteres, o mesmo validado em staging. Para ROLLBACK, informe um SHA anterior.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Uma promoção por vez. `cancel-in-progress: false` porque cancelar no meio
+# deixaria a aplicação com a tag gravada e sem deployment concluído — em
+# produção isso é pior do que esperar.
+concurrency:
+  group: deploy-producao
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Tudo que dá para saber ANTES de acordar um humano para aprovar.
+  # Este job não fala com o Coolify e não altera nada em lugar nenhum.
+  # ---------------------------------------------------------------------------
+  validar:
+    name: Validar antes de pedir aprovação
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Para consultar o manifesto das imagens no GHCR.
+      packages: read
+    outputs:
+      completo: ${{ steps.entrada.outputs.completo }}
+      curto: ${{ steps.entrada.outputs.curto }}
+      tag: ${{ steps.entrada.outputs.tag }}
+    env:
+      REGISTRO: ghcr.io/bronze-ff
+      IMAGEM_BACKEND: olumechat-server
+      # `-prod`, NUNCA `-staging`: as duas imagens de frontend saem do mesmo
+      # commit e diferem só no `VITE_API_URL` embutido no bundle em build-time.
+      # Promover o bundle de staging faria produção conversar com a API de
+      # staging, em silêncio e para o mundo inteiro.
+      IMAGEM_FRONTEND: olumechat-client-prod
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      # O texto do input vai por `env`, nunca interpolado dentro do script:
+      # `${{ inputs.sha }}` no meio de um `run` seria substituído ANTES do bash
+      # ver a linha, e um valor com `;` viraria comando. Aqui ele é só um valor
+      # de variável, e a validação de formato abaixo fecha o resto.
+      - name: Resolver o commit informado
+        id: entrada
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA_INFORMADO: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+
+          # Espaço colado ao colar do resumo do workflow de staging é comum o
+          # bastante para não virar erro.
+          INFORMADO="$(printf '%s' "${SHA_INFORMADO}" | tr -d '[:space:]')"
+
+          # Só hexadecimal, de 7 a 40 caracteres. Menos de 7 é prefixo ambíguo
+          # demais para virar tag; qualquer outro caractere não é SHA.
+          case "$INFORMADO" in
+            *[!0-9a-fA-F]*|"")
+              echo "::error::'${SHA_INFORMADO}' não é um SHA de commit (só 0-9 e a-f). Copie do resumo da execução do 'Deploy staging' que você validou, ou da aba Environments do repositório."
+              exit 1 ;;
+          esac
+          if [ "${#INFORMADO}" -lt 7 ] || [ "${#INFORMADO}" -gt 40 ]; then
+            echo "::error::'${INFORMADO}' tem ${#INFORMADO} caracteres; informe o SHA completo ou pelo menos os 7 primeiros."
+            exit 1
+          fi
+          INFORMADO="$(printf '%s' "$INFORMADO" | tr '[:upper:]' '[:lower:]')"
+
+          # Resolver contra o repositório faz duas coisas de uma vez: transforma
+          # um prefixo no SHA completo (o marcador de versão que o smoke compara
+          # traz os 40 caracteres) e reprova um commit que não existe aqui —
+          # antes de qualquer chamada ao GHCR ou ao Coolify.
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+          codigo="$(curl --silent --show-error --max-time 30 \
+            --output "$CORPO" --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/commits/${INFORMADO}" || true)"
+          codigo="${codigo:-000}"
+
+          case "$codigo" in
+            200) ;;
+            404)
+              echo "::error::o commit '${INFORMADO}' não existe em ${GITHUB_REPOSITORY}. Causa quase certa: SHA digitado/copiado errado."
+              exit 1 ;;
+            422)
+              echo "::error::'${INFORMADO}' é ambíguo ou malformado para o GitHub (HTTP 422). Informe mais caracteres, ou o SHA completo."
+              exit 1 ;;
+            *)
+              echo "::error::não consegui resolver o commit '${INFORMADO}' (HTTP ${codigo}). Sem confirmar qual commit é, nada segue."
+              exit 1 ;;
+          esac
+
+          COMPLETO="$(jq -r '.sha // ""' "$CORPO")"
+          if [ "${#COMPLETO}" -ne 40 ]; then
+            echo "::error::o GitHub respondeu 200 mas não devolveu um SHA completo ('${COMPLETO}')."
+            exit 1
+          fi
+
+          CURTO="${COMPLETO:0:7}"
+          {
+            echo "completo=${COMPLETO}"
+            echo "curto=${CURTO}"
+            echo "tag=sha-${CURTO}"
+          } >> "$GITHUB_OUTPUT"
+
+          MENSAGEM="$(jq -r '.commit.message // "" | split("\n")[0]' "$CORPO")"
+          echo "Commit a promover: ${COMPLETO}"
+          echo "Assunto: ${MENSAGEM}"
+          echo "Tag das imagens: sha-${CURTO}"
+
+      # A aprovação humana é o portão inteiro deste workflow, e ela NÃO mora
+      # aqui: mora na configuração do GitHub Environment `production`.
+      #
+      # Um ambiente que não existe não bloqueia nada — o GitHub o cria sozinho
+      # na primeira execução que o referenciar, SEM regra nenhuma, e o job segue
+      # direto para produção. O mesmo vale para um ambiente que existe mas perdeu
+      # o revisor obrigatório. Nos dois casos o workflow pareceria funcionar, e a
+      # única coisa que teria sumido é justamente a que ele existe para garantir.
+      #
+      # Por isso o portão é conferido ANTES, e a falta dele é vermelho com a
+      # receita, não silêncio.
+      - name: Exigir que o ambiente production tenha revisor obrigatório
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+
+          RECEITA="Settings → Environments → New environment → nome exato 'production' → marque 'Required reviewers' e adicione o revisor. Sem isso o GitHub cria o ambiente sozinho, sem regra, e a promoção iria para produção SEM aprovação."
+
+          codigo="$(curl --silent --show-error --max-time 30 \
+            --output "$CORPO" --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/environments/production" || true)"
+          codigo="${codigo:-000}"
+
+          # Só duas respostas são conclusivas, e as duas param a promoção quando
+          # o portão não está lá. Qualquer OUTRO status vira `::warning::` e
+          # segue, de propósito — e a assimetria tem motivo.
+          #
+          # Esta conferência é cinto e suspensório: quem realmente segura o job é
+          # a cláusula `environment:` do `promover`. Transformar "não consegui
+          # ler" em vermelho tornaria a promoção — inclusive um ROLLBACK, que é a
+          # operação mais urgente que existe aqui — refém de um endpoint
+          # auxiliar. Nada garante que o GITHUB_TOKEN sempre poderá lê-lo: as
+          # permissões concedíveis a ele em `permissions:` não incluem nada
+          # específico de ambientes, e essa lista muda com o tempo. Pular a
+          # conferência devolve o comportamento a "o GitHub decide", que continua
+          # correto; travar o deploy por causa dela, não.
+          case "$codigo" in
+            200) ;;
+            404)
+              echo "::error::o ambiente 'production' ainda não existe neste repositório. ${RECEITA}"
+              exit 1 ;;
+            *)
+              echo "::warning::não consegui ler a configuração do ambiente 'production' (HTTP ${codigo}) — NÃO foi verificado se a aprovação obrigatória está configurada. Quem segura o job continua sendo a regra do próprio GitHub; se ela não estiver lá, esta promoção NÃO vai parar para aprovação. Confira em Settings → Environments → production antes de seguir."
+              exit 0 ;;
+          esac
+
+          REVISORES="$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' "$CORPO")"
+          if [ "${REVISORES:-0}" -lt 1 ]; then
+            echo "::error::o ambiente 'production' existe, mas NÃO tem revisor obrigatório configurado — a promoção iria direto para produção, sem ninguém aprovar. ${RECEITA}"
+            exit 1
+          fi
+          echo "Ambiente 'production' com ${REVISORES} revisor(es) obrigatório(s): a promoção vai parar para aprovação."
+
+      - name: Conferir os segredos antes de pedir aprovação
+        run: |
+          set -euo pipefail
+          faltando=()
+          [ -n "${COOLIFY_TOKEN}" ] || faltando+=(COOLIFY_TOKEN)
+          [ -n "${CF_ACCESS_CLIENT_ID}" ] || faltando+=(CF_ACCESS_CLIENT_ID)
+          [ -n "${CF_ACCESS_CLIENT_SECRET}" ] || faltando+=(CF_ACCESS_CLIENT_SECRET)
+          if [ ${#faltando[@]} -gt 0 ]; then
+            echo "::error::Segredo(s) ausente(s) no repositório: ${faltando[*]}. Sem eles o Cloudflare Access que protege ops.olumechat.com.br devolve 302 com a tela de login, e o deploy morre depois da aprovação — por um motivo que dava para saber antes. Cadastre em Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "Os três segredos estão presentes."
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # AC 3 do ticket: SHA inexistente no GHCR falha ANTES de tocar em produção.
+      # Aqui é mais forte do que o pedido — falha antes até de pedir aprovação.
+      #
+      # A CI publica as três imagens só quando TODA ela fica verde num push na
+      # `main` (ci.yml, job `publicar-imagens`). Então "a imagem não existe" tem
+      # duas causas práticas, e a mensagem cita as duas: SHA errado, ou commit
+      # que nunca chegou à `main` com a CI verde.
+      - name: Provar que as imagens existem no GHCR
+        env:
+          TAG: ${{ steps.entrada.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          faltando=()
+          conferir() {
+            local imagem="$1" papel="$2" saida=""
+            if saida="$(docker buildx imagetools inspect "$imagem" 2>&1)"; then
+              local digest
+              digest="$(printf '%s' "$saida" | awk '/^Digest:/{print $2; exit}')"
+              echo "${papel}: ${imagem} existe (digest ${digest:-desconhecido})."
+            else
+              echo "${papel}: ${imagem} NÃO existe no GHCR."
+              printf '%s\n' "$saida" | head -n 3
+              faltando+=("$imagem")
+            fi
+          }
+
+          conferir "${REGISTRO}/${IMAGEM_BACKEND}:${TAG}" "backend"
+          conferir "${REGISTRO}/${IMAGEM_FRONTEND}:${TAG}" "frontend"
+
+          if [ ${#faltando[@]} -gt 0 ]; then
+            echo "::error::imagem(ns) ausente(s) no GHCR: ${faltando[*]}. Nada foi tocado em produção. Duas causas prováveis: (a) o SHA está errado — confira o resumo da execução do 'Deploy staging' que você validou; (b) esse commit nunca chegou à main com a CI verde — as imagens sha-<curto> só são publicadas pelo job 'publicar-imagens' do ci.yml, e só quando a CI inteira passa num push na main."
+            exit 1
+          fi
+          echo "As duas imagens da ${TAG} estão publicadas."
+
+  # ---------------------------------------------------------------------------
+  # Daqui para baixo, produção. O job só COMEÇA depois que o revisor aprova.
+  # ---------------------------------------------------------------------------
+  promover:
+    name: Promover para produção
+    needs: validar
+    runs-on: ubuntu-latest
+    # ORÇAMENTO DE TEMPO — mexeu num timeout, refaça a conta.
+    #
+    #   2 × (TIMEOUT_DEPLOY_S + TIMEOUT_ESTADO_S) = 2 × (600 + 300) = 1800s
+    #   + smoke da API:      TIMEOUT_HTTP_S + 4 × (2 + 15)          =  248s
+    #   + smoke do frontend: TIMEOUT_HTTP_S + 4 × (2 + 15)          =  248s
+    #   + registro, resumo e overhead das requisições               = ~150s
+    #                                                        total  = ~2450s (41min)
+    #
+    # O teto precisa ficar acima disso com folga: job morto pelo GitHub morre
+    # sem smoke, sem registro e sem resumo — justamente na execução mais lenta,
+    # que é quando o diagnóstico mais importa. Com 60min, quem estoura primeiro
+    # é sempre um timeout interno, que falha COM mensagem.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # Para registrar, no fim, qual SHA foi COMPROVADO em produção.
+      deployments: write
+    # É esta cláusula que segura o job na fila até o revisor aprovar. Se o
+    # ambiente não tiver revisor obrigatório, o job passa direto — e é
+    # exatamente por isso que o `validar` confere a configuração antes.
+    environment:
+      name: production
+      url: https://olumechat.com.br
+    env:
+      COOLIFY_API: https://ops.olumechat.com.br/api/v1
+      # UUIDs das aplicações de PRODUÇÃO do tipo `dockerimage`, criadas pelo
+      # FIL-105 em 31/07/2026 (docs/AMBIENTES.md).
+      #
+      # ATENÇÃO — os UUIDs `a13t9isqpv2kvk81icw31sd7` (frontend) e
+      # `mwt9ycir685u4xvp3audof54` (backend) NÃO servem aqui. São as aplicações
+      # antigas, que compilavam do Dockerfile, hoje com os containers parados e
+      # sem domínio, mantidas só como rollback. Deployar nelas "funciona": o
+      # Coolify aceita, o job fica verde e NADA do que está no ar muda — falha
+      # silenciosa, a pior categoria. As guardas do passo de deploy (tipo da
+      # aplicação, nome da imagem e domínio) existem para transformar essa
+      # confusão em vermelho.
+      UUID_BACKEND: psken5bkmwvyqobktly7tqnj
+      UUID_FRONTEND: wjwktcp2rti9ioplif11f8ss
+      IMAGEM_BACKEND: olumechat-server
+      # `-prod`, nunca `-staging` — ver o comentário no job `validar`.
+      IMAGEM_FRONTEND: olumechat-client-prod
+      HOST_API: api.olumechat.com.br
+      HOST_FRONT: olumechat.com.br
+      TIMEOUT_DEPLOY_S: '600'
+      # Folga para o HEALTHCHECK do backend: `--start-period=30s` + intervalo de
+      # 30s, e a migração roda no boot antes de o servidor abrir a porta.
+      TIMEOUT_ESTADO_S: '300'
+      TIMEOUT_HTTP_S: '180'
+      INTERVALO_POLL_S: '10'
+      # FIL-113: quantas respostas CONSECUTIVAS com o SHA esperado o smoke exige
+      # antes de declarar a versão provada. Um acerto só não distingue "está
+      # servindo a build nova" de "está alternando entre duas builds".
+      CONFIRMACOES_VERSAO: '5'
+      INTERVALO_CONFIRMACAO_S: '2'
+      TAG: ${{ needs.validar.outputs.tag }}
+      SHA_ESPERADO: ${{ needs.validar.outputs.completo }}
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      # Backend PRIMEIRO, frontend depois: o frontend novo pode pedir rotas que
+      # só existem na API nova, e o contrário (API nova com frontend velho) é o
+      # sentido que o expand/contract já cobre.
+      - name: Deploy em produção (backend, depois frontend)
+        id: deploy
+        run: |
+          set -euo pipefail
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+
+          erro() { echo "::error::$*"; }
+
+          # Uma requisição à API do Coolify. Ecoa o status HTTP; o corpo fica em
+          # $CORPO. Os três cabeçalhos vão SEMPRE juntos: o Bearer é do Coolify,
+          # o par CF-Access-* é do Cloudflare Access que protege o `ops.`.
+          # Sem `--location` de propósito: seguir o redirect do Access levaria à
+          # tela de login e devolveria 200 com HTML, que é a falha mais difícil
+          # de diagnosticar. Melhor enxergar o 302 cru.
+          chamar() {
+            local metodo="$1" url="$2" dados="${3:-}"
+            local args=(
+              --silent --show-error --max-time 30
+              --request "$metodo"
+              --output "$CORPO" --write-out '%{http_code}'
+              --header "Authorization: Bearer ${COOLIFY_TOKEN}"
+              --header "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}"
+              --header "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}"
+              --header "Accept: application/json"
+            )
+            if [ -n "$dados" ]; then
+              args+=(--header "Content-Type: application/json" --data "$dados")
+            fi
+            local codigo
+            codigo="$(curl "${args[@]}" "$url" || true)"
+            printf '%s' "${codigo:-000}"
+          }
+
+          validar_resposta() {
+            local codigo="$1" contexto="$2"
+            case "$codigo" in
+              200|201) ;;
+              000)
+                erro "${contexto}: nenhuma resposta HTTP (timeout ou falha de rede ao falar com ${COOLIFY_API})."
+                return 1 ;;
+              301|302|303|307|308)
+                erro "${contexto}: o Cloudflare Access respondeu ${codigo} — redirect para a tela de login, não JSON. Causa quase certa: CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET ausentes, trocados, revogados ou expirados (o service token vence em 30/07/2027), ou a aplicação do Access deixou de cobrir ops.olumechat.com.br/api."
+                return 1 ;;
+              401|403)
+                erro "${contexto}: ${codigo} do Coolify — o COOLIFY_TOKEN foi recusado (expirado, revogado ou sem a habilidade 'deploy'). O Access deixou passar, senão a resposta seria 302."
+                return 1 ;;
+              404)
+                erro "${contexto}: 404 — UUID desconhecido pelo Coolify. Os UUIDs de produção mudaram em 31/07/2026, quando as aplicações foram recriadas como 'dockerimage' (FIL-105); confira docs/AMBIENTES.md."
+                return 1 ;;
+              *)
+                erro "${contexto}: HTTP ${codigo} inesperado. Corpo: $(head -c 300 "$CORPO" | tr '\n' ' ')"
+                return 1 ;;
+            esac
+            if ! jq -e . >/dev/null 2>&1 < "$CORPO"; then
+              erro "${contexto}: HTTP ${codigo}, mas o corpo não é JSON. Início: $(head -c 300 "$CORPO" | tr '\n' ' ')"
+              return 1
+            fi
+          }
+
+          imprimir_log_deployment() {
+            local url linhas
+            url="$(jq -r '.deployment_url // ""' "$CORPO" 2>/dev/null || true)"
+            [ -n "$url" ] && echo "Deployment no Coolify: ${url}"
+            echo "----- log do deployment (últimas 200 linhas) -----"
+            linhas="$(jq -r 'try ((.logs // "[]") | fromjson) catch [] | .[]? | (.output // "")' "$CORPO" 2>/dev/null | tail -n 200 || true)"
+            if [ -n "$linhas" ]; then
+              printf '%s\n' "$linhas"
+            else
+              echo "(sem log estruturado; corpo bruto abaixo)"
+              head -c 2000 "$CORPO"; echo
+            fi
+            echo "-------------------------------------------------"
+          }
+
+          # O Coolify trocou /deploy de GET para POST em versões recentes (o GET
+          # antigo passou a devolver 405). A instância atual atende no GET; o
+          # fallback existe para que uma atualização automática do Coolify não
+          # derrube a promoção sem explicação.
+          disparar_deploy() {
+            local uuid="$1" nome="$2" codigo
+            codigo="$(chamar GET "${COOLIFY_API}/deploy?uuid=${uuid}&force=false")"
+            if [ "$codigo" = "405" ]; then
+              echo "::warning::${nome}: o Coolify recusou GET /deploy (405) — esta versão só aceita POST. Repetindo com POST e seguindo em frente."
+              codigo="$(chamar POST "${COOLIFY_API}/deploy?uuid=${uuid}&force=false")"
+            fi
+            validar_resposta "$codigo" "disparo do deploy de ${nome}"
+          }
+
+          esperar_deployment() {
+            local deployment_uuid="$1" nome="$2"
+            local limite=$(( SECONDS + TIMEOUT_DEPLOY_S ))
+            local status="" anterior="" codigo
+            while [ "$SECONDS" -lt "$limite" ]; do
+              codigo="$(chamar GET "${COOLIFY_API}/deployments/${deployment_uuid}")"
+              validar_resposta "$codigo" "consulta do deployment ${deployment_uuid} (${nome})"
+              status="$(jq -r '.status // "desconhecido"' "$CORPO")"
+              if [ "$status" != "$anterior" ]; then
+                echo "[$(date -u +%H:%M:%S)] ${nome}: ${status}"
+                anterior="$status"
+              fi
+              case "$status" in
+                finished)
+                  echo "${nome}: deployment concluído."
+                  return 0 ;;
+                failed|cancelled-by-user)
+                  erro "${nome}: deployment terminou como '${status}'. Produção NÃO recebeu ${TAG} — quem está atendendo é a versão anterior."
+                  imprimir_log_deployment
+                  return 1 ;;
+                queued|in_progress)
+                  ;;
+                *)
+                  echo "::warning::${nome}: status '${status}' fora do enum conhecido do Coolify; seguindo até o timeout." ;;
+              esac
+              sleep "$INTERVALO_POLL_S"
+            done
+            erro "${nome}: o deployment ${deployment_uuid} não terminou em ${TIMEOUT_DEPLOY_S}s (último status: ${status})."
+            imprimir_log_deployment
+            return 1
+          }
+
+          # "Deployment finished" quer dizer que o Coolify terminou o trabalho —
+          # não que o container ficou de pé com a tag certa. Um container que
+          # sobe e morre em seguida, ou que voltou para a tag anterior, produz
+          # deployment verde e ambiente errado.
+          #
+          # O portão é `running:healthy`, e só ele. O sufixo vem do
+          # `State.Health.Status` do Docker (o health check da UI do Coolify está
+          # desligado de propósito — a imagem é slim e não tem curl/wget), e as
+          # duas imagens declaram HEALTHCHECK no Dockerfile. `starting` é a
+          # janela de `--start-period` e continua esperando; `unhealthy` não
+          # passa nunca, mas também não falha na hora, porque o Docker continua
+          # sondando e um boot lento pode passar por ele.
+          conferir_estado() {
+            local uuid="$1" nome="$2"
+            local limite=$(( SECONDS + TIMEOUT_ESTADO_S ))
+            local codigo estado tag_atual anterior=""
+            while [ "$SECONDS" -lt "$limite" ]; do
+              codigo="$(chamar GET "${COOLIFY_API}/applications/${uuid}")"
+              validar_resposta "$codigo" "releitura do estado de ${nome}"
+              estado="$(jq -r '.status // "desconhecido"' "$CORPO")"
+              tag_atual="$(jq -r '.docker_registry_image_tag // ""' "$CORPO")"
+
+              if [ "$tag_atual" != "$TAG" ]; then
+                erro "${nome}: depois do deploy a aplicação está com a tag '${tag_atual:-<vazia>}', e não '${TAG}'. Alguém ou algo trocou a tag no meio do caminho — produção não está no commit que este job promoveu."
+                return 1
+              fi
+
+              case "$estado" in
+                running:healthy)
+                  echo "${nome}: container em '${estado}' com a tag ${TAG}."
+                  return 0 ;;
+              esac
+
+              if [ "$estado" != "$anterior" ]; then
+                echo "[$(date -u +%H:%M:%S)] ${nome}: estado '${estado}' — aguardando 'running:healthy'"
+                anterior="$estado"
+              fi
+              sleep 5
+            done
+
+            case "$estado" in
+              running:unhealthy)
+                erro "${nome}: o container está de pé com a tag ${TAG}, mas o HEALTHCHECK do Dockerfile continua reprovando depois de ${TIMEOUT_ESTADO_S}s. A versão promovida NÃO está saudável — a anterior é que estava." ;;
+              running:unknown)
+                erro "${nome}: o Coolify reporta '${estado}' — o container não expõe estado de saúde, embora a imagem declare HEALTHCHECK no Dockerfile. Ou não é a imagem esperada, ou o container foi criado sem o healthcheck." ;;
+              *)
+                erro "${nome}: o deployment terminou, mas a aplicação não chegou a 'running:healthy' em ${TIMEOUT_ESTADO_S}s (último estado: ${estado})." ;;
+            esac
+            return 1
+          }
+
+          deployar() {
+            local nome="$1" uuid="$2" imagem_esperada="$3" host_esperado="$4"
+            echo "::group::${nome} → ${TAG}"
+
+            local codigo
+            codigo="$(chamar GET "${COOLIFY_API}/applications/${uuid}")"
+            validar_resposta "$codigo" "leitura da aplicação ${nome}"
+
+            local nome_app imagem_atual tipo fqdn
+            nome_app="$(jq -r '.name // "?"' "$CORPO")"
+            imagem_atual="$(jq -r '.docker_registry_image_name // ""' "$CORPO")"
+            tipo="$(jq -r '.build_pack // "?"' "$CORPO")"
+            fqdn="$(jq -r '.fqdn // ""' "$CORPO")"
+            echo "Aplicação: ${nome_app} (uuid ${uuid}, build_pack ${tipo})"
+            echo "Imagem configurada: ${imagem_atual:-<vazia>}"
+            echo "Domínio configurado: ${fqdn:-<vazio>}"
+
+            # Três guardas contra a MESMA falha: apontar para a aplicação errada.
+            # Em produção ela é especialmente cruel — as aplicações antigas
+            # (build por Dockerfile) continuam existindo no Coolify, paradas e
+            # sem domínio, e um deploy nelas termina VERDE sem trocar nada do
+            # que está no ar. Cada guarda pega um pedaço:
+            #
+            #   tipo    — `dockerimage` é o único que promove imagem pronta; se
+            #             vier build por Dockerfile, o UUID é de uma aplicação
+            #             antiga e a "promoção" viraria um rebuild na VPS;
+            #   imagem  — separa backend de frontend e, principalmente,
+            #             `-prod` de `-staging`;
+            #   domínio — uma aplicação de produção sem o domínio de produção não
+            #             recebe tráfego: é a que está desativada.
+            #
+            # As três falham FECHADAS quando o campo vem vazio: ausência de
+            # informação não vira permissão. O `-z` em `imagem_esperada` não é
+            # paranoia — com a variável vazia o padrão do `case` viraria `*""`,
+            # que casa com qualquer coisa, e a guarda passaria a aprovar tudo,
+            # calada.
+            if [ -z "$imagem_esperada" ] || [ -z "$host_esperado" ]; then
+              erro "${nome}: nome de imagem ou domínio esperado chegou vazio (variável de ambiente do workflow não definida). Sem eles as conferências aprovariam qualquer coisa — deploy abortado."
+              echo "::endgroup::"
+              return 1
+            fi
+
+            if [ "$tipo" != "dockerimage" ]; then
+              erro "${nome}: a aplicação ${uuid} é do tipo '${tipo}', e não 'dockerimage'. Promoção publica imagem PRONTA do GHCR; uma aplicação que compila do Dockerfile faria um rebuild na VPS — outro artefato, exatamente o que este desenho existe para eliminar. Confira o UUID em docs/AMBIENTES.md."
+              echo "::endgroup::"
+              return 1
+            fi
+
+            case "$imagem_atual" in
+              *"$imagem_esperada") ;;
+              *)
+                erro "${nome}: a aplicação está apontada para a imagem '${imagem_atual:-<vazia>}', e o esperado termina em '${imagem_esperada}'. Deploy abortado antes de gravar a tag."
+                echo "::endgroup::"
+                return 1 ;;
+            esac
+
+            case "$fqdn" in
+              *"$host_esperado"*) ;;
+              *)
+                erro "${nome}: a aplicação ${uuid} está com o domínio '${fqdn:-<vazio>}', que não contém '${host_esperado}'. Uma aplicação de produção sem o domínio de produção não recebe tráfego — quase certamente este é o UUID de uma das aplicações antigas, desativadas e mantidas só como rollback (docs/AMBIENTES.md). Deployar nela terminaria VERDE sem mudar nada do que está no ar."
+                echo "::endgroup::"
+                return 1 ;;
+            esac
+
+            codigo="$(chamar PATCH "${COOLIFY_API}/applications/${uuid}" "{\"docker_registry_image_tag\":\"${TAG}\"}")"
+            validar_resposta "$codigo" "gravação da tag em ${nome}"
+            echo "Tag gravada: ${imagem_atual}:${TAG}"
+
+            disparar_deploy "$uuid" "$nome"
+            local deployment_uuid
+            deployment_uuid="$(jq -r '.deployments[0].deployment_uuid // ""' "$CORPO")"
+            if [ -z "$deployment_uuid" ]; then
+              erro "${nome}: o Coolify aceitou o disparo mas não devolveu deployment_uuid. Resposta: $(head -c 300 "$CORPO" | tr '\n' ' ')"
+              echo "::endgroup::"
+              return 1
+            fi
+            echo "Deployment disparado: ${deployment_uuid}"
+
+            esperar_deployment "$deployment_uuid" "$nome"
+            conferir_estado "$uuid" "$nome"
+            echo "::endgroup::"
+          }
+
+          echo "Promovendo ${TAG} (${SHA_ESPERADO}) para produção."
+          deployar "backend-prod-img" "$UUID_BACKEND" "$IMAGEM_BACKEND" "$HOST_API"
+          deployar "frontend-prod-img" "$UUID_FRONTEND" "$IMAGEM_FRONTEND" "$HOST_FRONT"
+
+      # FIL-113 — `200` NÃO prova versão: é compatível com "container velho e
+      # saudável". Foi literalmente o que aconteceu em 31/07/2026, quando dois
+      # containers disputaram o mesmo `Host()` do Traefik: deploy verde, /health
+      # em 200, e o mundo recebendo a versão anterior por horas
+      # (docs/AMBIENTES.md). Aqui o mundo é cliente, então o smoke exige que a
+      # resposta DIGA qual build respondeu.
+      #
+      # Duas fases, como no deploy-staging.yml:
+      #   1. aquecimento — recheca até o timeout, porque logo depois de o
+      #      container ficar saudável ainda há uma janela em que a borda entrega
+      #      a resposta do anterior. Vermelho intermitente é vermelho que
+      #      ninguém lê.
+      #   2. confirmação — depois do primeiro acerto, exige mais respostas
+      #      CONSECUTIVAS. Um acerto só não distingue "servindo a build nova" de
+      #      "alternando entre duas builds"; no roteamento dividido as respostas
+      #      se revezam, e sair no primeiro acerto sairia verde exatamente no
+      #      cenário que este portão existe para pegar.
+      #
+      # Diferente de staging, aqui NÃO vai cabeçalho do Access: `api.olumechat.com.br`
+      # é público, e é assim que o cliente chega. O smoke tem que percorrer o
+      # mesmo caminho que ele.
+      - name: Smoke da API — 200 e a VERSÃO promovida em /health/ready e /health/live
+        id: smoke_api
+        run: |
+          set -euo pipefail
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+
+          URL_READY="https://${HOST_API}/health/ready"
+          URL_LIVE="https://${HOST_API}/health/live"
+
+          # Uma consulta. Ecoa "<status HTTP>|<sha servido>"; o corpo fica em
+          # $CORPO. O SHA só é extraído no 200 — em qualquer outro status o corpo
+          # não é resposta da API. `jq -e` reprova corpo que não é JSON, o
+          # sintoma de a resposta vir de um proxy ou tela de erro.
+          consultar() {
+            local url="$1" codigo sha=""
+            codigo="$(curl --silent --max-time 15 \
+              --output "$CORPO" --write-out '%{http_code}' "$url" || true)"
+            codigo="${codigo:-000}"
+            if [ "$codigo" = "200" ]; then
+              sha="$(jq -er '.versao.sha // ""' "$CORPO" 2>/dev/null || true)"
+            fi
+            printf '%s|%s' "$codigo" "$sha"
+          }
+
+          # ---------- FASE 1: esperar a build promovida aparecer ----------
+          codigo=""; servido=""; confere="nao"; houve_200="nao"
+          limite=$(( SECONDS + TIMEOUT_HTTP_S ))
+          while [ "$SECONDS" -lt "$limite" ]; do
+            resposta="$(consultar "$URL_READY")"
+            codigo="${resposta%%|*}"
+            servido="${resposta#*|}"
+
+            if [ "$codigo" = "200" ]; then
+              houve_200="sim"
+              if [ "$servido" = "$SHA_ESPERADO" ]; then
+                confere="sim"
+                echo "API de produção: 200 em ${URL_READY}, e a resposta veio da build ${TAG} (${SHA_ESPERADO})."
+                head -c 400 "$CORPO"; echo
+                break
+              fi
+              echo "[$(date -u +%H:%M:%S)] API: 200, mas a versão servida é '${servido:-<ausente>}' — esperando ${SHA_ESPERADO}"
+            else
+              echo "[$(date -u +%H:%M:%S)] API: HTTP ${codigo} em ${URL_READY} — nova tentativa em 5s"
+            fi
+            sleep 5
+          done
+
+          if [ "$confere" != "sim" ]; then
+            if [ "$houve_200" != "sim" ]; then
+              echo "::error::${URL_READY} não respondeu 200 em ${TIMEOUT_HTTP_S}s (último status: ${codigo}). O container está 'running:healthy' com a tag ${TAG} — saudável por dentro —, então o problema está entre o Cloudflare/Traefik e o container, ou o /health/ready está reprovando por dependência (banco). PRODUÇÃO PODE ESTAR FORA: confira ops.olumechat.com.br agora."
+            elif [ -z "$servido" ]; then
+              echo "::error::${URL_READY} respondeu 200, mas a resposta não diz QUAL build respondeu (sem 'versao.sha', ou com ele nulo/'origem: desconhecida'). Duas causas: (a) quem está atendendo é uma imagem anterior ao FIL-113 — na prática um container velho ainda disputando o Host() do Traefik, exatamente o incidente de 31/07/2026 (docs/AMBIENTES.md); (b) a imagem foi construída sem o build-arg OLUME_COMMIT_SHA. Nos dois casos NÃO dá para afirmar que produção está servindo ${TAG}. Últimos 400 bytes: $(head -c 400 "$CORPO" | tr '\n' ' ')"
+            else
+              echo "::error::${URL_READY} respondeu 200, mas quem atendeu foi a build ${servido}, e não ${SHA_ESPERADO} (${TAG}) — divergência que persistiu por ${TIMEOUT_HTTP_S}s. O container novo está 'running:healthy' com a tag certa, então há OUTRO container reivindicando o mesmo Host() do Traefik. Receita para confirmar e resolver: docs/AMBIENTES.md, seção 'Trocar uma aplicação para o tipo imagem'."
+            fi
+            exit 1
+          fi
+
+          # ---------- FASE 2: confirmar que NÃO é roteamento dividido ----------
+          echo "Confirmando ${CONFIRMACOES_VERSAO}x seguidas (intervalo de ${INTERVALO_CONFIRMACAO_S}s) que a borda não alterna entre builds."
+          confirmadas=1
+          while [ "$confirmadas" -lt "$CONFIRMACOES_VERSAO" ]; do
+            sleep "$INTERVALO_CONFIRMACAO_S"
+            resposta="$(consultar "$URL_READY")"
+            codigo="${resposta%%|*}"
+            servido="${resposta#*|}"
+
+            if [ "$codigo" != "200" ]; then
+              echo "::error::a build ${TAG} já tinha respondido em ${URL_READY}, mas no meio da janela de confirmação a borda devolveu HTTP ${codigo} (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). O deploy terminou e o container está 'running:healthy', então isto não é boot lento: ou há outro container atendendo o mesmo Host() do Traefik e ele está doente, ou a borda oscila. Produção NÃO está comprovadamente servindo ${TAG}."
+              exit 1
+            fi
+
+            if [ "$servido" != "$SHA_ESPERADO" ]; then
+              echo "::error::ROTEAMENTO DIVIDIDO em ${HOST_API}: a borda respondeu ${SHA_ESPERADO} (${TAG}) e, ${INTERVALO_CONFIRMACAO_S}s depois, '${servido:-<sem marcador>}' (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). Duas builds estão atendendo o MESMO Host(), e parte do tráfego de CLIENTE recebe a versão anterior — é o incidente de 31/07/2026, e é o motivo de um único acerto não bastar. Os labels do Traefik são gravados no container quando ele é CRIADO: remover o domínio na configuração não tira um container antigo do roteamento; é preciso pará-lo. Receita completa em docs/AMBIENTES.md."
+              exit 1
+            fi
+
+            confirmadas=$(( confirmadas + 1 ))
+            echo "[$(date -u +%H:%M:%S)] confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}: ${SHA_ESPERADO}"
+          done
+
+          # /health/live é o MESMO host que acabou de ser provado, inclusive
+          # contra roteamento dividido — repetir a janela de confirmações aqui
+          # mediria a mesma borda de novo. O que falta provar é só que este
+          # caminho responde (o ticket pede os três endereços em 200), e a
+          # conferência do marcador vem de graça junto.
+          resposta="$(consultar "$URL_LIVE")"
+          codigo="${resposta%%|*}"
+          servido="${resposta#*|}"
+          if [ "$codigo" != "200" ]; then
+            echo "::error::${URL_LIVE} respondeu HTTP ${codigo}. O /health/ready do mesmo host acabou de responder 200 declarando ${TAG}, então não é o container: é este caminho especificamente."
+            exit 1
+          fi
+          if [ "$servido" != "$SHA_ESPERADO" ]; then
+            echo "::error::${URL_LIVE} respondeu 200, mas declarando a build '${servido:-<ausente>}' em vez de ${SHA_ESPERADO}. O /health/ready do mesmo host declarou a build certa ${CONFIRMACOES_VERSAO}x seguidas — duas builds atendendo o mesmo Host() é a explicação, e este pedido caiu na outra."
+            exit 1
+          fi
+          echo "API de produção: ${URL_LIVE} também em 200, declarando ${SHA_ESPERADO}."
+
+      # Em produção o frontend TEM prova por HTTP — a diferença que importa em
+      # relação a staging. Lá `staging.olumechat.com.br` está atrás do Cloudflare
+      # Access sem exceção de caminho, e o deploy automático consegue provar só o
+      # container (`running:healthy` com a tag), não o que o Traefik entrega.
+      # Aqui o domínio é público, então a mesma conferência que o humano faz à
+      # mão em staging roda automática — e é justamente o frontend que sofreu o
+      # incidente de roteamento dividido de 31/07/2026.
+      - name: Smoke do frontend — a landing responde e serve a VERSÃO promovida
+        id: smoke_front
+        run: |
+          set -euo pipefail
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+
+          RAIZ="https://${HOST_FRONT}/"
+          URL_VERSAO="https://${HOST_FRONT}/version.json"
+
+          # `/version.json` traz o marcador na RAIZ do objeto (na API ele vem sob
+          # `versao`) — é o mesmo contrato do FIL-113, documentado em
+          # docs/AMBIENTES.md. `jq -e` também reprova corpo que não é JSON: o
+          # sintoma de o caminho ter caído no fallback de SPA e devolvido
+          # index.html com 200, que é exatamente a falha silenciosa que este
+          # marcador existe para impedir.
+          consultar() {
+            local codigo sha=""
+            codigo="$(curl --silent --max-time 15 \
+              --output "$CORPO" --write-out '%{http_code}' "$URL_VERSAO" || true)"
+            codigo="${codigo:-000}"
+            if [ "$codigo" = "200" ]; then
+              sha="$(jq -er '.sha // ""' "$CORPO" 2>/dev/null || true)"
+            fi
+            printf '%s|%s' "$codigo" "$sha"
+          }
+
+          # ---------- FASE 1 ----------
+          codigo=""; servido=""; confere="nao"; houve_200="nao"
+          limite=$(( SECONDS + TIMEOUT_HTTP_S ))
+          while [ "$SECONDS" -lt "$limite" ]; do
+            resposta="$(consultar)"
+            codigo="${resposta%%|*}"
+            servido="${resposta#*|}"
+
+            if [ "$codigo" = "200" ]; then
+              houve_200="sim"
+              if [ "$servido" = "$SHA_ESPERADO" ]; then
+                confere="sim"
+                echo "Frontend de produção: ${URL_VERSAO} veio da build ${TAG} (${SHA_ESPERADO})."
+                head -c 400 "$CORPO"; echo
+                break
+              fi
+              echo "[$(date -u +%H:%M:%S)] frontend: 200, mas a versão servida é '${servido:-<ausente ou não-JSON>}' — esperando ${SHA_ESPERADO}"
+            else
+              echo "[$(date -u +%H:%M:%S)] frontend: HTTP ${codigo} em ${URL_VERSAO} — nova tentativa em 5s"
+            fi
+            sleep 5
+          done
+
+          if [ "$confere" != "sim" ]; then
+            if [ "$houve_200" != "sim" ]; then
+              echo "::error::${URL_VERSAO} não respondeu 200 em ${TIMEOUT_HTTP_S}s (último status: ${codigo}). O container está 'running:healthy' com a tag ${TAG}, então o problema está entre o Cloudflare/Traefik e o container. A LANDING PODE ESTAR FORA: confira https://${HOST_FRONT} agora."
+            elif [ -z "$servido" ]; then
+              echo "::error::${URL_VERSAO} respondeu 200, mas a resposta não diz QUAL build respondeu (sem 'sha', com ele nulo, ou corpo que nem é JSON). Três causas: (a) quem está atendendo é uma imagem anterior ao FIL-113; (b) a imagem foi construída sem o build-arg OLUME_COMMIT_SHA; (c) o Nginx caiu no fallback de SPA e devolveu index.html com 200. Nos três casos NÃO dá para afirmar que produção está servindo ${TAG}. Últimos 400 bytes: $(head -c 400 "$CORPO" | tr '\n' ' ')"
+            else
+              echo "::error::${URL_VERSAO} respondeu 200, mas quem atendeu foi a build ${servido}, e não ${SHA_ESPERADO} (${TAG}) — divergência que persistiu por ${TIMEOUT_HTTP_S}s. O container novo está 'running:healthy' com a tag certa, então há OUTRO container reivindicando o mesmo Host() do Traefik. Receita em docs/AMBIENTES.md."
+            fi
+            exit 1
+          fi
+
+          # ---------- FASE 2 ----------
+          echo "Confirmando ${CONFIRMACOES_VERSAO}x seguidas que ${HOST_FRONT} não alterna entre builds."
+          confirmadas=1
+          while [ "$confirmadas" -lt "$CONFIRMACOES_VERSAO" ]; do
+            sleep "$INTERVALO_CONFIRMACAO_S"
+            resposta="$(consultar)"
+            codigo="${resposta%%|*}"
+            servido="${resposta#*|}"
+
+            if [ "$codigo" != "200" ]; then
+              echo "::error::a build ${TAG} já tinha respondido em ${URL_VERSAO}, mas no meio da janela de confirmação a borda devolveu HTTP ${codigo} (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). O deploy terminou e o container está 'running:healthy', então isto não é boot lento: ou há outro container atendendo o mesmo Host() do Traefik, ou a borda oscila."
+              exit 1
+            fi
+
+            if [ "$servido" != "$SHA_ESPERADO" ]; then
+              echo "::error::ROTEAMENTO DIVIDIDO em ${HOST_FRONT}: a borda respondeu ${SHA_ESPERADO} (${TAG}) e, ${INTERVALO_CONFIRMACAO_S}s depois, '${servido:-<sem marcador>}' (confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}). Duas builds atendendo o MESMO Host(), e parte dos visitantes recebe a versão anterior — é o incidente de 31/07/2026. Os labels do Traefik são gravados na CRIAÇÃO do container: remover o domínio na configuração não tira o antigo do roteamento; é preciso pará-lo (docs/AMBIENTES.md)."
+              exit 1
+            fi
+
+            confirmadas=$(( confirmadas + 1 ))
+            echo "[$(date -u +%H:%M:%S)] confirmação ${confirmadas}/${CONFIRMACOES_VERSAO}: ${SHA_ESPERADO}"
+          done
+
+          # O terceiro endereço do critério de aceite. `/version.json` já provou
+          # a versão, mas ele é um arquivo estático servido por um `location`
+          # próprio: a raiz é o que o visitante abre, e um `try_files` quebrado
+          # derrubaria a landing sem tocar no marcador.
+          codigo="$(curl --silent --max-time 15 --output "$CORPO" --write-out '%{http_code}' "$RAIZ" || true)"
+          if [ "${codigo:-000}" != "200" ]; then
+            echo "::error::${RAIZ} respondeu HTTP ${codigo:-000}. O /version.json do mesmo host acabou de responder 200 com a build certa, então o container e o roteamento estão de pé — quebrou a entrega do index.html (confira o try_files em client/nginx.conf)."
+            exit 1
+          fi
+          echo "Frontend de produção: ${RAIZ} em 200."
+
+      # A evidência de qual commit está no ar, no mecanismo nativo do GitHub.
+      #
+      # Só chega aqui quem passou por tudo: os dois containers em
+      # `running:healthy` com a tag, a API declarando a build promovida em
+      # respostas consecutivas e a landing servindo o mesmo marcador. Escrever
+      # DEPOIS é o ponto: registro é evidência, não intenção — a mesma distinção
+      # que o deploy-staging.yml faz entre `docker_registry_image_tag` e o
+      # histórico de deployments.
+      #
+      # Isto NÃO é redundante com o registro que o GitHub cria sozinho ao usar
+      # `environment:`. Aquele nasce quando o job começa e aponta para o ref de
+      # onde o workflow foi disparado (o topo da `main`) — que em um ROLLBACK é
+      # justamente o commit que estamos tirando do ar. Este aponta para o SHA
+      # que foi promovido de verdade, e por ser o mais recente é o que a aba
+      # Environments mostra.
+      - name: Registrar o SHA comprovado em produção
+        id: registro
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+          API="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          EXECUCAO="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          postar() {
+            local url="$1" dados="$2" codigo
+            codigo="$(curl --silent --show-error --max-time 30 --request POST \
+              --output "$CORPO" --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              --header "Content-Type: application/json" \
+              --data "$dados" "$url" || true)"
+            printf '%s' "${codigo:-000}"
+          }
+
+          # `required_contexts: []` é obrigatório: sem isso o GitHub recusa criar
+          # o deployment enquanto qualquer check do commit não estiver verde — e
+          # num rollback para um commit antigo isso travaria justamente a
+          # operação mais urgente.
+          codigo="$(postar "${API}/deployments" "{
+            \"ref\": \"${SHA_ESPERADO}\",
+            \"environment\": \"production\",
+            \"production_environment\": true,
+            \"auto_merge\": false,
+            \"required_contexts\": [],
+            \"description\": \"${TAG} promovida e comprovada em producao\"
+          }")"
+
+          if [ "$codigo" != "201" ]; then
+            echo "::error::produção FOI promovida e comprovada na ${TAG} — o que falhou foi registrar isso (HTTP ${codigo} ao criar o deployment). O ar está correto; o que faltou é a anotação na aba Environments. Resposta: $(head -c 300 "$CORPO" | tr '\n' ' ')"
+            exit 1
+          fi
+
+          ID="$(jq -r '.id // ""' "$CORPO")"
+          if [ -z "$ID" ]; then
+            echo "::error::o GitHub aceitou o deployment mas não devolveu id — sem ele não dá para marcar o status. Produção está promovida e comprovada na ${TAG}."
+            exit 1
+          fi
+
+          codigo="$(postar "${API}/deployments/${ID}/statuses" "{
+            \"state\": \"success\",
+            \"environment\": \"production\",
+            \"environment_url\": \"https://${HOST_FRONT}\",
+            \"log_url\": \"${EXECUCAO}\",
+            \"description\": \"containers running:healthy na ${TAG}; API e landing servindo essa versao\"
+          }")"
+
+          if [ "$codigo" != "201" ]; then
+            echo "::error::deployment ${ID} criado, mas não consegui marcar o status como success (HTTP ${codigo}). Produção está promovida e comprovada na ${TAG}."
+            exit 1
+          fi
+
+          echo "Registrado: deployment ${ID} do ambiente production em ${SHA_ESPERADO} (${TAG})."
+
+      # O resumo só pode afirmar o que ESTA execução verificou — cada linha
+      # depende do `outcome` do passo que a produziu. Um resumo que repete o
+      # texto do caminho feliz quando o job morreu no meio apresenta evidência
+      # falsa exatamente no momento em que alguém vai ler para entender o que
+      # houve.
+      - name: Resumo
+        if: always()
+        env:
+          RESULTADO: ${{ job.status }}
+          R_DEPLOY: ${{ steps.deploy.outcome }}
+          R_SMOKE_API: ${{ steps.smoke_api.outcome }}
+          R_SMOKE_FRONT: ${{ steps.smoke_front.outcome }}
+          R_REGISTRO: ${{ steps.registro.outcome }}
+          ATOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## Promoção para produção — ${RESULTADO}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | \`${SHA_ESPERADO}\` |"
+            echo "| Tag | \`${TAG}\` |"
+            echo "| Disparado por | @${ATOR} |"
+            echo
+
+            if [ "${R_DEPLOY}" != "success" ]; then
+              echo "Parou no deploy (\`${R_DEPLOY}\`). O log do passo diz se falhou nas guardas"
+              echo "(tipo da aplicação, imagem ou domínio — nesse caso **nada** foi tocado), ao"
+              echo "gravar a tag, no deployment, ou esperando o container ficar"
+              echo "\`running:healthy\`."
+              echo
+              echo "**Não** assuma que produção está na tag acima. Se o backend subiu e o"
+              echo "frontend não, os dois estão em versões diferentes — confira"
+              echo "\`ops.olumechat.com.br\` e, se precisar, promova o SHA anterior por este"
+              echo "mesmo workflow."
+              exit 0
+            fi
+            if [ "${R_SMOKE_API}" != "success" ]; then
+              echo "Deploy concluído: os dois containers em \`running:healthy\` com a tag acima."
+              echo
+              echo "Parou no smoke da API (\`${R_SMOKE_API}\`) — o container está saudável por"
+              echo "dentro, mas a borda não confirmou a versão. O log diz qual das quatro coisas"
+              echo "aconteceu: não respondeu 200; respondeu 200 **sem** marcador de versão;"
+              echo "respondeu 200 declarando **outra** build; ou **alternou** entre builds"
+              echo "dentro da janela de confirmação (\`ROTEAMENTO DIVIDIDO\`)."
+              echo
+              echo "**Cliente do outro lado:** confira \`https://${HOST_API}/health/ready\` agora."
+              exit 0
+            fi
+            if [ "${R_SMOKE_FRONT}" != "success" ]; then
+              echo "Deploy concluído e **API provada**: \`${HOST_API}\` responde 200 declarando"
+              echo "a build acima em ${CONFIRMACOES_VERSAO} respostas consecutivas."
+              echo
+              echo "Parou no smoke do frontend (\`${R_SMOKE_FRONT}\`) — a landing não confirmou a"
+              echo "versão. Como a API já está na versão nova e a landing pode não estar, este é"
+              echo "o estado mais delicado: confira \`https://${HOST_FRONT}/version.json\` agora."
+              exit 0
+            fi
+            if [ "${R_REGISTRO}" != "success" ]; then
+              echo "**Produção está na tag acima, e isso está provado** — containers em"
+              echo "\`running:healthy\`, API e landing servindo o commit acima."
+              echo
+              echo "O que falhou (\`${R_REGISTRO}\`) foi apenas **registrar** o deploy no ambiente"
+              echo "\`production\`. Nada a refazer no ar; a aba Environments é que ficou"
+              echo "desatualizada."
+              exit 0
+            fi
+
+            echo "### ✅ Produção está rodando \`${SHA_ESPERADO}\` (\`${TAG}\`)"
+            echo
+            echo "**Verificado nesta execução:**"
+            echo
+            echo "- os dois containers em \`running:healthy\` com a tag acima;"
+            echo "- \`https://${HOST_API}/health/ready\` em 200 **declarando** essa build em"
+            echo "  **${CONFIRMACOES_VERSAO} respostas consecutivas** — sem sinal de roteamento dividido;"
+            echo "- \`https://${HOST_API}/health/live\` em 200 declarando a mesma build;"
+            echo "- \`https://${HOST_FRONT}/version.json\` servindo o mesmo commit, também em"
+            echo "  ${CONFIRMACOES_VERSAO} respostas consecutivas, e \`https://${HOST_FRONT}/\` em 200."
+            echo
+            echo "> **Rollback é este mesmo workflow** com um SHA anterior — Actions → *Deploy"
+            echo "> produção* → *Run workflow* → o SHA antigo → aprovar. **Voltar a imagem não"
+            echo "> volta a migração:** o entrypoint roda as migrações no boot, então o rollback"
+            echo "> devolve o código, não o schema (\`docs/AMBIENTES.md\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
