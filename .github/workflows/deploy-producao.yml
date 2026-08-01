@@ -80,6 +80,29 @@ permissions:
 env:
   IMAGEM_BACKEND: ghcr.io/bronze-ff/olumechat-server
   IMAGEM_FRONTEND: ghcr.io/bronze-ff/olumechat-client-prod
+  # FIL-114 (review do Codex, PR #64) — MESMO nome e MESMO valor que
+  # deploy-staging.yml usa (workflow diferente, sem como compartilhar `env`
+  # entre os dois; a garantia de coerência é esta grafia idêntica nos dois
+  # arquivos — mude aqui, mude lá). Definem o que conta como "registro
+  # confiável" do ambiente `staging` no passo "Exigir que este SHA tenha
+  # passado por staging" do job `validar`, abaixo.
+  #
+  # MARCADOR_REGISTRO_CONFIAVEL é o que o passo "Registrar o deploy
+  # verificado" do deploy-staging.yml grava em `payload.origem` — só ele
+  # distingue um registro EXPLÍCITO (criado depois do smoke passar) do
+  # deployment AUTOMÁTICO que o GitHub cria por conta própria quando aquele
+  # job COMEÇA (efeito colateral de declarar `environment:` num job).
+  #
+  # CUTOFF_REGISTROS_LEGADOS existe porque todo registro criado ANTES deste PR
+  # (inclusive o que está em produção agora) não tem — e não pode ganhar — o
+  # marcador: a guarda de ordenação do deploy-staging.yml pula SHA antigo de
+  # propósito, então não há como reprocessar e re-marcar. Sem esta válvula, o
+  # rollback documentado em AMBIENTES.md deixaria de funcionar para toda
+  # versão anterior a este PR. É uma válvula TEMPORÁRIA: quando nenhum SHA
+  # anterior a este cutoff estiver mais no horizonte de rollback de produção,
+  # apague o `or .created_at < $cutoff` dos dois workflows e esta variável.
+  MARCADOR_REGISTRO_CONFIAVEL: 'deploy-staging-verificado'
+  CUTOFF_REGISTROS_LEGADOS: '2026-08-02T00:00:00Z'
 
 # Uma promoção por vez. `cancel-in-progress: false` porque cancelar no meio
 # deixaria a aplicação com a tag gravada e sem deployment concluído — em
@@ -229,12 +252,20 @@ jobs:
       # para este SHA" sem mais nada reabriria a mesma lacuna que este preflight
       # existe para fechar.
       #
-      # Por isso a filtragem abaixo exige `payload.origem ==
-      # "deploy-staging-verificado"` — a marca que só o passo "Registrar o
-      # deploy verificado" daquele workflow grava, DEPOIS de smoke e containers
-      # saudáveis. O deployment automático do GitHub não carrega essa marca, e
-      # nunca vai carregar: fica de fora da comparação, e vira só ruído
-      # cosmético na aba Environments.
+      # Por isso a filtragem abaixo só aceita um deployment como "registro
+      # confiável" se ${MARCADOR_REGISTRO_CONFIAVEL} estiver em `payload.origem`
+      # — a marca que só o passo "Registrar o deploy verificado" daquele
+      # workflow grava, DEPOIS de smoke e containers saudáveis — OU se o
+      # deployment foi criado antes de ${CUTOFF_REGISTROS_LEGADOS} (ver o
+      # comentário dessas duas variáveis no `env:` do topo do arquivo).
+      #
+      # O cutoff existe porque todo registro anterior a este PR (inclusive o
+      # que está em produção agora) não tem, e não pode ganhar, o marcador —
+      # sem essa válvula, o rollback documentado em AMBIENTES.md deixaria de
+      # funcionar para toda versão anterior a este PR. O deployment automático
+      # do GitHub não escapa por essa porta: ele nasce DEPOIS do cutoff (é
+      # criado a cada run, a partir de agora) e sem marcador, então cai fora
+      # nas duas condições — vira só ruído cosmético na aba Environments.
       - name: Exigir que este SHA tenha passado por staging
         env:
           GH_TOKEN: ${{ github.token }}
@@ -288,16 +319,21 @@ jobs:
             exit 1
           fi
 
-          # FIL-114 — só contam deployments com a marca que o deploy-staging.yml
-          # grava DEPOIS de provar a versão (ver o comentário acima do passo). O
-          # deployment automático que o GitHub cria por aquele job declarar
-          # `environment: staging` não carrega `payload.origem`, e cai fora aqui
-          # — mesmo que exista, mesmo que esteja com `state=success`.
-          IDS="$(jq -r '.[]? | select((.payload.origem // "") == "deploy-staging-verificado") | .id' "$CORPO")"
+          # FIL-114 — só contam deployments "confiáveis": marcados com
+          # ${MARCADOR_REGISTRO_CONFIAVEL} em `payload.origem` OU criados antes
+          # de ${CUTOFF_REGISTROS_LEGADOS} (ver o comentário acima do passo e o
+          # `env:` do topo do arquivo — os mesmos dois valores em
+          # deploy-staging.yml, propositalmente). O deployment automático que o
+          # GitHub cria por aquele job declarar `environment: staging` não
+          # satisfaz nenhuma das duas condições, e cai fora aqui — mesmo que
+          # exista, mesmo que esteja com `state=success`.
+          IDS="$(jq -r --arg marcador "${MARCADOR_REGISTRO_CONFIAVEL}" --arg cutoff "${CUTOFF_REGISTROS_LEGADOS}" \
+            '.[]? | select((.payload.origem // "") == $marcador or .created_at < $cutoff) | .id' \
+            "$CORPO")"
           if [ -z "$IDS" ]; then
             TOTAL_BRUTO="$(jq -r 'length' "$CORPO")"
             if [ "$TOTAL_BRUTO" != "0" ]; then
-              echo "::error::o commit ${SHA} tem ${TOTAL_BRUTO} deployment(s) do ambiente 'staging', mas NENHUM com a marca 'deploy-staging-verificado' — ou seja, nenhum é o registro explícito que o deploy-staging.yml grava depois do smoke. Provavelmente é só o deployment automático que o GitHub cria por aquele job rodar num Environment (FIL-114) — ele não prova versão nenhuma. Produção não recebe o que staging não verificou de verdade. ${SEM_STAGING}"
+              echo "::error::o commit ${SHA} tem ${TOTAL_BRUTO} deployment(s) do ambiente 'staging', mas NENHUM confiável — nenhum tem a marca '${MARCADOR_REGISTRO_CONFIAVEL}' nem foi criado antes de ${CUTOFF_REGISTROS_LEGADOS}. Provavelmente é só o deployment automático que o GitHub cria por aquele job rodar num Environment (FIL-114) — ele não prova versão nenhuma. Produção não recebe o que staging não verificou de verdade. ${SEM_STAGING}"
             else
               echo "::error::o commit ${SHA} NUNCA completou um deploy verificado em staging — não há registro nenhum do ambiente 'staging' para ele. Produção não recebe o que staging não recebeu. ${SEM_STAGING}"
             fi
@@ -306,7 +342,9 @@ jobs:
 
           # Um registro sem status `success` não conta: ele existe entre o
           # `POST /deployments` e o `POST .../statuses`, e é justamente o que
-          # sobra quando o segundo falha.
+          # sobra quando o segundo falha. Vale igual para os dois tipos de
+          # registro confiável (marcado ou legado pré-cutoff) — nenhum dos dois
+          # dispensa a prova de que a verificação terminou bem.
           for id in $IDS; do
             codigo="$(buscar "${API}/deployments/${id}/statuses?per_page=100")"
             if [ "$codigo" != "200" ]; then
@@ -314,12 +352,12 @@ jobs:
               exit 1
             fi
             if jq -e '[.[]? | select(.state == "success")] | length > 0' >/dev/null 2>&1 < "$CORPO"; then
-              echo "Staging comprovado: o deployment ${id} do ambiente 'staging' (marcado 'deploy-staging-verificado') registra ${SHA} como verificado."
+              echo "Staging comprovado: o deployment ${id} do ambiente 'staging' (registro confiável) registra ${SHA} como verificado."
               exit 0
             fi
           done
 
-          echo "::error::o commit ${SHA} tem registro marcado 'deploy-staging-verificado' em staging, mas nenhum com status 'success' — ou seja, staging chegou a ser apontado para ele e a verificação não terminou bem. Produção não recebe o que staging não confirmou. ${SEM_STAGING}"
+          echo "::error::o commit ${SHA} tem registro confiável em staging, mas nenhum com status 'success' — ou seja, staging chegou a ser apontado para ele e a verificação não terminou bem. Produção não recebe o que staging não confirmou. ${SEM_STAGING}"
           exit 1
 
       - name: Login no GHCR
