@@ -6,7 +6,7 @@ segurança do artigo "15 perguntas de segurança para quem está praticando vibe
 coding" (Marcio Frayze, dev.to).
 
 Todo PR que tocar um dos pontos abaixo deve confirmar, item a item, o que foi
-verificado — ver [`WORKFLOW.md`](WORKFLOW.md) §9.
+verificado — ver [`WORKFLOW.md`](WORKFLOW.md) §10.
 
 ## Regras não-negociáveis (checklist do PR)
 

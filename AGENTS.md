@@ -2,16 +2,12 @@
 
 > **Fonte de verdade única.** `CLAUDE.md` contém apenas `@AGENTS.md` (import nativo do
 > Claude Code) — edite SEMPRE este arquivo; o Claude importa e os demais agentes (Codex,
-> Gemini, etc.) leem `AGENTS.md` nativamente. Skills: vivem em `.claude/skills/`; em cada
-> **checkout** (inclusive worktree — toda worktree do Orca nasce sem a junction, mesmo as
-> criadas em onda), crie a junction `.agents/skills` → `.claude/skills` (fica fora do git):
-> `New-Item -ItemType Junction -Path .agents\skills -Target .claude\skills`, ou rode
-> `powershell -File scripts/setup-worktree.ps1` (idempotente — cria só se faltar). Dá pra
-> automatizar por worktree criada pelo Orca: `orca repo show --json` expõe
-> `hookSettings.scripts.setup` (hoje roda `npm ci` e copia `.env.local`) — é config local de
-> cada instalação do Orca, não vai pro git, então some a chamada do script ali (Orca →
-> Settings do repo → Setup script) se quiser zero passo manual na sua máquina; o script e a
-> junction manual continuam sendo a rede de segurança para quem não configurou o hook.
+> Gemini, etc.) leem `AGENTS.md` nativamente. Skills reutilizáveis vivem **globalmente** em
+> `~/.agents/skills/` (o Claude aponta `~/.claude/skills/<skill>` para a mesma pasta por
+> junction) — nada de skill é versionado aqui, e nenhum passo por checkout é necessário. A
+> skill global `orquestrar-projeto` (`/orquestrar-projeto` no Claude, `$orquestrar-projeto`
+> no Codex) coordena o trabalho e lê as políticas deste repo: este arquivo,
+> `docs/WORKFLOW.md` e `docs/AMBIENTES.md`.
 
 ## O que é
 
@@ -20,17 +16,25 @@ Plataforma **multi-tenant** de atendimento por WhatsApp direto na **Cloud API da
 IA (responde, escuta áudio, vê imagem, age e transfere para humano), campanhas, métricas e
 um **painel do operador** (provisionamento, financeiro, sessão de suporte auditada).
 
-## Estado atual (2026-07-30)
+## Estado atual (2026-08-01)
 
 - **EM PRODUÇÃO.** `olumechat.com.br` (landing + app) e `api.olumechat.com.br` no ar,
   em VPS com Coolify. Staging espelhado em `staging.olumechat.com.br` (atrás de
   Cloudflare Access). Ver **`docs/AMBIENTES.md`** antes de mexer em qualquer coisa que
   chegue ao deploy.
+- **Pipeline de deploy fechado e exercitado** (FIL-99→100→101 + FIL-113): a CI publica
+  `sha-<commit>` no GHCR, staging sobe sozinho, e produção só recebe promoção manual
+  aprovada (Actions → *Deploy produção*). Toda resposta carrega a build que a produziu
+  (`/health/*` e `/version.json`) e o smoke **falha** se a versão servida divergir.
+  Promoção e rollback foram exercitados de verdade em 2026-08-01.
 - Falta só a conta Meta para o WhatsApp funcionar (`META_APP_SECRET` está com
   placeholder — o webhook rejeita tudo até ser trocado, que é o comportamento seguro).
 - Roadmap de IA completo (FIL-83..86): instruções/base de conhecimento por empresa,
   atendimento com handoff nos dois sentidos, STT (whisper) + visão, ferramentas nativas
   (ficha, tag, pedido com template por empresa) e upload de PDF/XLSX/CSV na base.
+- **Riscos aceitos e conscientes** (não são esquecimento): Neon no plano Free, com PITR
+  de **6 horas** — janela curta demais depois que houver dado de cliente (FIL-110);
+  nenhum teste de carga executado, então o limite de conexões SSE é desconhecido.
 - Suite do server: `cd server && npm test` (1.000+ testes; integração com Postgres real só
   com `TEST_DATABASE_URL` — na CI o job `server-test-rls` a fornece e teste pulado vira
   falha). Client: `cd client && npm run build`.
@@ -57,10 +61,12 @@ cd client && npm run dev                        # http://localhost:5173
 1. **`docs/WORKFLOW.md` é contrato**: branch `<tipo>/<descricao>` cortada de `origin/main`
    fresca, Conventional Commits em português, suite verde antes do PR, nunca commitar
    código direto na `main`, um ticket = uma branch = um PR. A `main` é protegida e exige
-   CI verde (`server-test`, `server-test-rls`, `client-build`).
+   **7 checks verdes**: `server-test`, `server-test-rls`, `client-build`,
+   `npm-audit (server)`, `npm-audit (client)`, `backend-image` e `frontend-image`.
 2. **Produção está no ar.** Migração é **expand/contract** (nunca remove coluna na mesma
    release que para de usá-la), variável nova precisa entrar no Coolify dos ambientes que
-   a usam, e `VITE_*` exige rebuild. Mudança vai para staging antes de produção.
+   a usam, e `VITE_*` exige rebuild. Mudança vai para staging antes de produção — e
+   produção só recebe promoção manual aprovada, nunca deploy automático.
 3. **Tabela nova entra no bloco RLS `isolamento_tenant`** (padrão das migrações 013/016/
    020/021/022) e ganha `UNIQUE (tenant_id, id)`. Fora do bloco = sem isolamento entre
    empresas, silenciosamente.
@@ -92,6 +98,23 @@ Cada pasta de trabalho diário tem o próprio par `AGENTS.md` (conteúdo) + `CLA
 ele varre da pasta de abertura para CIMA (nunca desce) — para trabalhar focado no server,
 abra-o de dentro de `server/`.
 
+## Política de orquestração (o que a skill global precisa saber daqui)
+
+A skill global `orquestrar-projeto` é agnóstica de projeto e lê estas decisões aqui.
+Não estão em lugar nenhum além deste bloco — se você orquestrar sem ler, vai improvisar:
+
+| Decisão | Política deste repo |
+|---|---|
+| Papéis | **Claude implementa, Codex revisa** (`codex review --base main`, uma passada por PR), humano mergeia |
+| Modelos dos workers | **Opus** para ticket de fundação/alto risco (deploy, segurança, schema); **Sonnet** para feature e correção padrão; **Haiku** só para mecânico. O modelo do orquestrador **nunca** é usado em worker |
+| Como subir o worker | Criar a worktree **sem** `--agent` e subir o agente com `orca terminal create --command "claude --model <x>"`. Lançar com `--agent` herda o modelo default da sessão e o `/model` posterior não corrige a tempo |
+| Tracker | Linear, time FIL, **projeto "Olume Chat"** (`51f26218-651e-483f-b6ed-32757605f2ac`) — passe `--project` ao criar ticket, senão ele nasce órfão |
+| Dependência | Só o que está em `blockedBy`. Nunca inferida do título |
+| Gate de onda | **Merge do humano.** O orquestrador nunca mergeia |
+| Gate de produção | Promoção manual aprovada no GitHub Environment `production`. Agente **não promove** sem pedido explícito, e nunca aprova |
+| Verificação | CI verde é obrigatório, não opcional; relato de worker não é prova — confira o PR e os checks |
+| Custo | Upgrade de plano, compra e credencial nova são **sempre** do humano |
+
 ## Integrações que os agentes usam aqui
 
 - **Orca CLI** (`orca ...`) — worktrees, terminais, automações; **`orca linear ...`** — tickets FIL-*
@@ -101,10 +124,15 @@ abra-o de dentro de `server/`.
 ## Índice de docs
 
 - `docs/WORKFLOW.md` — branch/commit/teste/PR/deploy (contrato)
-- `docs/AMBIENTES.md` — dev, staging e produção: endereços, acesso, promoção e armadilhas
+- `docs/AMBIENTES.md` — **como produção funciona hoje**: endereços, acesso, promoção,
+  rollback e armadilhas. É a fonte de verdade sobre deploy; na dúvida entre docs, vale este.
 - `docs/GO-LIVE-PENDENCIAS.md` — o que falta para o primeiro cliente
-- `docs/DEPLOY.md` — produção: Vercel (front) + Render (server) + Neon + R2
-- `docs/SEGURANCA.md` · `docs/ESCALABILIDADE.md` · `docs/PORTE.md` (histórico do porte)
+- `docs/SEGURANCA.md` — checklist que todo PR confirma · `docs/PORTE.md` (histórico do porte)
+- ⚠️ **Legados, não siga**: `docs/DEPLOY.md` (Vercel + Render) e `docs/ESCALABILIDADE.md`
+  (diagramas com Vercel/Render) descrevem a infraestrutura **anterior**. Servem só como
+  histórico do desenho antigo. `docs/DEPLOY_VPS.md` é o plano da VPS — bom para custo,
+  decisões e runbook, mas foi escrito **antes** do provisionamento e não foi convertido em
+  registro do que realmente ficou (FIL-116).
 - `PRODUCT.md` (produto/marca) · `DESIGN.md` (visual)
 - `docs/superpowers/specs/` — specs aprovadas por feature (IA: 4 fatias + handoff + upload)
 - `docs/estudos/` — estudos (ex.: Meta Business Agent Platform)

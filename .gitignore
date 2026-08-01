@@ -13,14 +13,11 @@ client/dist/
 # faria o dev servir uma versão fixa e mentirosa em /health/*.
 BUILD_SHA
 
-# Config local do agente / skills pessoais
+# Config local do agente. Skills compartilhadas são instaladas globalmente em
+# ~/.agents/skills; o Claude usa junctions em ~/.claude/skills para a mesma cópia.
+# Nada de skill fica versionado aqui: as políticas do projeto vivem em AGENTS.md,
+# docs/WORKFLOW.md e docs/AMBIENTES.md, que a skill global lê ao começar.
 .claude/*
-# skills sao conhecimento do projeto, nao configuracao pessoal — versionadas
-# só a skill própria do projeto; as de marketplace (neon, copywriting,
-# senior-security) são instaláveis e ficam de fora para não apodrecerem aqui
-!.claude/skills/
-.claude/skills/*
-!.claude/skills/orquestrar-projeto/
 .claude/settings.local.json
 .claude/launch.json
 .claude/scheduled_tasks.lock

@@ -1,6 +1,13 @@
 # Escalabilidade e alta disponibilidade
 
-Este documento define como o Falatta deve sair de uma única instância do
+> ⚠️ **Os diagramas de infraestrutura deste documento estão obsoletos.** Eles
+> descrevem Vercel + Render, desenho anterior ao atual (VPS com Coolify consumindo
+> imagens do GHCR — ver [`AMBIENTES.md`](AMBIENTES.md)). O **raciocínio** sobre
+> estado compartilhado, SSE, filas e o que precisa existir antes de uma segunda
+> instância continua válido; a topologia citada, não. Não use as seções de
+> plataforma como instrução operacional.
+
+Este documento define como o Olume Chat deve sair de uma única instância do
 backend para uma arquitetura capaz de atender vários clientes simultaneamente,
 sem perder mensagens, duplicar campanhas ou distribuir a mesma conversa duas
 vezes.

@@ -1,8 +1,7 @@
-# Product
+# Product — Olume Chat
 
-## Register
-
-product
+> Quem é o produto, para quem, e o vocabulário que a UI usa. Leia junto com
+> `DESIGN.md` (como as telas se parecem) antes de escrever qualquer texto de interface.
 
 ## Users
 
