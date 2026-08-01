@@ -1,0 +1,170 @@
+# FIL-106 — vigia externo dos três alvos de produção, de FORA da VPS.
+#
+# Por que fora: o HEALTHCHECK do Dockerfile e o healthcheck do Coolify rodam
+# DENTRO da VPS. Se a VPS inteira cair — Traefik morto, disco cheio, DNS
+# quebrado — quem estava lá dentro para avisar caiu junto. Este workflow roda
+# na infra do GitHub, então continua vigiando exatamente nesse cenário.
+#
+# NÃO monitora staging: está atrás do Cloudflare Access e devolve 302 para
+# quem não tem sessão — um monitor apontado para lá alertaria sem parar por um
+# motivo que não é queda (docs/AMBIENTES.md).
+#
+# Debounce SEM estado entre execuções: cada alvo é checado e, se falhar, é
+# checado de novo ~20s depois DENTRO da MESMA execução antes de declarar
+# queda. Isso distingue "caiu" de instabilidade momentânea sem precisar
+# guardar estado entre execuções (o que exigiria um serviço externo — fora do
+# escopo deste ticket).
+#
+# Notificação: Telegram, se TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID estiverem
+# cadastrados (segredos do NÍVEL DO REPOSITÓRIO — não protegem deploy nenhum,
+# só disparam uma mensagem, então não precisam de `environment`; ver
+# docs/AMBIENTES.md e o PR do FIL-106). Segredo ausente não impede o alerta:
+# o job FALHA de qualquer jeito quando um alvo cai, e isso já dispara a
+# notificação nativa do GitHub ("failed workflow run") para quem tiver o app
+# GitHub Mobile com essa notificação ativada — zero setup, é o reforço que
+# funciona mesmo sem o Telegram configurado.
+#
+# Granularidade real: `cron` do GitHub Actions tem passo mínimo de 5 minutos
+# e NÃO é um relógio preciso — sob fila de runners a execução pode atrasar.
+# Documentado em docs/AMBIENTES.md, sem fingir precisão que o serviço não tem.
+name: Monitoramento externo
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      forcar_falha:
+        description: >-
+          Simula um alvo fora do ar para TESTAR o disparo do alerta, sem
+          tocar em produção. 'nenhum' roda a checagem real.
+        type: choice
+        default: nenhum
+        options:
+          - nenhum
+          - landing
+          - health_live
+          - health_ready
+
+permissions:
+  contents: read
+
+jobs:
+  vigiar:
+    runs-on: ubuntu-latest
+    # Orçamento: 3 alvos × (1ª tentativa até 15s + espera de 20s + 2ª
+    # tentativa até 15s) no pior caso = ~150s, mais overhead do runner. 8min
+    # dá folga sem deixar um runner travado ocupar o próximo agendamento por
+    # muito tempo (execuções não se sobrepõem por padrão, mas cada execução
+    # atrasada empurra a leitura do próximo agendamento).
+    timeout-minutes: 8
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      # `github.event.inputs` (em vez do contexto `inputs`) porque este
+      # workflow também dispara por `schedule`, evento em que não há inputs
+      # de workflow_dispatch nenhum — o `||` cobre esse caso.
+      FORCAR_FALHA: ${{ github.event.inputs.forcar_falha || 'nenhum' }}
+    steps:
+      - name: Checar os três alvos (com nova tentativa antes de alertar)
+        id: checagem
+        run: |
+          set -uo pipefail
+          # Sem -e de propósito: um alvo fora do ar não pode abortar o script
+          # antes de checar os outros dois.
+
+          declare -A ALVOS=(
+            [landing]="https://olumechat.com.br"
+            [health_live]="https://api.olumechat.com.br/health/live"
+            [health_ready]="https://api.olumechat.com.br/health/ready"
+          )
+          ORDEM=(landing health_live health_ready)
+
+          checar_http() {
+            local url="$1" codigo
+            codigo="$(curl --silent --show-error --max-time 15 \
+              -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"
+            printf '%s' "${codigo:-000}"
+          }
+
+          CAIDOS=()
+          for nome in "${ORDEM[@]}"; do
+            url="${ALVOS[$nome]}"
+            codigo="$(checar_http "$url")"
+
+            if [ "$nome" = "$FORCAR_FALHA" ]; then
+              echo "::warning::${nome}: FALHA SIMULADA para testar o alerta (execução manual com forcar_falha=${FORCAR_FALHA}). Resposta real da 1ª checagem era HTTP ${codigo}; nada em produção foi tocado."
+              codigo="000"
+            fi
+
+            if [ "$codigo" = "200" ]; then
+              echo "${nome}: OK (HTTP 200) — ${url}"
+              continue
+            fi
+
+            echo "::warning::${nome}: 1ª checagem falhou (HTTP ${codigo}) — aguardando 20s antes de checar de novo, para não alertar por instabilidade momentânea."
+            sleep 20
+
+            codigo2="$(checar_http "$url")"
+            if [ "$nome" = "$FORCAR_FALHA" ]; then
+              codigo2="000"
+            fi
+
+            if [ "$codigo2" = "200" ]; then
+              echo "${nome}: recuperou na 2ª checagem (HTTP ${codigo2}) — instabilidade momentânea, não é queda."
+              continue
+            fi
+
+            echo "::error::${nome} FORA DO AR: duas checagens seguidas falharam (HTTP ${codigo} depois HTTP ${codigo2}) — ${url}"
+            CAIDOS+=("${nome}: HTTP ${codigo} -> HTTP ${codigo2} (${url})")
+          done
+
+          if [ ${#CAIDOS[@]} -gt 0 ]; then
+            {
+              echo "caiu=sim"
+              echo "mensagem<<FIM_MENSAGEM_OLUME"
+              echo "🔴 Olume Chat — produção com alvo(s) fora do ar"
+              printf '%s\n' "${CAIDOS[@]}"
+              echo "Detalhes: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+              echo "FIM_MENSAGEM_OLUME"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "caiu=nao" >> "$GITHUB_OUTPUT"
+            echo "Os três alvos estão de pé."
+          fi
+
+      - name: Alertar no Telegram
+        if: steps.checagem.outputs.caiu == 'sim'
+        env:
+          MENSAGEM: ${{ steps.checagem.outputs.mensagem }}
+        run: |
+          set -uo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ] || [ -z "${TELEGRAM_CHAT_ID}" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID não cadastrados — pulando o envio ao Telegram. O job falha de qualquer forma no próximo passo, e quem tiver 'Failed workflow runs' ativado no GitHub Mobile recebe o push mesmo assim. Instruções para configurar o Telegram: docs/AMBIENTES.md."
+            exit 0
+          fi
+
+          CORPO="$(mktemp)"
+          trap 'rm -f "$CORPO"' EXIT
+          codigo="$(curl --silent --show-error --max-time 15 \
+            -o "$CORPO" -w '%{http_code}' \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MENSAGEM}")"
+          echo "Telegram respondeu HTTP ${codigo}"
+          cat "$CORPO"; echo
+
+          if [ "$codigo" != "200" ]; then
+            echo "::warning::Telegram recusou o envio (HTTP ${codigo}, corpo acima). Confira TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID. O job segue falhando no próximo passo, então o alerta por GitHub Mobile/e-mail ainda chega."
+          fi
+
+      # Deixa a execução VERMELHA quando algum alvo caiu — é o que aciona a
+      # notificação nativa do GitHub (e-mail / GitHub Mobile) independente do
+      # Telegram estar configurado ou não.
+      - name: Falhar quando algum alvo está fora do ar
+        if: steps.checagem.outputs.caiu == 'sim'
+        env:
+          MENSAGEM: ${{ steps.checagem.outputs.mensagem }}
+        run: |
+          echo "${MENSAGEM}"
+          exit 1
