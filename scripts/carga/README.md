@@ -58,6 +58,13 @@ Dois caminhos, nessa ordem de preferência:
 O harness diz em voz alta quando apanha `302`/`403` do Access em vez de
 contabilizar a tela de login como resposta do servidor.
 
+> ⚠️ **Staging não representa produção sob carga.** `DB_POOL_MAX` é **5** lá e
+> **10** em produção, e o pool é o gargalo de tudo (`docs/CARGA-2026-08.md` §8.4)
+> — o ponto de quebra medido em staging sai por volta da metade do real. Além
+> disso, nenhum container tem teto de CPU/RAM: a carga disputa CPU com a produção
+> na mesma VPS. Rode com essas duas ressalvas em mente, e registre as duas ao
+> relatar o número.
+
 ## Arquivos que não vão para o git
 
 - `.semente.json` — credenciais dos usuários sintéticos;
