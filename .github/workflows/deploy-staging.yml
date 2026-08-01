@@ -81,6 +81,47 @@ jobs:
     permissions:
       contents: read
       deployments: write
+    # FIL-114 — este job passou a rodar no GitHub Environment `staging`, para que
+    # COOLIFY_TOKEN, CF_ACCESS_CLIENT_ID e CF_ACCESS_CLIENT_SECRET sejam lidos como
+    # ENVIRONMENT SECRETS de `staging`, não repository secrets — só assim um
+    # workflow modificado numa branch qualquer deixa de conseguir lê-los (mesmo
+    # raciocínio do FIL-101 para produção; docs/AMBIENTES.md). O ambiente
+    # `staging` não tem required reviewer (staging é automático por design) e tem
+    # deployment branch policy restrita a `main`.
+    #
+    # EFEITO COLATERAL DO `environment:` — leia antes de mexer aqui ou na guarda
+    # do deploy-producao.yml. Declarar `environment:` num job faz o GitHub criar
+    # um deployment AUTOMÁTICO por conta própria, com o status espelhando a
+    # conclusão do JOB inteiro — e isso NÃO é o registro explícito do passo
+    # "Registrar o deploy verificado" lá embaixo. Dois problemas:
+    #
+    #   1. O SHA desse deployment automático vem de `github.sha`, que em eventos
+    #      `workflow_run` é o topo ATUAL da `main` no instante em que ESTE job
+    #      roda — não necessariamente `steps.sha.outputs.completo` (o head_sha
+    #      que disparou a execução). Um push chegando à main entre o disparo e a
+    #      execução deste job faz os dois SHAs divergirem.
+    #   2. Quando a guarda abaixo DISPENSA o deploy (candidato mais antigo que o
+    #      último verificado), os passos de deploy/smoke/registro são pulados,
+    #      mas o JOB termina em sucesso — e o deployment automático herda esse
+    #      sucesso, para um SHA que este job não deployou nem verificou.
+    #
+    # Nos dois casos nasceria um deployment `environment=staging` com
+    # `state=success` para um SHA que NUNCA passou pelo smoke deste workflow. O
+    # `deploy-producao.yml` trata "existe deployment success de staging para
+    # este SHA" como prova de que staging verificou aquele commit — exatamente o
+    # relaxamento que reabriria a exposição que o FIL-101 fechou.
+    #
+    # A correção não é tentar suprimir o deployment automático (não há como; é
+    # inerente a declarar `environment:` num job) — é nunca CONFIAR nele. O
+    # passo "Registrar o deploy verificado" marca o SEU registro com
+    # `payload.origem = "deploy-staging-verificado"`, e a guarda do
+    # deploy-producao.yml só aceita deployments com essa marca. O deployment
+    # automático do GitHub não carrega essa marca (payload dele é vazio/default),
+    # então nunca satisfaz a guarda — vira só ruído cosmético na aba
+    # Environments.
+    environment:
+      name: staging
+      url: https://staging.olumechat.com.br
     # A cláusula que sustenta o critério "CI vermelha = nenhum deploy". O
     # filtro `branches:` acima já limita o head_branch, mas repetir aqui deixa
     # a regra legível em um lugar só — e `event == 'push'` é o que separa a CI
@@ -92,6 +133,33 @@ jobs:
       && github.event.workflow_run.head_repository.full_name == github.repository
     env:
       COOLIFY_API: https://ops.olumechat.com.br/api/v1
+      # FIL-114 (review do Codex, PR #64) — definem, junto com o MESMO nome e o
+      # MESMO valor em deploy-producao.yml (workflow diferente, sem como
+      # compartilhar `env` entre os dois; a garantia de coerência é esta grafia
+      # idêntica nos dois arquivos), o que conta como "registro confiável" do
+      # ambiente `staging`. Ver a explicação completa no passo "Recusar deploy
+      # mais antigo que o último verificado" logo abaixo.
+      #
+      # MARCADOR_REGISTRO_CONFIAVEL é o que o passo "Registrar o deploy
+      # verificado" grava em `payload.origem` — só ele distingue um registro
+      # EXPLÍCITO (criado depois do smoke passar) do deployment AUTOMÁTICO que
+      # o GitHub cria por conta própria quando o job COMEÇA (efeito colateral
+      # de declarar `environment:` num job).
+      #
+      # CUTOFF_REGISTROS_LEGADOS existe porque todo registro criado ANTES deste
+      # PR (inclusive o que está em produção agora) não tem — e não pode
+      # ganhar — o marcador: a guarda de ordenação pula SHA antigo de
+      # propósito, então não há como reprocessar e re-marcar. Sem esta válvula,
+      # o rollback documentado em AMBIENTES.md deixaria de funcionar para toda
+      # versão anterior a este PR. Escolhido com folga além do último registro
+      # legado conhecido (verificado via `gh api` antes deste commit) para
+      # cobrir qualquer deploy legítimo que rode com o código ANTIGO (sem
+      # marcador) enquanto este PR ainda não foi mergeado. É uma válvula
+      # TEMPORÁRIA: quando nenhum SHA anterior a este cutoff estiver mais no
+      # horizonte de rollback de produção, apague o `or .created_at < $cutoff`
+      # dos dois workflows e esta variável.
+      MARCADOR_REGISTRO_CONFIAVEL: 'deploy-staging-verificado'
+      CUTOFF_REGISTROS_LEGADOS: '2026-08-02T00:00:00Z'
       # UUIDs recriados em 30/07/2026, quando as aplicações de staging viraram
       # do tipo `dockerimage`. Os UUIDs anteriores pertencem às aplicações
       # desativadas (listadas em docs/AMBIENTES.md) e não podem ser usados:
@@ -243,13 +311,36 @@ jobs:
           }
 
           # Último SHA que este workflow COMPROVOU em staging.
-          codigo="$(buscar "${API}/deployments?environment=staging&per_page=1")"
+          #
+          # FIL-114 (review do Codex) — desde que este job passou a rodar no
+          # Environment `staging`, o GitHub cria um deployment AUTOMÁTICO assim
+          # que o job COMEÇA (não só no fim, e não só nos que deployam de
+          # verdade — todo run cria um, inclusive um dispensado). Esse registro
+          # cru não tem `payload.origem`, então `per_page=1` sozinho o pegaria
+          # NO LUGAR do último registro EXPLÍCITO verificado — e a guarda
+          # voltaria staging no tempo justamente quando deveria impedir isso:
+          # CI de A termina depois de B entrar na main, A é descartado contra o
+          # automático de B, e se a CI de B falhar staging fica congelado numa
+          # build velha para sempre.
+          #
+          # A correção é buscar uma página bem maior que o normal (folga para
+          # vários runs dispensados em sequência, cada um deixando seu próprio
+          # automático) e filtrar pelo mesmo critério de "registro confiável"
+          # que deploy-producao.yml usa (ver o comentário de
+          # MARCADOR_REGISTRO_CONFIAVEL/CUTOFF_REGISTROS_LEGADOS no topo do
+          # job): marcador presente OU criado antes do cutoff dos registros
+          # legados. Um automático não satisfaz nenhum dos dois (nasce sem
+          # marcador, e só depois do cutoff) — fica invisível para a guarda,
+          # exatamente como antes deste job declarar `environment:`.
+          codigo="$(buscar "${API}/deployments?environment=staging&per_page=100")"
           if [ "$codigo" != "200" ]; then
             echo "::error::não consegui ler o histórico de deploys verificados de staging (HTTP ${codigo}). A guarda falha FECHADA: sem saber o que já foi comprovado no ar, deployar pode sobrescrever uma versão mais nova com uma mais velha e ainda assim terminar verde. Nada foi alterado — o próximo push na main tenta de novo."
             exit 1
           fi
 
-          VERIFICADO="$(jq -r '.[0].sha // ""' "$CORPO")"
+          VERIFICADO="$(jq -r --arg marcador "${MARCADOR_REGISTRO_CONFIAVEL}" --arg cutoff "${CUTOFF_REGISTROS_LEGADOS}" \
+            '[.[] | select((.payload.origem // "") == $marcador or .created_at < $cutoff)] | .[0].sha // ""' \
+            "$CORPO")"
           echo "Último deploy verificado em staging: ${VERIFICADO:-<nenhum>}"
           echo "Commit candidato: ${SHA_DISPARO}"
 
@@ -835,12 +926,24 @@ jobs:
           # `required_contexts: []` é obrigatório: sem isso o GitHub recusa criar
           # o deployment enquanto qualquer check do commit não estiver verde, e
           # a CI que nos trouxe até aqui já terminou de qualquer forma.
+          #
+          # `payload.origem` (FIL-114) é a marca que distingue ESTE registro do
+          # deployment automático que o GitHub cria por conta própria só por este
+          # job declarar `environment: staging` (ver MARCADOR_REGISTRO_CONFIAVEL
+          # no `env:` do job). Tanto a guarda "Recusar deploy mais antigo" acima
+          # quanto o preflight do deploy-producao.yml só aceitam deployments com
+          # essa marca (ou anteriores ao cutoff dos registros legados) — o
+          # automático não carrega nenhuma das duas, então nunca satisfaz nem
+          # uma nem outra, mesmo que apareça com `state=success` para um SHA que
+          # este workflow nunca deployou de verdade (deploy dispensado, ou
+          # corrida de SHA).
           codigo="$(postar "${API}/deployments" "{
             \"ref\": \"${SHA_DISPARO}\",
             \"environment\": \"staging\",
             \"auto_merge\": false,
             \"required_contexts\": [],
-            \"description\": \"${TAG} verificada em staging pelo deploy automatico\"
+            \"description\": \"${TAG} verificada em staging pelo deploy automatico\",
+            \"payload\": { \"origem\": \"${MARCADOR_REGISTRO_CONFIAVEL}\" }
           }")"
 
           if [ "$codigo" != "201" ]; then
