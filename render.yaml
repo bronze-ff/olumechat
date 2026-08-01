@@ -5,11 +5,11 @@ services:
     plan: starter
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    preDeployCommand: cd server && npm run migrar
-    healthCheckPath: /health
-    autoDeployTrigger: commit
-    # FIL-72/73/74 precisam liberar barramento, locks e blacklist distribuídos
-    # antes de aumentar: SSE e workers atuais são in-process e duplicariam eventos.
+    preDeployCommand: cd /app/server && npm run migrar
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    # Não aumentar antes das fases 1 e 2 de docs/ESCALABILIDADE.md:
+    # presença, tickets SSE e rate limits ainda precisam de estado distribuído.
     numInstances: 1
     envVars:
       - key: NODE_ENV
@@ -22,11 +22,33 @@ services:
         sync: false
       - key: DATABASE_URL_DIRECT
         sync: false
+      - key: META_APP_ID
+        sync: false
       - key: META_APP_SECRET
+        sync: false
+      - key: GRAPH_VERSION
         sync: false
       - key: WEBHOOK_VERIFY_TOKEN
         sync: false
       - key: JWT_SECRET
         sync: false
       - key: OPERADOR_JWT_SECRET
+        sync: false
+      - key: IA_CRYPTO_KEY
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: STORAGE_BUCKET
+        sync: false
+      - key: STORAGE_REGION
+        value: auto
+      - key: STORAGE_ENDPOINT
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: STORAGE_SIGNING_SECRET
         sync: false

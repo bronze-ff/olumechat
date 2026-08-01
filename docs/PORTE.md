@@ -74,6 +74,10 @@ depois — é o mesmo conjunto de queries.
 
 ## Onda 2 — escalar horizontalmente
 
+> O plano operacional atualizado desta onda, incluindo estado distribuído,
+> webhook durável, filas, cache, load balancer e critérios de aceite, está em
+> [`ESCALABILIDADE.md`](ESCALABILIDADE.md).
+
 A v1 declarava como decisão de projeto: *"Sem Redis. Workers são in-process."*
 Isso era **correto** para um servidor único on-prem e **quebra** com 2+
 instâncias. Precisa ser resolvido antes de escalar.

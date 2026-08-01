@@ -20,6 +20,15 @@ const app = express();
 // X-Forwarded-For → permite spoof de IP e burla o rate-limit por IP).
 app.set('trust proxy', 1);
 
+// O frontend de produção vive em outro domínio (Vercel). CORS é restrito ao
+// APP_URL e, opcionalmente, às origens adicionais de CORS_ORIGINS. Aplicado
+// somente em /api: webhook e páginas públicas não precisam dele.
+app.use('/api', require('./utils/corsApi').criarCorsApi({
+  appUrl: process.env.APP_URL,
+  corsOrigins: process.env.CORS_ORIGINS,
+  nodeEnv: cfg.nodeEnv,
+}));
+
 // CSP customizada: permite a página pública (exclusão de dados) usar Google
 // Fonts e estilos inline, sem afrouxar a segurança do webhook (que é JSON).
 app.use(helmet({
@@ -54,10 +63,26 @@ app.get('/exclusao-de-dados', (req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'exclusao-de-dados.html'))
 );
 
-// Healthcheck (para monitoramento de uptime do webhook — RNF-03).
-app.get('/health', (req, res) =>
-  res.json({ status: 'ok', service: 'mc-zap', ts: new Date().toISOString() })
+// Liveness confirma o processo; readiness também prova uma consulta real ao
+// banco. O balanceador só deve enviar tráfego a uma instância ready.
+app.get('/health/live', (req, res) =>
+  res.json({ status: 'ok', service: 'falatta', ts: new Date().toISOString() })
 );
+async function readiness(req, res) {
+  let conn;
+  try {
+    conn = await db.getConnection();
+    await conn.execute('SELECT 1 AS ok');
+    return res.json({ status: 'ok', service: 'falatta', database: 'ok', ts: new Date().toISOString() });
+  } catch (err) {
+    console.error('[health] readiness falhou:', err.message);
+    return res.status(503).json({ status: 'indisponivel', service: 'falatta', database: 'erro' });
+  } finally {
+    if (conn) await conn.close().catch(() => {});
+  }
+}
+app.get('/health/ready', readiness);
+app.get('/health', readiness); // compatibilidade com monitores já configurados
 
 // --- API REST (Fase 2 — inbox) ---
 const authRoutes = require('./auth/routes');
@@ -129,7 +154,7 @@ if (cfg.nodeEnv === 'production') {
     }));
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api') || req.path.startsWith('/webhook')
-          || req.path === '/health' || req.path === '/exclusao-de-dados') return next();
+          || req.path.startsWith('/health') || req.path === '/exclusao-de-dados') return next();
       res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });

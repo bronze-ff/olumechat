@@ -5,6 +5,7 @@ import apiOperador, { CHAVE_TOKEN } from '../../services/apiOperador';
 import Spinner from '../../components/ui/Spinner';
 import Confirmar from '../../components/ui/Confirmar';
 import Icon from '../../components/ui/Icon';
+import Portal from '../../components/ui/Portal';
 import OperadorShell from '../../components/layout/OperadorShell';
 import FichaFinanceiraModal from './FichaFinanceiraModal';
 import { SECOES, GRUPOS } from './nav';
@@ -249,10 +250,10 @@ function IaModal({ tenant, onClose }) {
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-ink-950/60 backdrop-blur-[1px]" onClick={onClose} />
-      <div className="relative w-full sm:max-w-md bg-white border border-paper-400 rounded-t-[10px] sm:rounded-[10px] shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
-        <div className="px-5 py-4 border-b border-paper-300 flex items-center gap-3">
+      <div className="relative w-full sm:max-w-md bg-white border border-paper-400 rounded-t-[10px] sm:rounded-[10px] shadow-2xl overflow-hidden max-h-[100dvh] sm:max-h-[calc(100dvh-2rem)] flex flex-col">
+        <div className="shrink-0 px-5 py-4 border-b border-paper-300 flex items-center gap-3">
           <span className="w-9 h-9 rounded-lg bg-brand-100 text-brand-800 flex items-center justify-center shrink-0">
             <Icon name="bot" size={18} />
           </span>
@@ -305,7 +306,7 @@ function IaModal({ tenant, onClose }) {
             </>
           )}
         </div>
-        <div className="modal-footer">
+        <div className="modal-footer shrink-0">
           <button onClick={onClose} className="flex-1 min-h-10 rounded-lg border border-paper-400 bg-white hover:bg-paper-100 text-stone-700 font-semibold text-sm">Fechar</button>
           <button onClick={() => salvar.mutate()} disabled={!podeSalvar || salvar.isPending || cfg.isLoading}
             className="flex-1 min-h-10 rounded-lg bg-brand-700 hover:bg-brand-800 text-white font-semibold text-sm disabled:opacity-40">
@@ -864,8 +865,16 @@ export default function Operador({ secao = 'clientes' }) {
         <Audit auditoria={auditoria} filtro={filtroAuditoria} setFiltro={setFiltroAuditoria} lista={lista} />
       )}
 
-      {iaModal && <IaModal tenant={iaModal} onClose={() => setIaModal(null)} />}
-      {fichaFinanceira && <FichaFinanceiraModal tenant={fichaFinanceira} onClose={() => setFichaFinanceira(null)} />}
+      {iaModal && (
+        <Portal>
+          <IaModal tenant={iaModal} onClose={() => setIaModal(null)} />
+        </Portal>
+      )}
+      {fichaFinanceira && (
+        <Portal>
+          <FichaFinanceiraModal tenant={fichaFinanceira} onClose={() => setFichaFinanceira(null)} />
+        </Portal>
+      )}
 
       {confirmacao && (
         <Confirmar

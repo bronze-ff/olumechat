@@ -13,7 +13,11 @@ serviço para empresas de qualquer segmento (farmácia, RH, clínica, varejo).
 > negócio** (`api/*`, `bot/*`, `ia/*`, `fila/*`), que seguem escritas para o
 > schema antigo — por isso o sistema **ainda não roda de ponta a ponta**.
 > O que fazer, em ordem, está em [`docs/PORTE.md`](docs/PORTE.md).
-> **Não existe deploy ainda. Não rode isto em produção.**
+> A arquitetura para Redis, filas, workers, cache, load balancer e escala
+> horizontal está em
+> [`docs/ESCALABILIDADE.md`](docs/ESCALABILIDADE.md).
+> A configuração de deploy está em [`docs/DEPLOY.md`](docs/DEPLOY.md), mas a
+> liberação para clientes depende do smoke test e da homologação descritos lá.
 
 ---
 
@@ -176,35 +180,31 @@ cd client && npm install && npm run dev
 Os testes de RLS contra Postgres real só rodam com `TEST_DATABASE_URL` no
 ambiente; sem ela são pulados e a suíte segue verde.
 
-## Deploy (Render + Neon)
+## Deploy (Vercel + Render + Neon + R2)
 
-O serviço de produção roda no Render como um container persistente (`starter`),
-necessário para manter SSE e os workers com `setInterval`. O blueprint está em
-[`render.yaml`](render.yaml), inclui `/health`, coleta logs no painel do Render
-e mantém deliberadamente **uma única instância**. FIL-72/73/74 (barramento,
-locks e blacklist distribuídos) precisam estar prontos antes de aumentar esse
-limite; com o desenho atual, duas instâncias duplicariam campanhas e poderiam
-dividir conexões SSE.
+O frontend estático roda na Vercel e chama diretamente a API persistente no
+Render. O Blueprint está em [`render.yaml`](render.yaml), usa
+`/health/ready`, executa migrações no pre-deploy e mantém deliberadamente
+**uma única instância**. Presença, tickets SSE e rate limits precisam ser
+distribuídos antes de aumentar esse limite; o plano está em
+[`docs/ESCALABILIDADE.md`](docs/ESCALABILIDADE.md).
 
 ### Subir do zero
 
-1. Crie um projeto Neon de produção e uma branch Neon separada para
-   desenvolvimento/testes descartáveis. Use a URL pooled da produção em
-   `DATABASE_URL` e a URL direta (sem `-pooler`) em `MIGRATION_DATABASE_URL` e
-   `DATABASE_URL_DIRECT` (para o barramento SSE).
-2. No Render, crie um Blueprint a partir deste repositório e preencha os
-   segredos marcados `sync: false` em `render.yaml`, incluindo as credenciais
-   da Meta e os segredos JWT. Não coloque valores reais no repositório.
-3. O deploy constrói o `Dockerfile`; o entrypoint executa `npm run migrar`, que
-   aplica todas as migrações versionadas em ordem e só então executa `node
-   app.js`. Uma falha de migração impede o app de subir.
-4. Configure o webhook da Meta para a URL pública do Render e valide
-   `https://SEU_HOST/health`. O painel do Render expõe logs do processo e do
-   deploy.
+1. Prepare Neon, R2, aplicativo Meta e os segredos.
+2. Reserve a origem do frontend na Vercel.
+3. No Render, crie um Blueprint a partir da raiz deste repositório e preencha
+   os valores `sync: false`.
+4. O `preDeployCommand` aplica as migrações uma única vez; uma falha impede a
+   publicação da nova versão.
+5. Configure `VITE_API_URL` na Vercel apontando diretamente para
+   `https://SEU_HOST/api`.
+6. Valide `https://SEU_HOST/health/live` e
+   `https://SEU_HOST/health/ready`.
 
-Para desenvolvimento local, copie `server/.env.example` para `server/.env` e
-aponte as URLs para a branch Neon descartável. O CI executa `cd server && npm
-test` em todo push para `main` e em todo pull request.
+O procedimento completo, as variáveis e o smoke test obrigatório estão em
+[`docs/DEPLOY.md`](docs/DEPLOY.md). Para desenvolvimento local, copie
+`server/.env.example` para `server/.env` e use uma branch Neon descartável.
 
 ### Proteção do GitHub
 
