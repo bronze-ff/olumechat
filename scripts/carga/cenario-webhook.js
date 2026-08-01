@@ -29,7 +29,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { pedir } = require('./http');
+const { pedir, explicarAcesso } = require('./http');
 const { resumo, ms, tabela } = require('./estatistica');
 const { amostra, cpuPercentual } = require('./amostrar');
 
@@ -76,6 +76,32 @@ async function cenarioWebhook(alvo, opcoes = {}) {
   if (!segredo) {
     console.log('\n[webhook] SEM CARGA_META_APP_SECRET — medindo apenas o caminho de rejeição (401 esperado).');
   }
+
+  // ── Preflight de Access, igual ao do cenário de pool ─────────────────────
+  // Contra staging, TODO POST pode voltar 302/403 do Cloudflare Access. Os
+  // critérios de quebra abaixo só conhecem 503, erro de transporte e latência
+  // — então o cenário terminaria "normal" tendo medido a tela de login, com
+  // uma tabela de ACK rápido que é do Cloudflare e não do Olume. O webhook do
+  // produto responde 200 (aceito), 401 (assinatura), 404 (caminho) ou 503
+  // (banco); 302/403 não são dele.
+  const sondaCorpo = corpoSintetico(-1, phoneNumberId);
+  const sonda = await pedir(alvo, caminho, {
+    metodo: 'POST',
+    corpo: sondaCorpo,
+    cabecalhos: {
+      'Content-Type': 'application/json',
+      ...(segredo ? { 'x-hub-signature-256': assinar(sondaCorpo, segredo) } : {}),
+    },
+  });
+  const acesso = explicarAcesso(sonda);
+  if (acesso) throw new Error(`${caminho}: ${acesso}`);
+  if (![200, 401, 404, 503].includes(sonda.status)) {
+    throw new Error(
+      `${caminho}: preflight devolveu HTTP ${sonda.status}, que não é resposta do webhook ` +
+      '(200/401/404/503). Medir isto seria medir outro serviço.'
+    );
+  }
+  resultado.statusPreflight = sonda.status;
 
   let anterior = await amostra(pid);
   let tAnterior = Date.now();
@@ -139,7 +165,17 @@ async function cenarioWebhook(alvo, opcoes = {}) {
     console.log(`[webhook] enviados=${total} (${taxaReal.toFixed(0)}/s) 200=${aceitos} 401=${rejeitados} 503=${indisponivel}` +
       ` p50=${ms(lat.p50)} p95=${ms(lat.p95)} max=${ms(lat.max)}` + (cpu == null ? '' : ` cpu=${cpu.toFixed(0)}%`));
 
+    // Qualquer status que o webhook não emite significa que outro serviço
+    // respondeu (borda, proxy, WAF). Não é degradação: é medição inválida, e
+    // tem de parar o cenário em vez de virar uma linha bonita na tabela.
+    const inesperados = [...porStatus.entries()]
+      .filter(([s]) => typeof s === 'number' && ![200, 401, 404, 503].includes(s));
+
     const criterios = [];
+    if (inesperados.length) {
+      criterios.push(`status que não é do webhook: ${inesperados.map(([s, n]) => `${s}×${n}`).join(', ')}` +
+        ' — provavelmente a borda/Access respondendo, não o Olume');
+    }
     if (indisponivel) criterios.push(`${indisponivel} respostas 503 (a Meta reenviaria)`);
     if (erros) criterios.push(`${erros} erros de transporte`);
     if (segredo && lat.p95 != null && lat.p95 > 250) criterios.push(`ACK p95 ${ms(lat.p95)} acima da meta de 250 ms`);

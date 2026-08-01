@@ -48,19 +48,36 @@ async function cenarioPool(alvo, opcoes = {}) {
     let erros = 0;
     const fim = Date.now() + segundos * 1000;
 
+    // JANELA REAL, não a configurada. Os trabalhadores largam todos juntos e a
+    // última requisição de cada um só termina depois do `fim` — a 1.200
+    // simultâneas isso é p50 de 7 s de transbordo sobre 12 s de janela. Dividir
+    // por `segundos` inflava a vazão justamente nos níveis enfileirados, que são
+    // os que produziram os limites do relatório. Aqui a vazão é
+    // `conclusões ÷ (última conclusão − primeiro início)`.
+    let inicioReal = null;
+    let fimReal = null;
+    const marcar = (t0, t1) => {
+      if (inicioReal === null || t0 < inicioReal) inicioReal = t0;
+      if (fimReal === null || t1 > fimReal) fimReal = t1;
+    };
+
     const trabalhador = async () => {
       while (Date.now() < fim) {
+        const t0 = Date.now();
         try {
           const r = await pedirJson(alvo, caminho, { cabecalhos, timeoutMs: 60_000 });
+          marcar(t0, Date.now());
           latencias.push(r.ms);
           porStatus.set(r.status, (porStatus.get(r.status) || 0) + 1);
         } catch (err) {
+          marcar(t0, Date.now());
           erros += 1;
           porStatus.set(err.message.slice(0, 40), (porStatus.get(err.message.slice(0, 40)) || 0) + 1);
         }
       }
     };
     await Promise.all(Array.from({ length: concorrencia }, trabalhador));
+    const janelaMs = inicioReal === null ? segundos * 1000 : Math.max(1, fimReal - inicioReal);
 
     const atual = await amostra(pid);
     const agora = Date.now();
@@ -70,13 +87,15 @@ async function cenarioPool(alvo, opcoes = {}) {
     const lat = resumo(latencias);
     const ok = porStatus.get(200) || 0;
     const total = latencias.length + erros;
-    const vazao = total / segundos;
+    const vazao = total / (janelaMs / 1000);
     const naoOk = total - ok;
 
     const linha = {
       concorrencia,
       total,
       vazao,
+      janelaMs,
+      segundosPedidos: segundos,
       ok,
       naoOk,
       status: Object.fromEntries(porStatus),
@@ -84,7 +103,8 @@ async function cenarioPool(alvo, opcoes = {}) {
       cpuPercent: cpu,
     };
     resultado.niveis.push(linha);
-    console.log(`[pool] req=${total} (${vazao.toFixed(0)}/s) ok=${ok} nao-ok=${naoOk}` +
+    console.log(`[pool] req=${total} (${vazao.toFixed(0)}/s em ${(janelaMs / 1000).toFixed(1)}s reais)` +
+      ` ok=${ok} nao-ok=${naoOk}` +
       ` p50=${ms(lat.p50)} p95=${ms(lat.p95)} p99=${ms(lat.p99)} max=${ms(lat.max)}` +
       (cpu == null ? '' : ` cpu=${cpu.toFixed(0)}%`));
 
@@ -102,10 +122,11 @@ async function cenarioPool(alvo, opcoes = {}) {
 
 function tabelaPool(resultado) {
   return tabela(
-    ['Simultâneas', 'Requisições', 'Vazão', 'Não-200', 'p50', 'p95', 'p99', 'máx', 'CPU'],
+    ['Simultâneas', 'Requisições', 'Janela real', 'Vazão', 'Não-200', 'p50', 'p95', 'p99', 'máx', 'CPU'],
     resultado.niveis.map((n) => [
       String(n.concorrencia),
       String(n.total),
+      `${(n.janelaMs / 1000).toFixed(1)} s`,
       `${n.vazao.toFixed(0)}/s`,
       String(n.naoOk),
       ms(n.latencia.p50), ms(n.latencia.p95), ms(n.latencia.p99), ms(n.latencia.max),

@@ -95,8 +95,15 @@ async function cenarioSse(alvo, opcoes = {}) {
   for (const conta of contas) {
     for (const u of conta.usuarios) alvoUsuarios.push({ slug: conta.slug, tenantId: conta.tenantId, ...u });
   }
+  // `--deslocamento` escolhe OUTRA janela de identidades. Sem ele, execuções
+  // seguidas pegam os mesmos usuários, e o cache de perfil (TTL de 30 s) ainda
+  // estaria quente da execução anterior — o segundo número sairia melhor que o
+  // primeiro só por isso. Comparar taxas de abertura exige cada execução
+  // começar fria.
+  const deslocamento = Math.max(0, Number(opcoes.deslocamento) || 0);
   const maiorDegrau = Math.max(...degraus);
-  const precisos = alvoUsuarios.slice(0, Math.min(alvoUsuarios.length, maiorDegrau));
+  const disponiveis = alvoUsuarios.slice(deslocamento);
+  const precisos = disponiveis.slice(0, Math.min(disponiveis.length, maiorDegrau));
   const amostraLogin = precisos.slice(0, opcoes.amostraLogin || 8);
 
   console.log(`\n[sse] medindo login real em ${amostraLogin.length} usuários (teto do limitador: 10/15min/IP)…`);
@@ -122,10 +129,48 @@ async function cenarioSse(alvo, opcoes = {}) {
   }
   if (!sessoes.length) throw new Error(`nenhuma sessão disponível: ${loginsFalhos[0]?.erro?.message || 'sem login'}`);
 
+  // ── Identidades distintas: exigência, não detalhe ────────────────────────
+  // `carregarPerfil()` tem cache por (tenant, matrícula) com TTL de 30 s. Se a
+  // rampa reusar identidade — 6.400 conexões sobre 200 usuários —, quase toda
+  // abertura PULA a consulta de perfil, e a taxa medida vira a de uma
+  // reconexão com cache quente. Um restart real tem milhares de atendentes
+  // distintos, todos frios: é o caso que o número precisa representar.
+  //
+  // Por isso falta de usuário é ERRO, com a conta do que falta, e não um
+  // silencioso `% sessoes.length`. `--reusar-identidades` existe para o
+  // cenário de fan-out (`--um-tenant`), onde o que se mede é entrega e não
+  // abertura — e marca o resultado como contaminado, para o relatório não
+  // usar o número por engano.
+  const identidadesReusadas = Boolean(opcoes.reusarIdentidades);
+  if (sessoes.length < maiorDegrau && !identidadesReusadas) {
+    throw new Error(
+      `Identidades insuficientes: o maior degrau pede ${maiorDegrau} conexões e há ${sessoes.length} usuários ` +
+      `em ${contas.length} tenants. Faltam ${maiorDegrau - sessoes.length}.\n` +
+      `Semeie mais: node scripts/carga/executar.js semear --tenants ${contas.length} ` +
+      `--usuarios ${Math.ceil(maiorDegrau / contas.length)}\n` +
+      'Reusar identidade esquentaria o cache de perfil e mediria uma abertura mais barata que a real ' +
+      '(use --reusar-identidades só quando a medição for de ENTREGA, não de abertura).'
+    );
+  }
+  if (identidadesReusadas && sessoes.length < maiorDegrau) {
+    console.log(`[sse] AVISO: ${maiorDegrau} conexões sobre ${sessoes.length} identidades — cache de perfil quente. ` +
+      'Os tempos de CONEXÃO deste resultado não representam reconexão real.');
+  }
+
   // ── Fase 2: rampa ─────────────────────────────────────────────────────────
   const conexoes = [];               // { conexao, slug, sessao }
   const chegadas = new Map();        // chave da sonda -> [{ slug, tEvento }]
-  const resultado = { degraus: [], login: msLogin, loginsFalhos: loginsFalhos.length, quebra: null, contas: contas.length };
+  const resultado = {
+    degraus: [],
+    login: msLogin,
+    loginsFalhos: loginsFalhos.length,
+    quebra: null,
+    contas: contas.length,
+    identidades: sessoes.length,
+    // Fica no JSON do resultado: um número de ABERTURA colhido com cache de
+    // perfil quente não pode virar linha de relatório sem esse aviso junto.
+    identidadesReusadas: identidadesReusadas && sessoes.length < maiorDegrau,
+  };
 
   let anterior = await amostra(pid);
   let tAnterior = Date.now();
@@ -141,6 +186,8 @@ async function cenarioSse(alvo, opcoes = {}) {
     const emVoo = [];
 
     for (let i = 0; i < aAbrir; i += 1) {
+      // O `%` só entra em ação no modo `--reusar-identidades`; fora dele a
+      // guarda acima garante identidades suficientes e cada conexão tem a sua.
       const sessao = sessoes[(conexoes.length + i) % sessoes.length];
       emVoo.push((async () => {
         try {
@@ -170,18 +217,38 @@ async function cenarioSse(alvo, opcoes = {}) {
     }
     await Promise.all(emVoo);
 
-    await dormir(1500); // deixa o servidor estabilizar antes de medir entrega
+    // Espera o servidor estabilizar antes de medir entrega. Configurável porque
+    // a própria abertura das conexões gera evento de presença (presence.js
+    // publica em `conectar`): num tenant grande, a rampa deixa um backlog de
+    // eventos para trás, e medir dentro dele mede a fila, não a entrega.
+    await dormir(opcoes.esperaEstabilizar || 1500);
 
     // ── Sondas de entrega ───────────────────────────────────────────────────
     const entregas = [];
+    const sondasFalhas = [];
     let perdidos = 0;
     let fanOutTotal = 0;
     let sondasFeitas = 0;
-    for (let s = 0; s < sondas; s += 1) {
-      const conta = contas[s % contas.length];
-      const alvoSonda = conexoes.find((c) => c.slug === conta.slug);
-      if (!alvoSonda) continue;
-      const esperados = conexoes.filter((c) => c.slug === conta.slug).length;
+    // Sonda só em tenant que TEM conexão aberta. Escolher por `contas[s %
+    // contas.length]` pulava a sonda sempre que a janela de identidades não
+    // cobria os primeiros tenants (`--deslocamento`), e o degrau saía com
+    // "entrega —" sem explicar por quê — uma lacuna silenciosa exatamente na
+    // métrica principal.
+    //
+    // Só conexões VIVAS entram na conta do fan-out. Uma conexão que o servidor
+    // encerrou continua no array `conexoes`, e contá-la como destinatária
+    // transformaria "o servidor derrubou N conexões" em "N eventos se
+    // perderam" — diagnóstico errado, e no degrau errado. Conexão morta é
+    // achado próprio e sai em `conexoesMortas`.
+    const vivas = conexoes.filter((c) => !c.conexao.fechada);
+    const mortas = conexoes.length - vivas.length;
+    const comConexao = [...new Set(vivas.map((c) => c.slug))];
+    for (let s = 0; s < sondas && comConexao.length; s += 1) {
+      const slugSonda = comConexao[s % comConexao.length];
+      const conta = contas.find((c) => c.slug === slugSonda);
+      const alvoSonda = vivas.find((c) => c.slug === slugSonda);
+      if (!conta || !alvoSonda) continue;
+      const esperados = vivas.filter((c) => c.slug === conta.slug).length;
       fanOutTotal += esperados;
       sondasFeitas += 1;
 
@@ -196,7 +263,16 @@ async function cenarioSse(alvo, opcoes = {}) {
         corpo: { estado },
         cabecalhos: { Authorization: `Bearer ${alvoSonda.sessao.token}` },
       });
-      if (r.status !== 200) { perdidos += esperados; chegadas.delete(chave); continue; }
+      // GATILHO que falha ≠ evento perdido. Contabilizar os dois como "não
+      // chegou" acusaria o hub por uma falha do publicador — e o critério de
+      // quebra por perda dispararia pelo motivo errado.
+      if (r.status !== 200) {
+        sondasFalhas.push(`PUT /api/presenca → HTTP ${r.status}: ${String(r.corpo).slice(0, 120)}`);
+        fanOutTotal -= esperados;
+        sondasFeitas -= 1;
+        chegadas.delete(chave);
+        continue;
+      }
 
       const limite = Date.now() + timeoutEventoMs;
       while (coletor.length < esperados && Date.now() < limite) await dormir(25);
@@ -229,6 +305,8 @@ async function cenarioSse(alvo, opcoes = {}) {
       // pulado, e dividir pelas sondas pedidas diluiria o fan-out real.
       fanOutMedio: Math.round(fanOutTotal / Math.max(1, sondasFeitas)),
       sondasFeitas,
+      sondasFalhas,
+      conexoesMortas: mortas,
       eventosEsperados: totalEsperado,
       eventosPerdidos: perdidos,
       rssBytes: atual ? atual.rssBytes : null,
@@ -236,11 +314,22 @@ async function cenarioSse(alvo, opcoes = {}) {
     };
     resultado.degraus.push(linha);
 
-    console.log(`[sse] abertas=${conexoes.length} falhas=${erros.length}` +
+    if (mortas) {
+      console.log(`[sse] ATENÇÃO: ${mortas} conexões já não estão abertas — o servidor as encerrou.`);
+    }
+    console.log(`[sse] abertas=${conexoes.length - mortas} falhas=${erros.length}` +
       ` conectar p95=${ms(conectarResumo.p95)} entrega p50=${ms(entregaResumo.p50)}` +
       ` p95=${ms(entregaResumo.p95)} perdidos=${perdidos}/${totalEsperado}` +
       (atual ? ` rss=${mb(atual.rssBytes)} cpu=${cpu == null ? '—' : cpu.toFixed(0) + '%'}` : ''));
     if (erros.length) console.log(`[sse] motivos: ${linha.motivos.join(' | ')}`);
+    if (sondasFalhas.length) {
+      console.log(`[sse] ATENÇÃO: ${sondasFalhas.length} de ${sondas} sondas não publicaram ` +
+        `(não é perda de evento): ${sondasFalhas[0]}`);
+    }
+    if (!sondasFeitas) {
+      console.log('[sse] ATENÇÃO: nenhuma sonda de entrega concluiu neste degrau — ' +
+        'a latência de entrega deste degrau é DESCONHECIDA, não "boa".');
+    }
 
     const criterios = [];
     if (taxaErro > 0.05) criterios.push(`${(taxaErro * 100).toFixed(1)}% das conexões falharam`);

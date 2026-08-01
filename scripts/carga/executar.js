@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { resolverAlvo, AlvoRecusado } = require('./alvo');
+const { autorizarBanco, BancoRecusado } = require('./bancoAlvo');
 const { carregarEnv } = require('./ambiente');
 const { encerrarAgentes } = require('./http');
 const { cenarioSse, tabelaSse } = require('./cenario-sse');
@@ -84,6 +85,11 @@ Opções
   --um-tenant            concentra a rampa SSE num tenant só (pior caso do fan-out)
   --token-local          assina as sessões da rampa com JWT_SECRET (contorna o
                          limitador de LOGIN, não a autenticação — ver credencial.js)
+  --deslocamento <n>     começa a usar identidades a partir da n-ésima; use para
+                         que execuções seguidas não peguem o cache de perfil quente
+  --reusar-identidades   permite mais conexões que usuários (só para medir ENTREGA;
+                         marca o resultado como contaminado para abertura)
+  --prefixo <p>          prefixo dos tenants sintéticos (mínimo 6 caracteres)
   --caminho <rota>       rota do cenário de pool (padrão /health/ready)
   --eu-sei-o-que-estou-fazendo  libera host fora da lista conhecida
 
@@ -100,10 +106,18 @@ async function principal() {
   // server/.env alimenta os comandos de banco (DATABASE_URL) e o `--token-local`
   // (JWT_SECRET). Variável já exportada no processo vence o arquivo — é assim
   // que se aponta o harness para outro ambiente sem editar segredo.
-  const env = carregarEnv();
-  if (['semear', 'limpar'].includes(cenario) && !env.carregado && !process.env.DATABASE_URL) {
-    console.error(`Não encontrei ${env.caminho}. Este comando fala direto com o banco e precisa de DATABASE_URL.`);
-    return 2;
+  carregarEnv();
+
+  // GUARDA DO BANCO — antes de qualquer mutação, e sem default permissivo.
+  // `semear` cria usuário ADMIN e `limpar` apaga linhas: os dois escrevem
+  // direto em DATABASE_URL, sem passar pela guarda de host HTTP. Ver bancoAlvo.js.
+  if (['semear', 'limpar'].includes(cenario)) {
+    const { host } = autorizarBanco({
+      connectionString: process.env.DATABASE_URL,
+      confirmadoPorFlag: Boolean(a['eu-sei-o-que-estou-fazendo']),
+      prefixo: a.prefixo ? String(a.prefixo) : semente.PREFIXO_PADRAO,
+    });
+    console.log(`Banco autorizado para carga: ${host}`);
   }
 
   if (cenario === 'semear') {
@@ -112,6 +126,7 @@ async function principal() {
     const r = await semente.semear({
       tenants: Number(a.tenants) || 20,
       usuarios: Number(a.usuarios) || 10,
+      prefixo: a.prefixo ? String(a.prefixo) : undefined,
     });
     console.log(`Pronto: ${r.tenants.length} tenants, ${r.tenants.reduce((s, t) => s + t.usuarios.length, 0)} usuários.`);
     return 0;
@@ -119,7 +134,7 @@ async function principal() {
 
   if (cenario === 'limpar') {
     console.log(`Limpando ${hostDoBanco()}…`);
-    const r = await semente.limpar({});
+    const r = await semente.limpar({ prefixo: a.prefixo ? String(a.prefixo) : undefined });
     console.log(`Tenants removidos: ${r.ids.length}${r.slugs ? ` (${r.slugs.join(', ')})` : ''}`);
     console.log(`Linhas por tabela: ${JSON.stringify(r.tabelas)}`);
     const eventos = await limparWebhook();
@@ -175,6 +190,10 @@ async function principal() {
         taxaAbertura: Number(a['taxa-abertura']) || 25,
         umTenant: Boolean(a['um-tenant']),
         tokenLocal: Boolean(a['token-local']),
+        reusarIdentidades: Boolean(a['reusar-identidades']),
+        deslocamento: Number(a.deslocamento) || 0,
+        timeoutEventoMs: Number(a['timeout-evento']) || 5000,
+        esperaEstabilizar: Number(a['espera-estabilizar']) || 1500,
         pid,
       });
       console.log(`\n${tabelaSse(resultados.sse)}`);
@@ -187,7 +206,36 @@ async function principal() {
 
   gravar(cenario, { alvo: alvo.origin, quando: new Date().toISOString(), pid, resultados });
   encerrarAgentes();
-  return 0;
+
+  const { codigo, mensagem } = codigoDeSaida(resultados);
+  if (mensagem) console.error(`\n${mensagem}`);
+  return codigo;
+}
+
+/**
+ * Traduz os resultados em código de saída.
+ *
+ * Achar ponto de quebra é o OBJETIVO do teste — sai 0. Vazamento entre tenants
+ * não é resultado, é falha: sem isto o cenário `tudo` terminava com status 0
+ * anunciando vazamento no meio do log, e automação que só olha o exit code
+ * leria "passou".
+ *
+ * Resultado NÃO CONCLUSIVO também sai diferente de zero, pelo mesmo motivo:
+ * "não consegui provar que não vazou" nunca pode ser lido como "não vazou".
+ */
+function codigoDeSaida(resultados = {}) {
+  const iso = resultados.isolamento;
+  if (iso && !iso.ok) {
+    return { codigo: 3, mensagem: 'FALHA: vazamento entre tenants detectado — ver o JSON do resultado.' };
+  }
+  if (iso && !iso.conclusivo) {
+    return {
+      codigo: 4,
+      mensagem: 'FALHA: cenário de isolamento inconclusivo (sem entrega própria ou sem a própria ' +
+        'conversa) — o resultado NÃO prova ausência de vazamento.',
+    };
+  }
+  return { codigo: 0, mensagem: null };
 }
 
 /** Token assinado para o primeiro usuário do primeiro tenant semeado. */
@@ -210,10 +258,18 @@ async function limparWebhook() {
   });
 }
 
-principal()
-  .then((codigo) => process.exit(codigo))
-  .catch((err) => {
-    if (err instanceof AlvoRecusado) console.error(`\n${err.message}`);
-    else console.error('\nFALHA:', err && err.stack ? err.stack : err);
-    process.exit(1);
-  });
+// Só executa quando chamado como CLI: `require()` em teste não pode disparar
+// uma rodada de carga.
+if (require.main === module) {
+  principal()
+    .then((codigo) => process.exit(codigo))
+    .catch((err) => {
+      // Recusa de guarda é decisão do harness, não defeito: mensagem limpa e
+      // acionável, sem stack. Stack só para o que é erro de verdade.
+      if (err instanceof AlvoRecusado || err instanceof BancoRecusado) console.error(`\n${err.message}`);
+      else console.error('\nFALHA:', err && err.stack ? err.stack : err);
+      process.exit(2);
+    });
+}
+
+module.exports = { codigoDeSaida };

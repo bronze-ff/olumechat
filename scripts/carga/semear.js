@@ -30,6 +30,7 @@ const crypto = require('node:crypto');
 
 const PREFIXO_PADRAO = 'carga-fil110';
 const ARQUIVO_SEMENTE = path.join(__dirname, '.semente.json');
+const LOTE = 200; // linhas por INSERT ao semear usuários (ver o laço)
 
 /**
  * Senha SORTEADA a cada semeadura, nunca fixa no código.
@@ -75,21 +76,44 @@ async function semear({ tenants = 20, usuarios = 10, prefixo = PREFIXO_PADRAO, s
       );
       conta.usuarios.push({ email, senha, papel: 'ADMIN', usuarioId: Number(r.usuario.ID), nome: `Admin ${t}` });
 
-      // Demais atendentes do tenant.
-      for (let u = 1; u < usuarios; u += 1) {
-        const emailU = `atd${String(u).padStart(3, '0')}@${slug}.invalid`;
+      // Demais atendentes do tenant, em LOTES.
+      //
+      // Uma linha por ida ao banco custaria 2 idas × N usuários: com ~45 ms de
+      // ida e volta, semear os 6.400 usuários que a rampa exige (uma identidade
+      // por conexão, ver cenario-sse.js) levaria mais de dez minutos e o teste
+      // viraria o gargalo do teste. Em lotes de 200, são dezenas de idas.
+      for (let base = 1; base < usuarios; base += LOTE) {
+        const fim = Math.min(usuarios, base + LOTE);
+        const linhas = [];
+        const binds = { t: tenantId, hash };
+        for (let u = base; u < fim; u += 1) {
+          linhas.push(`(:t, :e${u}, :n${u}, :hash)`);
+          binds[`e${u}`] = `atd${String(u).padStart(4, '0')}@${slug}.invalid`;
+          binds[`n${u}`] = `Atendente ${u}`;
+        }
         const ins = await conn.execute(
           `INSERT INTO usuario (tenant_id, email, nome, senha_hash)
-           VALUES (:t, :email, :nome, :hash) RETURNING id`,
-          { t: tenantId, email: emailU, nome: `Atendente ${u}`, hash }
+           VALUES ${linhas.join(', ')} RETURNING id, email, nome`,
+          binds
         );
-        const usuarioId = Number(ins.rows[0].ID);
+        // A ordem do RETURNING de um INSERT multi-linha segue a ordem dos
+        // VALUES, mas não se depende disso aqui: o vínculo é feito pelo e-mail
+        // que voltou, e `atendente.matricula = usuario.id` é a convenção da
+        // migração 004.
+        const linhasAtd = [];
+        const bindsAtd = { t: tenantId };
+        ins.rows.forEach((linha, i) => {
+          const usuarioId = Number(linha.ID);
+          linhasAtd.push(`(:t, :m${i}, :an${i}, 'ATENDENTE', 'S')`);
+          bindsAtd[`m${i}`] = usuarioId;
+          bindsAtd[`an${i}`] = linha.NOME;
+          conta.usuarios.push({ email: linha.EMAIL, senha, papel: 'ATENDENTE', usuarioId, nome: linha.NOME });
+        });
         await conn.execute(
           `INSERT INTO atendente (tenant_id, matricula, nome, papel, pode_ativo)
-           VALUES (:t, :m, :nome, 'ATENDENTE', 'S')`,
-          { t: tenantId, m: usuarioId, nome: `Atendente ${u}` }
+           VALUES ${linhasAtd.join(', ')}`,
+          bindsAtd
         );
-        conta.usuarios.push({ email: emailU, senha, papel: 'ATENDENTE', usuarioId, nome: `Atendente ${u}` });
       }
 
       // Uma conversa por tenant, com id conhecido. É o que torna a checagem de

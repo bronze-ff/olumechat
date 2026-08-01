@@ -4,10 +4,34 @@ Mede **onde o Olume Chat quebra** — não confirma que aguenta. Node puro, sem
 dependência nova: o mesmo arquivo roda no laptop e dentro do container do
 ambiente alvo.
 
-> **Produção é recusada por código.** `api.olumechat.com.br` e
-> `olumechat.com.br` estão numa lista de bloqueio em [`alvo.js`](alvo.js) e não
-> há flag que libere. Host fora da lista conhecida exige
-> `--eu-sei-o-que-estou-fazendo`.
+## Duas guardas, porque são dois caminhos diferentes
+
+> **1. Alvo HTTP.** `api.olumechat.com.br` e `olumechat.com.br` estão numa lista
+> de bloqueio em [`alvo.js`](alvo.js) e não há flag que libere. Host fora da
+> lista conhecida exige `--eu-sei-o-que-estou-fazendo`.
+>
+> **2. Banco.** `semear` cria usuários **ADMIN** e `limpar` apaga linhas — os
+> dois falam direto com `DATABASE_URL` e **não** passam pela guarda de host. Por
+> isso [`bancoAlvo.js`](bancoAlvo.js) exige confirmação positiva de que o banco é
+> laboratório, sem default permissivo:
+>
+> ```bash
+> CARGA_LAB=1 node scripts/carga/executar.js semear …
+> # ou --eu-sei-o-que-estou-fazendo
+> ```
+>
+> Hosts que nunca podem receber carga entram em `CARGA_BANCOS_PROIBIDOS`
+> (lista separada por vírgula, comparada por **igualdade** de host).
+
+## Testes do harness
+
+```bash
+node --test scripts/carga/*.test.js
+```
+
+Cobrem a guarda de banco e a tradução de resultado em código de saída. **Não
+rodam no job `server-test` da CI**, que executa só `server/test/` — o harness
+não é código de produto.
 
 ## Cenários
 
@@ -22,12 +46,16 @@ ambiente alvo.
 ## Uso
 
 ```bash
+export CARGA_LAB=1   # semear/limpar recusam sem esta confirmação
+
 # 1) dado sintético (fala DIRETO com o banco de server/.env)
-node scripts/carga/executar.js semear --tenants 20 --usuarios 10
+#    UM usuário por conexão: semeie tenants × usuários >= o maior degrau
+node scripts/carga/executar.js semear --tenants 20 --usuarios 340
 
 # 2) medições (falam HTTP com --base-url)
 node scripts/carga/executar.js pool  --base-url http://localhost:3001 --pid 12345
-node scripts/carga/executar.js sse   --base-url http://localhost:3001 --pid 12345 --degraus 50,100,200,400
+node scripts/carga/executar.js sse   --base-url http://localhost:3001 --pid 12345 \
+  --token-local --degraus 50,100,200,400 --taxa-abertura 25
 node scripts/carga/executar.js tudo  --base-url http://localhost:3001 --pid 12345
 
 # 3) limpeza (obrigatória em ambiente compartilhado)
@@ -37,6 +65,27 @@ node scripts/carga/executar.js limpar
 `--pid` é o PID do processo alvo; sem ele, CPU e RAM saem como "não medido" —
 lacuna declarada vale mais que número inventado. Local é o PID do `node app.js`;
 em staging, rode o harness de dentro do container (`docker exec`) com `--pid 1`.
+
+### Uma identidade por conexão — e por quê
+
+`carregarPerfil()` tem cache por (tenant, matrícula) com TTL de 30 s. Reusar
+usuário faz a maioria das aberturas **pular a consulta de perfil**, e o número
+medido vira o de uma reconexão com cache quente — que não existe num restart
+real, onde todo atendente volta frio. Por isso:
+
+- o cenário `sse` **recusa** rodar com identidade insuficiente, dizendo quantas
+  faltam e o comando para semear;
+- `--deslocamento <n>` escolhe outra janela de usuários, para que execuções
+  seguidas não herdem o cache da anterior — obrigatório ao comparar taxas;
+- `--reusar-identidades` libera o reuso **só** para medir entrega (o cenário
+  `--um-tenant`), e marca o resultado com `identidadesReusadas` para que os
+  tempos de conexão dele não sejam lidos como taxa de reconexão.
+
+### Código de saída
+
+`0` sucesso (inclusive com ponto de quebra encontrado — é o objetivo), `2`
+recusa de guarda ou erro, `3` vazamento entre tenants, `4` isolamento
+inconclusivo. Quebra é resultado; vazamento é falha.
 
 ### Staging
 
