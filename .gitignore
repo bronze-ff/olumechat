@@ -26,3 +26,10 @@ BUILD_SHA
 .DS_Store
 .agents/
 tmp/
+
+# FIL-110: saída e credenciais sintéticas do harness de carga. A semente carrega
+# senha de usuário de teste (que existe no banco do ambiente alvo) e os
+# resultados brutos são grandes e datados — relatório versionado é o
+# docs/CARGA-2026-08.md, não o dump.
+scripts/carga/.semente.json
+scripts/carga/resultados/

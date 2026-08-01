@@ -14,10 +14,22 @@ Três ambientes isolados. **Nenhum segredo, banco ou bucket é compartilhado ent
 | Mídia | disco local (`STORAGE_DRIVER=local`) | bucket `olume-media-staging` | bucket `olume-media-prod` |
 | Origem da imagem | build local | **imagem do GHCR** (`sha-<commit>`) | **imagem do GHCR** (`sha-<commit>`) |
 | Segredos | `server/.env` | próprios, no Coolify | próprios, no Coolify |
+| `DB_POOL_MAX` | 10 (padrão do código) | **5** | **10** |
 | Código | sua branch de feature | `main` (após merge) | a mesma imagem validada em staging |
 
-Infra comum aos dois ambientes hospedados: VPS Hostinger (`179.198.105.75`), Coolify em
-`ops.olumechat.com.br` (atrás do Access), Cloudflare como DNS/proxy/TLS.
+Infra comum aos dois ambientes hospedados: VPS Hostinger (`179.198.105.75`, 4 vCPU,
+15,6 GB), Coolify em `ops.olumechat.com.br` (atrás do Access), Cloudflare como
+DNS/proxy/TLS.
+
+> ⚠️ **Staging tem metade do pool de produção — e isso muda o que "aprovado em staging"
+> significa.** O teste de carga (FIL-110, [`CARGA-2026-08.md`](CARGA-2026-08.md)) mostrou
+> que o gargalo de *tudo* é o pool do Postgres vezes a ida e volta ao Neon. Com
+> `DB_POOL_MAX=5`, staging tem **metade** do teto de vazão de produção e sua fila dobra na
+> mesma carga: medir desempenho lá encontra o ponto de quebra em cerca de metade do valor
+> real. Não é erro a corrigir às cegas (pool menor economiza conexão do Neon, que é recurso
+> do projeto inteiro) — o que não pode é a divergência ser desconhecida por quem lê um
+> resultado de staging. Some-se a isso que **nenhum container tem teto de CPU/RAM**
+> (`Memory=0`, `NanoCpus=0`): carga em staging disputa CPU com a produção na mesma máquina.
 
 ## Como acessar
 

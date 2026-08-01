@@ -34,7 +34,8 @@ um **painel do operador** (provisionamento, financeiro, sessão de suporte audit
   (ficha, tag, pedido com template por empresa) e upload de PDF/XLSX/CSV na base.
 - **Riscos aceitos e conscientes** (não são esquecimento): Neon no plano Free, com PITR
   de **6 horas** — janela curta demais depois que houver dado de cliente (FIL-110);
-  nenhum teste de carga executado, então o limite de conexões SSE é desconhecido.
+  carga medida em laboratório (`docs/CARGA-2026-08.md`), **nunca na VPS** — o limite de
+  produção segue desconhecido, e o que quebra primeiro é o pool, não o hub SSE.
 - Suite do server: `cd server && npm test` (1.000+ testes; integração com Postgres real só
   com `TEST_DATABASE_URL` — na CI o job `server-test-rls` a fornece e teste pulado vira
   falha). Client: `cd client && npm run build`.
@@ -127,6 +128,8 @@ Não estão em lugar nenhum além deste bloco — se você orquestrar sem ler, v
 - `docs/AMBIENTES.md` — **como produção funciona hoje**: endereços, acesso, promoção,
   rollback e armadilhas. É a fonte de verdade sobre deploy; na dúvida entre docs, vale este.
 - `docs/GO-LIVE-PENDENCIAS.md` — o que falta para o primeiro cliente
+- `docs/CARGA-2026-08.md` — teste de carga: limites medidos e onde quebra (harness em
+  `scripts/carga/`). O gargalo é o pool do Postgres, não o hub SSE.
 - `docs/SEGURANCA.md` — checklist que todo PR confirma · `docs/PORTE.md` (histórico do porte)
 - ⚠️ **Legados, não siga**: `docs/DEPLOY.md` (Vercel + Render) e `docs/ESCALABILIDADE.md`
   (diagramas com Vercel/Render) descrevem a infraestrutura **anterior**. Servem só como
