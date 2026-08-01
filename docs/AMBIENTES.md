@@ -112,6 +112,19 @@ sufixo de `running:healthy` vem do `State.Health.Status` do Docker. `running:unh
 `unhealthy` reprova. Sem isso o job terminaria verde com o container quebrado, ainda mais
 porque o frontend não tem smoke HTTP.
 
+**Segredos do Coolify/Access são do environment `staging` (FIL-114), não do repositório.**
+`COOLIFY_TOKEN`, `CF_ACCESS_CLIENT_ID` e `CF_ACCESS_CLIENT_SECRET` só ficam visíveis para o
+job que declara `environment: staging` — sem isso, qualquer workflow modificado numa branch
+com escrita no repositório conseguiria lê-los, o mesmo problema que o FIL-101 fechou para
+produção. O ambiente `staging` não tem required reviewer (staging é automático por design) e
+tem deployment branch policy restrita a `main`. Efeito colateral aceito: declarar
+`environment:` num job faz o GitHub criar, por conta própria, um deployment automático cujo
+status só reflete a conclusão do job — não o resultado do smoke, e nasceria "verificado" até
+num deploy dispensado. Por isso o registro que este workflow grava no fim carrega
+`payload.origem = "deploy-staging-verificado"`, e é só essa marca que o preflight do
+`deploy-producao.yml` aceita como prova — o deployment automático do GitHub nunca a carrega,
+e vira ruído cosmético na aba Environments, não evidência.
+
 **Serializar não é ordenar.** O gatilho `workflow_run` dispara para qualquer execução da CI
 concluída com sucesso na `main` — inclusive uma antiga, seja porque duas terminaram fora de
 ordem, seja porque alguém reexecutou um run velho (`gh run rerun`). Por isso o primeiro

@@ -81,6 +81,47 @@ jobs:
     permissions:
       contents: read
       deployments: write
+    # FIL-114 — este job passou a rodar no GitHub Environment `staging`, para que
+    # COOLIFY_TOKEN, CF_ACCESS_CLIENT_ID e CF_ACCESS_CLIENT_SECRET sejam lidos como
+    # ENVIRONMENT SECRETS de `staging`, não repository secrets — só assim um
+    # workflow modificado numa branch qualquer deixa de conseguir lê-los (mesmo
+    # raciocínio do FIL-101 para produção; docs/AMBIENTES.md). O ambiente
+    # `staging` não tem required reviewer (staging é automático por design) e tem
+    # deployment branch policy restrita a `main`.
+    #
+    # EFEITO COLATERAL DO `environment:` — leia antes de mexer aqui ou na guarda
+    # do deploy-producao.yml. Declarar `environment:` num job faz o GitHub criar
+    # um deployment AUTOMÁTICO por conta própria, com o status espelhando a
+    # conclusão do JOB inteiro — e isso NÃO é o registro explícito do passo
+    # "Registrar o deploy verificado" lá embaixo. Dois problemas:
+    #
+    #   1. O SHA desse deployment automático vem de `github.sha`, que em eventos
+    #      `workflow_run` é o topo ATUAL da `main` no instante em que ESTE job
+    #      roda — não necessariamente `steps.sha.outputs.completo` (o head_sha
+    #      que disparou a execução). Um push chegando à main entre o disparo e a
+    #      execução deste job faz os dois SHAs divergirem.
+    #   2. Quando a guarda abaixo DISPENSA o deploy (candidato mais antigo que o
+    #      último verificado), os passos de deploy/smoke/registro são pulados,
+    #      mas o JOB termina em sucesso — e o deployment automático herda esse
+    #      sucesso, para um SHA que este job não deployou nem verificou.
+    #
+    # Nos dois casos nasceria um deployment `environment=staging` com
+    # `state=success` para um SHA que NUNCA passou pelo smoke deste workflow. O
+    # `deploy-producao.yml` trata "existe deployment success de staging para
+    # este SHA" como prova de que staging verificou aquele commit — exatamente o
+    # relaxamento que reabriria a exposição que o FIL-101 fechou.
+    #
+    # A correção não é tentar suprimir o deployment automático (não há como; é
+    # inerente a declarar `environment:` num job) — é nunca CONFIAR nele. O
+    # passo "Registrar o deploy verificado" marca o SEU registro com
+    # `payload.origem = "deploy-staging-verificado"`, e a guarda do
+    # deploy-producao.yml só aceita deployments com essa marca. O deployment
+    # automático do GitHub não carrega essa marca (payload dele é vazio/default),
+    # então nunca satisfaz a guarda — vira só ruído cosmético na aba
+    # Environments.
+    environment:
+      name: staging
+      url: https://staging.olumechat.com.br
     # A cláusula que sustenta o critério "CI vermelha = nenhum deploy". O
     # filtro `branches:` acima já limita o head_branch, mas repetir aqui deixa
     # a regra legível em um lugar só — e `event == 'push'` é o que separa a CI
@@ -835,12 +876,21 @@ jobs:
           # `required_contexts: []` é obrigatório: sem isso o GitHub recusa criar
           # o deployment enquanto qualquer check do commit não estiver verde, e
           # a CI que nos trouxe até aqui já terminou de qualquer forma.
+          #
+          # `payload.origem` (FIL-114) é a marca que distingue ESTE registro do
+          # deployment automático que o GitHub cria por conta própria só por este
+          # job declarar `environment: staging` (ver o comentário no cabeçalho do
+          # job). A guarda do deploy-producao.yml só aceita deployments com essa
+          # marca — o automático não a carrega, então nunca satisfaz a guarda,
+          # mesmo que apareça com `state=success` para um SHA que este workflow
+          # nunca deployou de verdade (deploy dispensado, ou corrida de SHA).
           codigo="$(postar "${API}/deployments" "{
             \"ref\": \"${SHA_DISPARO}\",
             \"environment\": \"staging\",
             \"auto_merge\": false,
             \"required_contexts\": [],
-            \"description\": \"${TAG} verificada em staging pelo deploy automatico\"
+            \"description\": \"${TAG} verificada em staging pelo deploy automatico\",
+            \"payload\": { \"origem\": \"deploy-staging-verificado\" }
           }")"
 
           if [ "$codigo" != "201" ]; then

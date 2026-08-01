@@ -216,6 +216,25 @@ jobs:
       #
       # ROLLBACK continua natural: qualquer registro histórico serve, não só o
       # mais recente. Um SHA que passou por staging semanas atrás tem o dele.
+      #
+      # FIL-114 — desde que `deploy-staging.yml` passou a rodar no GitHub
+      # Environment `staging` (para ler COOLIFY_TOKEN/CF_ACCESS_* como
+      # environment secrets, não repository secrets), o GitHub também passou a
+      # criar um deployment AUTOMÁTICO por conta própria para esse job — e o
+      # status dele espelha a conclusão do JOB, não o resultado do smoke. Isso
+      # inclui o caminho em que a guarda de lá DISPENSA o deploy (candidato mais
+      # antigo que o último verificado): o job termina em sucesso sem deployar
+      # nada, e o deployment automático herdaria esse sucesso para um SHA que
+      # nunca foi exercitado. Confiar em "existe deployment success de staging
+      # para este SHA" sem mais nada reabriria a mesma lacuna que este preflight
+      # existe para fechar.
+      #
+      # Por isso a filtragem abaixo exige `payload.origem ==
+      # "deploy-staging-verificado"` — a marca que só o passo "Registrar o
+      # deploy verificado" daquele workflow grava, DEPOIS de smoke e containers
+      # saudáveis. O deployment automático do GitHub não carrega essa marca, e
+      # nunca vai carregar: fica de fora da comparação, e vira só ruído
+      # cosmético na aba Environments.
       - name: Exigir que este SHA tenha passado por staging
         env:
           GH_TOKEN: ${{ github.token }}
@@ -269,9 +288,19 @@ jobs:
             exit 1
           fi
 
-          IDS="$(jq -r '.[]?.id // empty' "$CORPO")"
+          # FIL-114 — só contam deployments com a marca que o deploy-staging.yml
+          # grava DEPOIS de provar a versão (ver o comentário acima do passo). O
+          # deployment automático que o GitHub cria por aquele job declarar
+          # `environment: staging` não carrega `payload.origem`, e cai fora aqui
+          # — mesmo que exista, mesmo que esteja com `state=success`.
+          IDS="$(jq -r '.[]? | select((.payload.origem // "") == "deploy-staging-verificado") | .id' "$CORPO")"
           if [ -z "$IDS" ]; then
-            echo "::error::o commit ${SHA} NUNCA completou um deploy verificado em staging — não há registro nenhum do ambiente 'staging' para ele. Produção não recebe o que staging não recebeu. ${SEM_STAGING}"
+            TOTAL_BRUTO="$(jq -r 'length' "$CORPO")"
+            if [ "$TOTAL_BRUTO" != "0" ]; then
+              echo "::error::o commit ${SHA} tem ${TOTAL_BRUTO} deployment(s) do ambiente 'staging', mas NENHUM com a marca 'deploy-staging-verificado' — ou seja, nenhum é o registro explícito que o deploy-staging.yml grava depois do smoke. Provavelmente é só o deployment automático que o GitHub cria por aquele job rodar num Environment (FIL-114) — ele não prova versão nenhuma. Produção não recebe o que staging não verificou de verdade. ${SEM_STAGING}"
+            else
+              echo "::error::o commit ${SHA} NUNCA completou um deploy verificado em staging — não há registro nenhum do ambiente 'staging' para ele. Produção não recebe o que staging não recebeu. ${SEM_STAGING}"
+            fi
             exit 1
           fi
 
@@ -285,12 +314,12 @@ jobs:
               exit 1
             fi
             if jq -e '[.[]? | select(.state == "success")] | length > 0' >/dev/null 2>&1 < "$CORPO"; then
-              echo "Staging comprovado: o deployment ${id} do ambiente 'staging' registra ${SHA} como verificado."
+              echo "Staging comprovado: o deployment ${id} do ambiente 'staging' (marcado 'deploy-staging-verificado') registra ${SHA} como verificado."
               exit 0
             fi
           done
 
-          echo "::error::o commit ${SHA} tem registro de deploy em staging, mas nenhum com status 'success' — ou seja, staging chegou a ser apontado para ele e a verificação não terminou bem. Produção não recebe o que staging não confirmou. ${SEM_STAGING}"
+          echo "::error::o commit ${SHA} tem registro marcado 'deploy-staging-verificado' em staging, mas nenhum com status 'success' — ou seja, staging chegou a ser apontado para ele e a verificação não terminou bem. Produção não recebe o que staging não confirmou. ${SEM_STAGING}"
           exit 1
 
       - name: Login no GHCR
