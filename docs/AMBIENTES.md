@@ -452,6 +452,85 @@ para tornar seguro.
 **Backup:** dump do banco do Coolify + `.env` todo dia às 04:00 UTC em `/root/backups`
 (7 últimos). O Neon tem PITR próprio; o R2 guarda a mídia.
 
+## Monitoramento externo (FIL-106)
+
+Antes deste ticket, se a produção caísse **ninguém ficava sabendo** — o Filippe
+descobriria pelo cliente reclamando. O `HEALTHCHECK` do Dockerfile e o healthcheck do
+Coolify rodam **dentro** da VPS: se ela cair inteira (Traefik morto, disco cheio, DNS
+quebrado), quem estava lá dentro para avisar caiu junto. O vigia precisa vir de fora.
+
+**O que é vigiado** — workflow `Monitoramento externo`
+(`.github/workflows/monitoramento-externo.yml`), a cada 5 minutos:
+
+| Alvo | O que prova |
+|---|---|
+| `https://olumechat.com.br` | landing e TLS de pé |
+| `https://api.olumechat.com.br/health/live` | processo vivo |
+| `https://api.olumechat.com.br/health/ready` | **banco (Neon) e hub alcançáveis** — o mais valioso: é o único que falha quando só o banco cai e o processo segue respondendo `live` |
+
+**Staging não é vigiado** da mesma forma: está atrás do Cloudflare Access e devolve
+`302` para quem não tem sessão — um monitor apontado para lá alertaria sem parar por um
+motivo que não é queda.
+
+**Como evita ruído:** cada alvo que falha é checado de novo ~20s depois, dentro da
+mesma execução, antes de declarar queda — uma instabilidade de um segundo não dispara
+alerta. Não há estado entre execuções (guardar isso exigiria um serviço externo, fora
+do escopo deste ticket).
+
+**Onde ver:** aba **Actions** → workflow **Monitoramento externo**. Execução vermelha
+= algum alvo caiu em duas checagens seguidas; o resumo da execução lista qual.
+
+**Quem recebe o alerta:**
+
+1. **Telegram**, se `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` estiverem cadastrados em
+   Settings → Secrets and variables → Actions. São segredos do **nível do
+   repositório** (não de `environment`) de propósito: não protegem deploy nenhum, só
+   disparam uma mensagem — não se aplica a separação que o FIL-114 fez para
+   `COOLIFY_TOKEN`/`CF_ACCESS_*`.
+2. **GitHub Mobile**, sempre, independente do Telegram: o job **falha** quando algum
+   alvo caiu, e quem tiver "Failed workflow runs" ativado nas notificações do app
+   recebe o push. Zero setup — ativa em github.com → ícone do perfil → **Settings** →
+   **Notifications** → seção **Actions** → "Failed workflow runs only" (ou notifica por
+   e-mail, se preferir).
+
+**Configurar o Telegram (passo do Filippe — o agente não cria conta em serviço
+externo nem instala app no celular de ninguém):**
+
+1. No Telegram, abra conversa com **@BotFather** → `/newbot` → siga o assistente →
+   copie o **token** (formato `123456789:AA...`).
+2. Mande qualquer mensagem para o bot recém-criado (ele não fala primeiro, e sem essa
+   mensagem o `chat_id` do passo seguinte não existe).
+3. Abra `https://api.telegram.org/bot<TOKEN>/getUpdates` no navegador e copie
+   `result[0].message.chat.id` — é o `TELEGRAM_CHAT_ID`.
+4. Cadastre os dois em Settings → Secrets and variables → Actions → **New repository
+   secret**: nome `TELEGRAM_BOT_TOKEN` (valor: o token do passo 1, ex.
+   `123456789:AAExemploDeToken`) e `TELEGRAM_CHAT_ID` (valor: o id do passo 3, ex.
+   `987654321`).
+
+**Intervalo — sem fingir precisão:** `cron: '*/5 * * * *'` é a menor granularidade que
+o GitHub Actions aceita, e **não é um relógio preciso** — sob fila de runners a
+execução pode atrasar alguns minutos. Trate como "detecta em minutos", não como
+monitor de segundo a segundo.
+
+**O certificado TLS é coberto só parcialmente.** `curl` recusa um certificado já
+vencido ou inválido (vira alvo "fora do ar" igual a qualquer outra falha), mas este
+workflow **não avisa com antecedência** de um vencimento próximo — isso exige um
+serviço dedicado (é o que o UptimeRobot faz no plano free).
+
+**Cron pode ser desativado sozinho.** O GitHub desliga workflows agendados depois de
+**60 dias sem nenhuma atividade no repositório** (não só neste workflow — qualquer
+push, PR ou execução conta). Reativar: aba **Actions** → **Monitoramento externo** →
+banner "This scheduled workflow is disabled due to X days of inactivity" → **Enable
+workflow**. Com o ritmo atual de commits é improvável bater 60 dias, mas fica
+registrado para não virar um vigia mudo sem ninguém perceber.
+
+**Reforço recomendado, não implementado neste ticket:** UptimeRobot (plano free)
+monitorando os mesmos três alvos, independente da infra do GitHub — granularidade de 1
+minuto e cobre vencimento de certificado/DNS de verdade. Criar conta em
+uptimerobot.com → "+ Add New Monitor" → HTTP(s) para cada um dos três alvos da tabela
+acima → alerta por push do app ou e-mail. Exige conta própria do Filippe; o agente não
+consegue criar a conta nem provar o disparo sozinho.
+
 ## Armadilhas conhecidas
 
 - **Health check da UI do Coolify fica desligado** de propósito: a imagem do backend é slim e
