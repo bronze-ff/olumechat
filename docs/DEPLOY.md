@@ -1,9 +1,22 @@
 # Deploy legado — Vercel + Render + Neon + Cloudflare R2
 
-> **Não use este procedimento para o próximo deploy.** A decisão atual é
-> VPS + Coolify, mantendo Neon e Cloudflare R2. O planejamento vigente está em
-> [`DEPLOY_VPS.md`](DEPLOY_VPS.md). O conteúdo abaixo foi preservado somente
-> como referência do desenho anterior até a nova infraestrutura ser validada.
+> 🛑 **DOCUMENTO MORTO — nada aqui descreve a produção atual.** Desde 2026-07-31 o
+> sistema roda em **VPS com Coolify**, consumindo imagens do GHCR, com staging
+> automático e produção por promoção aprovada. A infraestrutura descrita abaixo
+> (Vercel + Render) **nunca foi provisionada** e não existe.
+>
+> Vá para [`AMBIENTES.md`](AMBIENTES.md) — é a fonte de verdade sobre como produção
+> funciona, sobe e volta.
+>
+> Trechos abaixo que são **ativamente falsos** hoje, e por isso este aviso é grande:
+> a migração roda no **boot de cada container** (não em pre-deploy); o primeiro
+> operador é criado pelo terminal do container no Coolify (não pelo Shell do Render);
+> rollback é o workflow *Deploy produção* com um SHA anterior (não a UI de
+> Render/Vercel); e o app da Meta **ainda não existe** — `META_APP_SECRET` é
+> placeholder.
+>
+> Preservado só como registro do desenho anterior. Se você chegou aqui por busca de
+> variável de ambiente, confira o valor em `AMBIENTES.md` antes de usar.
 
 Este era o procedimento previsto para o primeiro deploy no desenho anterior.
 

@@ -1,10 +1,26 @@
 # Plano de deploy — VPS + Coolify + Neon + Cloudflare R2
 
-> **Status:** planejamento aprovado em princípio; infraestrutura ainda não
-> provisionada.
+> ⚠️ **Status (2026-08-01): este é o PLANO, escrito antes do provisionamento — não é
+> o registro do que ficou.** A infraestrutura **foi** provisionada: staging desde
+> 2026-07-30, produção desde 2026-07-31, ambas no ar. Leia com essa lente:
 >
-> **Decisão vigente:** hospedar frontend e backend em uma VPS administrada pelo
-> Coolify, mantendo o PostgreSQL no Neon e a mídia no Cloudflare R2.
+> - **Vale como referência:** a análise de custo (§3), o raciocínio das decisões,
+>   o inventário conceitual, o runbook de incidente (§10, §13) e o registro de
+>   alternativas rejeitadas (§15).
+> - **NÃO vale como instrução:** as seções escritas no futuro do indicativo — §5 P0
+>   ("antes do go-live"), §6 ondas de provisionamento, §7 sobre onde ficam os
+>   segredos (hoje há uma terceira sede: GitHub Environments `staging` e
+>   `production`), §13 rollback manual (hoje é workflow, com `primeiro: frontend`
+>   **sempre** ao voltar) e §14 go/no-go (18 caixas desmarcadas num sistema que já
+>   foi ao ar).
+> - **Divergência conhecida e aceita:** o texto reserva Neon no plano Launch; a
+>   realidade é **Free, com PITR de 6 horas** (FIL-110).
+>
+> Para operar hoje, a fonte de verdade é [`AMBIENTES.md`](AMBIENTES.md).
+> Converter este plano em registro do que existe é o FIL-116.
+>
+> **Decisão vigente:** frontend e backend em VPS administrada pelo Coolify,
+> PostgreSQL no Neon e mídia no Cloudflare R2.
 >
 > **Regra de lançamento:** uma única instância do backend até concluir as fases
 > de estado distribuído e processamento durável descritas em

@@ -208,4 +208,5 @@ route.
 
 ## Agent Prompt Guide
 
-When extending Olume Chat, begin with the existing workflow and semantic state. Use the divided shell, near-white canvas, white surfaces, operational-green actions, restrained mint signal, Inter typography, 6–10px radii, and border-led depth. Prefer a familiar product pattern over a novel control. Every new component must define keyboard focus, loading, empty, error, and responsive behavior.
+When extending Olume Chat, begin with the existing workflow and semantic state. Use the divided shell, near-white canvas, white surfaces, operational-green actions, restrained mint signal, the native variable system sans (never an external font
+request), 6–10px radii, and border-led depth. Prefer a familiar product pattern over a novel control. Every new component must define keyboard focus, loading, empty, error, and responsive behavior.

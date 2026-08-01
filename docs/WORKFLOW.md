@@ -130,8 +130,9 @@ cd client && npm run build   # se tocou o frontend
 - **Multi-tenancy exige teste de vazamento.** Qualquer PR que mexa em query,
   pool ou sessão precisa provar que o tenant A não enxerga dado do tenant B.
   Ver a armadilha do `set_config` transaction-scoped em `PORTE.md` §1.2.
-- **A CI é obrigatória e bloqueia o merge.** A `main` é protegida e exige
-  `server-test`, `server-test-rls` e `client-build` verdes. A suíte local
+- **A CI é obrigatória e bloqueia o merge.** A `main` é protegida e exige **7 checks**
+  verdes: `server-test`, `server-test-rls`, `client-build`, `npm-audit (server)`,
+  `npm-audit (client)`, `backend-image` e `frontend-image`. A suíte local
   continua sendo o primeiro filtro — a CI é o juiz, porque roda em ambiente
   limpo.
 
@@ -221,7 +222,9 @@ Já está tudo no `.gitignore` — se precisou de `git add -f`, pare e pergunte.
 
 ## §8 Orquestração em ondas (agentes)
 
-Tocado com a skill `/orquestrar-projeto` — Claude implementa, Codex revisa,
+Tocado com a skill global `orquestrar-projeto` (`/orquestrar-projeto` no Claude e
+`$orquestrar-projeto` no Codex), que lê este arquivo e os demais contratos locais antes
+de montar o DAG — Claude implementa, Codex revisa,
 humano mergeia.
 
 - **Dependência entre tickets só existe em `blockedBy`.** Nunca inferida do
