@@ -12,9 +12,13 @@ const contrato = require('../operador/contrato');
 
 const OPERADOR = { id: 1, email: 'op@olume.com' };
 
+// UTC, à frente de hoje — o mesmo relógio do duble de CURRENT_DATE (toISOString).
+// Data fixa vence e a troca de plano passa a ser rejeitada.
+const inicioCobrancaFuturo = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+
 const DADOS_VALIDOS = {
   planoNome: 'Plano Pro', valorRecorrenteCentavos: 150000, ciclo: 'mensal',
-  diaVencimento: 10, inicioCobranca: '2026-08-01',
+  diaVencimento: 10, inicioCobranca: inicioCobrancaFuturo,
 };
 
 function conexao({ tenantExiste = true, ativo = null, contratoRow = null, itens = [], itemRow = null } = {}) {
