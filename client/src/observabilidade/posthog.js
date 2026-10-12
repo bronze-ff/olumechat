@@ -1,6 +1,7 @@
 import { CHAVE_POSTHOG, HOST_POSTHOG } from './env';
 import { definirUsuarioSentry } from './sentry';
 import { limparEvento } from './posthogEvento.js';
+import { aplicarIdentidade } from './posthogSessao.js';
 
 const HOST_PADRAO = 'https://eu.i.posthog.com';
 
@@ -49,16 +50,15 @@ async function entrar(id, geracaoEntrada) {
     iniciado = true;
   }
   if (geracaoEntrada !== geracao) return;
-  if (posthog.has_opted_out_capturing()) posthog.opt_in_capturing();
-  posthog.identify(id);
-  idAtual = id;
+  idAtual = aplicarIdentidade(posthog, idAtual, id);
 }
 
 function sair() {
-  idAtual = '';
-  if (!iniciado || !cliente) return;
-  cliente.reset();
-  cliente.opt_out_capturing();
+  if (!iniciado || !cliente) {
+    idAtual = '';
+    return;
+  }
+  idAtual = aplicarIdentidade(cliente, idAtual, '');
 }
 
 function definirSessao(id) {

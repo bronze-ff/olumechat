@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/observabilidade/scrub.test.js",
+    "test": "node --test src/observabilidade/*.test.js",
     "verify": "npm test && npm run build"
   },
   "dependencies": {

@@ -450,8 +450,9 @@ jobs:
     runs-on: ubuntu-latest
     # FIL-98: server-test-rls entra aqui pelo mesmo motivo dos demais — sem ele,
     # a imagem que produção recebe poderia vir de um commit cujo portão de
-    # isolamento entre tenants ficou vermelho.
-    needs: [server-test, server-test-rls, client-build, npm-audit, backend-image, frontend-image]
+    # isolamento entre tenants ficou vermelho. segredos entra pelo mesmo
+    # motivo: imagem publicada sem o scan de segredos ter passado.
+    needs: [segredos, server-test, server-test-rls, client-build, npm-audit, backend-image, frontend-image]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
