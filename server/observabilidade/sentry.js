@@ -20,10 +20,14 @@ function ambiente() {
   return 'dev';
 }
 
-function releaseAtual() {
+// `versao` é o objeto congelado { sha, curto, tag, origem }, não uma função.
+// O release do Sentry precisa da string do commit. Sem BUILD_SHA o sha é
+// null e o release fica de fora — ausência, não um palpite.
+function releaseAtual(v) {
   try {
-    const v = require('../versao').versao();
-    return v && v.sha ? v.sha : undefined;
+    const atual = v !== undefined ? v : require('../versao').versao;
+    if (!atual || typeof atual.sha !== 'string' || atual.sha.length === 0) return undefined;
+    return atual.sha;
   } catch {
     return undefined;
   }
@@ -102,4 +106,5 @@ module.exports = {
   ativo: () => ativo,
   definirUsuario,
   registrarErroExpress,
+  releaseAtual,
 };

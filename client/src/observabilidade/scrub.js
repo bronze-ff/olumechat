@@ -59,7 +59,9 @@ export function urlOrigemCaminho(valor) {
   if (typeof valor !== 'string' || valor.length === 0) return valor;
   const semFragmento = valor.split('#')[0];
   try {
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(semFragmento)) {
+    // Só http(s) tem origem opaca útil. file:// e webpack:// devolvem
+    // origin "null" e estragariam o caminho do frame.
+    if (/^https?:\/\//i.test(semFragmento)) {
       const u = new URL(semFragmento);
       return `${u.origin}${u.pathname}`;
     }
@@ -134,8 +136,8 @@ function permitirContextos(contexts) {
 function permitirFrame(frame) {
   if (!frame || typeof frame !== 'object') return frame;
   const out = {};
-  if (typeof frame.filename === 'string') out.filename = redigirString(frame.filename);
-  if (typeof frame.abs_path === 'string') out.abs_path = redigirString(frame.abs_path);
+  if (typeof frame.filename === 'string') out.filename = redigirString(urlOrigemCaminho(frame.filename));
+  if (typeof frame.abs_path === 'string') out.abs_path = redigirString(urlOrigemCaminho(frame.abs_path));
   if (typeof frame.function === 'string') out.function = redigirString(frame.function);
   if (typeof frame.module === 'string') out.module = redigirString(frame.module);
   if (frame.lineno != null) out.lineno = frame.lineno;
@@ -179,10 +181,7 @@ export function permitirBreadcrumb(breadcrumb) {
   if (breadcrumb.level != null) out.level = breadcrumb.level;
   if (breadcrumb.timestamp != null) out.timestamp = breadcrumb.timestamp;
   if (typeof breadcrumb.message === 'string') {
-    const base = breadcrumb.category === 'http' || /^https?:\/\//i.test(breadcrumb.message)
-      ? urlOrigemCaminho(breadcrumb.message)
-      : breadcrumb.message;
-    out.message = redigirString(base);
+    out.message = redigirString(urlOrigemCaminho(breadcrumb.message));
   }
   return out;
 }

@@ -133,6 +133,87 @@ test('breadcrumb de console é descartado', () => {
   assert.equal(permitirBreadcrumb({ category: 'console', type: 'default', message: 'oi' }), null);
 });
 
+test('frame, thread, breadcrumb e request perdem query e fragment', () => {
+  const out = permitirEvento({
+    request: {
+      method: 'GET',
+      url: 'https://api.olumechat.com.br/api/conversas?ticket=abc#frag',
+      query_string: 'ticket=abc',
+    },
+    exception: {
+      values: [{
+        type: 'Error',
+        value: 'falhou',
+        stacktrace: {
+          frames: [{
+            filename: 'https://olumechat.com.br/assets/index.js?ticket=abc#frag',
+            abs_path: 'https://olumechat.com.br/assets/index.js?email=a@b.com#frag',
+            function: 'render',
+            lineno: 20,
+          }, {
+            filename: 'file:///app/server/app.js?x=1#L10',
+            abs_path: '/app/server/app.js?x=1#L10',
+            function: 'boot',
+          }, {
+            filename: 'webpack://olumechat/./src/App.jsx?x=1',
+            abs_path: 'webpack://olumechat/./src/App.jsx?x=1#L2',
+          }],
+        },
+      }],
+    },
+    threads: {
+      values: [{
+        stacktrace: {
+          frames: [{
+            filename: 'https://api.olumechat.com.br/app.js?sid=1#L4',
+            abs_path: '/app.js?sid=1#L4',
+          }],
+        },
+      }],
+    },
+    breadcrumbs: [
+      { type: 'http', category: 'http', message: 'https://api.olumechat.com.br/api/stream?ticket=abc#frag' },
+      { type: 'navigation', category: 'navigation', message: '/conversas/1?ticket=abc#topo' },
+    ],
+  });
+  const frames = out.exception.values[0].stacktrace.frames;
+  assert.equal(frames[0].filename, 'https://olumechat.com.br/assets/index.js');
+  assert.equal(frames[0].abs_path, 'https://olumechat.com.br/assets/index.js');
+  assert.equal(frames[0].function, 'render');
+  assert.equal(frames[0].lineno, 20);
+  assert.equal(frames[1].filename, 'file:///app/server/app.js');
+  assert.equal(frames[1].abs_path, '/app/server/app.js');
+  assert.equal(frames[2].filename, 'webpack://olumechat/./src/App.jsx');
+  assert.equal(frames[2].abs_path, 'webpack://olumechat/./src/App.jsx');
+  const thread = out.threads.values[0].stacktrace.frames[0];
+  assert.equal(thread.filename, 'https://api.olumechat.com.br/app.js');
+  assert.equal(thread.abs_path, '/app.js');
+  assert.equal(out.request.url, 'https://api.olumechat.com.br/api/conversas');
+  assert.equal(out.request.query_string, undefined);
+  assert.equal(out.breadcrumbs[0].message, 'https://api.olumechat.com.br/api/stream');
+  assert.equal(out.breadcrumbs[1].message, '/conversas/1');
+  assert.equal(JSON.stringify(out).includes('ticket'), false);
+  assert.equal(JSON.stringify(out).includes('email'), false);
+  assert.equal(JSON.stringify(out).includes('#frag'), false);
+});
+
+test('release do Sentry usa o commit, não chama versao como função', () => {
+  const { derivar, versao } = require('../versao');
+  const { releaseAtual } = require('../observabilidade/sentry');
+  const sha = '151c565f5093958eddfc42bd981ce0c80951f807';
+  const marcador = derivar(sha);
+  assert.equal(typeof marcador, 'object');
+  assert.equal(typeof marcador.sha, 'string');
+  assert.equal(releaseAtual(marcador), sha);
+  assert.equal(releaseAtual(derivar('nao-e-sha')), undefined);
+  assert.equal(releaseAtual({ sha: null, origem: 'desconhecida' }), undefined);
+  assert.equal(releaseAtual(null), undefined);
+  const aoVivo = versao && typeof versao.sha === 'string' && versao.sha.length > 0
+    ? versao.sha
+    : undefined;
+  assert.equal(releaseAtual(), aoVivo);
+});
+
 test('span tira query e não mexe no id de transporte', () => {
   const span = {
     trace_id: 'abc',
@@ -187,6 +268,28 @@ test('paridade com o scrub do client', async () => {
   const client = await import(pathToFileURL());
   const evento = eventoCheio();
   assert.deepEqual(client.permitirEvento(structuredClone(evento)), permitirEvento(structuredClone(evento)));
+  const comUrl = {
+    request: { url: 'https://olumechat.com.br/login?email=a@b.com#reset' },
+    exception: {
+      values: [{
+        stacktrace: {
+          frames: [{
+            filename: 'https://olumechat.com.br/assets/index.js?ticket=abc#frag',
+            abs_path: '/assets/index.js?ticket=abc#frag',
+          }],
+        },
+      }],
+    },
+    threads: {
+      values: [{
+        stacktrace: {
+          frames: [{ filename: 'file:///app/server/app.js?x=1#L10', abs_path: 'webpack://olume/./src/App.jsx?x=1' }],
+        },
+      }],
+    },
+    breadcrumbs: [{ category: 'navigation', message: '/conversas?ticket=abc#topo' }],
+  };
+  assert.deepEqual(client.permitirEvento(structuredClone(comUrl)), permitirEvento(structuredClone(comUrl)));
   const span = {
     trace_id: 'abc',
     span_id: 'def',
