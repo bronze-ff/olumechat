@@ -63,4 +63,4 @@ O runtime em `server/ia/runtime.js` é dividido em três fases para não segurar
 
 ## O que não viaja para telemetria
 
-Sentry (`@sentry/node` na API, `@sentry/react` no navegador) e PostHog (só no navegador, só com sessão) estão descritos em `docs/operacao.md`. Corpo, header, cookie e query não entram. Mensagem de WhatsApp não entra.
+Sentry (`@sentry/node` na API, `@sentry/react` no navegador) e PostHog (só no navegador, só com sessão) estão descritos em `docs/operacao.md`. Na API o init está em `server/observabilidade/instrument.js`, carregado antes do Express, e o usuário da requisição fica no escopo isolado. Corpo, header, cookie e query não entram. Mensagem de WhatsApp não entra.

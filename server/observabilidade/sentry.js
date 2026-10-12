@@ -82,8 +82,11 @@ function iniciar() {
 
 function definirUsuario(id) {
   if (!ativo) return;
-  if (id == null || id === '') Sentry.setUser(null);
-  else Sentry.setUser({ id: String(id) });
+  // Escopo da requisição, não o escopo do processo. setUser() no escopo
+  // padrão vaza o usuário de uma requisição para a seguinte.
+  const escopo = Sentry.getIsolationScope();
+  if (id == null || id === '') escopo.setUser(null);
+  else escopo.setUser({ id: String(id) });
 }
 
 function registrarErroExpress(app) {

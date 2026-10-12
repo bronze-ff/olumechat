@@ -2,6 +2,12 @@
 // Inicializa o pool Postgres, monta o webhook e o healthcheck.
 // NÃO aplicamos express.json() global de propósito: o webhook precisa do
 // corpo bruto (rawBodyJson) para validar a assinatura.
+//
+// O Sentry entra antes de qualquer outro require. Se o Express carregar
+// primeiro, as requisições compartilham um escopo e o usuário de uma vaza
+// para a outra.
+require('./observabilidade/instrument');
+
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
@@ -21,7 +27,6 @@ const hub = require('./realtime/hub');
 const telemetria = require('./observabilidade/sentry');
 
 const app = express();
-telemetria.iniciar();
 // 2 hops confiáveis: Cloudflare (borda) → Traefik (Coolify) → Express. Cada um
 // agrega seu endereço percebido ao X-Forwarded-For — com um valor menor, o
 // rate limit por IP e a auditoria (operador/auditoria.js) enxergariam o IP de

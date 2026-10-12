@@ -8,4 +8,4 @@ echo "[entrypoint] aplicando migracoes..."
 npm run migrar
 
 echo "[entrypoint] migracoes concluidas, iniciando o servidor..."
-exec node app.js
+exec node --import ./observabilidade/instrument.mjs app.js

@@ -4,8 +4,8 @@
   "description": "Olume Chat — plataforma multi-tenant de atendimento por WhatsApp (Cloud API)",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "nodemon app.js",
+    "start": "node --import ./observabilidade/instrument.mjs app.js",
+    "dev": "nodemon --exec \"node --import ./observabilidade/instrument.mjs\" app.js",
     "test": "node test/run-tests.js",
     "verify": "npm test",
     "test-send": "node scripts/testSend.js",
