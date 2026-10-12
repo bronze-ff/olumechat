@@ -1,0 +1,23 @@
+name: Bug
+description: Algo que deveria funcionar e não funciona
+labels: [bug]
+body:
+  - type: textarea
+    id: oque
+    attributes:
+      label: O que aconteceu
+      description: O que você fez, o que esperava e o que apareceu.
+    validations:
+      required: true
+  - type: textarea
+    id: onde
+    attributes:
+      label: Onde
+      description: Tela, ambiente (dev, staging ou produção) e, se souber, o SHA em /version.json ou /health/live.
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Contexto
+      description: Não cole mensagem de cliente, telefone, e-mail, token nem DSN.

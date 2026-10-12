@@ -7,6 +7,7 @@
     "start": "node app.js",
     "dev": "nodemon app.js",
     "test": "node test/run-tests.js",
+    "verify": "npm test",
     "test-send": "node scripts/testSend.js",
     "migrar": "node scripts/migrar.js",
     "criar-operador": "node scripts/criar-operador.js"
@@ -18,6 +19,7 @@
     "@aws-sdk/client-s3": "^3.1096.0",
     "@aws-sdk/s3-request-presigner": "^3.1096.0",
     "@neondatabase/serverless": "^1.1.0",
+    "@sentry/node": "^11.7.0",
     "argon2": "^0.45.1",
     "dotenv": "^16.4.5",
     "exceljs": "^4.4.0",

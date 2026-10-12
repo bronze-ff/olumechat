@@ -18,8 +18,10 @@ const { buildWebhookRouter } = require('./webhook/routes');
 
 const cfg = loadConfig();
 const hub = require('./realtime/hub');
+const telemetria = require('./observabilidade/sentry');
 
 const app = express();
+telemetria.iniciar();
 // 2 hops confiáveis: Cloudflare (borda) → Traefik (Coolify) → Express. Cada um
 // agrega seu endereço percebido ao X-Forwarded-For — com um valor menor, o
 // rate limit por IP e a auditoria (operador/auditoria.js) enxergariam o IP de
@@ -193,6 +195,8 @@ if (cfg.nodeEnv === 'production') {
 }
 
 app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada' }));
+
+telemetria.registrarErroExpress(app);
 
 // Error handler JSON — sempre o último. Devolver a mensagem real do banco
 // acelera MUITO o diagnóstico — antes o "Erro interno" seco obrigava a ir

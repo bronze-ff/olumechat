@@ -27,9 +27,9 @@ em todo `client/src`, cada ocorrência lida em contexto e classificada como
   existia pra `--olume-ink`/`--olume-ink-strong`/`--olume-primary`/
   `--olume-signal`: fixas, **nunca** redefinidas em `html[data-theme="dark"]`,
   porque servem pra superfície permanentemente escura (marca, sidebar do
-  operador, landing). O **valor** de cada uma já estava em `DESIGN.md`; só
+  operador, landing). O **valor** de cada uma já estava em `produto/DESIGN.md`; só
   faltava a variável de implementação. Por isso nenhum token novo entrou em
-  `DESIGN.md` — não houve lacuna real de token, só de fiação.
+  `produto/DESIGN.md` — não houve lacuna real de token, só de fiação.
 
 ## Contraste medido (combinações sobre `ink` #071A15, superfície escura fixa)
 
@@ -52,7 +52,7 @@ real pendente.
 ## Classificação por arquivo
 
 ### `index.css` (~90 ocorrências, todas em `.landing-*`, `.product-sidebar`, `.brand-mark-*`)
-**Deriva.** Todas eram o valor exato de um token de `DESIGN.md`
+**Deriva.** Todas eram o valor exato de um token de `produto/DESIGN.md`
 (`ink` #071A15, `ink-muted` #4D625C, `neutral-soft` #778F87, `canvas` #F3F8F6,
 `surface-subtle` #E9EFEA, `border` #D3E0DB, `border-strong` #BFD0CA,
 `primary` #1F7A60, `primary-hover` #17664F, `primary-soft` #EAFBF5,
@@ -95,14 +95,14 @@ valor literal de CADA tema ao mesmo tempo (claro e escuro lado a lado);
 ### `components/TagsConversa.jsx` e `pages/admin/Departamentos.jsx` (`CORES`, 8 ocorrências no total)
 **Justificada**, documentado inline nos dois arquivos: paleta categórica pra
 diferenciar tags/departamentos visualmente — não é o conjunto semântico do
-DESIGN.md, é um "qual dos N" arbitrário escolhido pelo usuário num seletor de
+produto/DESIGN.md, é um "qual dos N" arbitrário escolhido pelo usuário num seletor de
 6 opções fixas. **Achado correlato (fora do escopo deste ticket):** a 2ª cor
 da paleta (`#47A987`) com o texto branco do chip mede **2,88:1**, abaixo de
 AA — a paleta é usada com texto branco por cima em `TagsConversa.jsx`,
 `pages/admin/Atendentes.jsx` e `pages/Conversas.jsx`. Não foi corrigido aqui
 porque exige uma decisão de design (qual tom substitui) e o ticket restringe
 escopo a "cores literais fora de token nos temas claro/escuro dos tokens
-DESIGN.md", não a paletas categóricas. Recomendo um ticket dedicado.
+produto/DESIGN.md", não a paletas categóricas. Recomendo um ticket dedicado.
 
 ### `pages/admin/FluxoEditor.jsx`
 - **`TIPOS` (7 cores, linhas ~13-19):** justificada, documentado inline —
@@ -134,7 +134,7 @@ Duas opções de custo baixo, do mais simples ao mais completo:
    comentário (`// cor-literal-ok: <motivo>`) pros casos justificados listados
    acima. Roda no CI (`client-build` ou um step novo), pego na hora do PR.
 2. **Teste de contraste automatizado:** um script Node (sem browser) que lê
-   os tokens de `DESIGN.md` + as combinações "on-dark" e falha se qualquer
+   os tokens de `produto/DESIGN.md` + as combinações "on-dark" e falha se qualquer
    combinação semântica documentada como "usada sobre superfície escura"
    ficar abaixo de 4,5:1 — pega regressão se alguém reintroduzir `danger`
    puro sobre `ink` no futuro. Mais caro que o lint, mas testa o que

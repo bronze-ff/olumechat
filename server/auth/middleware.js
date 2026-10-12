@@ -122,6 +122,12 @@ module.exports = async function auth(req, res, next) {
 
   req.user = { ...decoded, tenantId };
   req.tenantId = tenantId;
+  try {
+    const idTelemetria = decoded.suporte === true && decoded.operadorId != null
+      ? `o:${decoded.operadorId}`
+      : (decoded.usuarioId != null && decoded.usuarioId !== '' ? `u:${decoded.usuarioId}` : null);
+    if (idTelemetria) require('../observabilidade/sentry').definirUsuario(idTelemetria);
+  } catch { /* telemetria não pode derrubar a autenticação */ }
   if (decoded.suporte === true) {
     try {
       await auditarMutacaoDeSuporte(req, decoded, tenantId);

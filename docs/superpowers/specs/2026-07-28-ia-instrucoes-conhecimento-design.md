@@ -9,7 +9,7 @@
 O system prompt da IA vem hoje de um arquivo em disco (`CONHECIMENTO_DIR/system-prompt.md`),
 global para o processo inteiro. A pasta não existe no repositório, então na prática **todas as
 empresas rodam com o fallback embutido**, que diz "Você é o assistente da Multicanal Atacado no
-WhatsApp". É resquício do fork e contradiz o PRODUCT.md, que proíbe preservar o vocabulário da
+WhatsApp". É resquício do fork e contradiz o docs/produto/PRODUCT.md, que proíbe preservar o vocabulário da
 Multicanal.
 
 Além disso o cliente não tem onde descrever o próprio negócio. Sem isso a IA não tem o que

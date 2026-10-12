@@ -3,8 +3,10 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { aplicarTemaInicial } from './context/ThemeContext';
+import { iniciarSentry } from './observabilidade/sentry';
 import './index.css';
 
+iniciarSentry();
 aplicarTemaInicial();
 
 export const queryClient = new QueryClient({

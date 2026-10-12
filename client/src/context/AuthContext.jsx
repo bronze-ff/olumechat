@@ -29,7 +29,7 @@ export function AuthProvider({ children }) {
       // continua visível para indicar o modo de implantação e permitir voltar.
       setUser({ usuarioId: p.usuarioId, matricula: p.matricula, nome: p.nome, email: p.email,
                 tenantId: p.tenantId, papel: 'ATENDENTE', deptoIds: [], podeAtivo: false,
-                suporte: p.suporte === true });
+                suporte: p.suporte === true, operadorId: p.operadorId ?? null });
       // Papel/departamentos não vivem no JWT (podem mudar sem relogin) — busca no
       // servidor. loading só cai DEPOIS do perfil chegar: senão o app pinta como
       // ATENDENTE por um instante (esconde menu de admin / redireciona no 1º paint).
@@ -62,7 +62,7 @@ export function AuthProvider({ children }) {
     const p = parseJwt(data.token);
     setUser({
       usuarioId: data.usuarioId, matricula: data.matricula, nome: data.nome,
-      email: data.email, tenantId: p?.tenantId,
+      email: data.email, tenantId: p?.tenantId, operadorId: p?.operadorId ?? null,
       papel: data.papel || 'ATENDENTE', deptoIds: data.deptoIds || [], podeAtivo: !!data.podeAtivo,
       iaHabilitada: !!data.iaHabilitada,
     });

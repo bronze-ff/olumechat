@@ -6,7 +6,7 @@ const LEGACY_STORAGE_KEY = 'falatta:tema';
 
 // `amostra` precisa do valor literal de CADA tema pra montar o preview lado a
 // lado no seletor (FIL-104) — usar var() mostraria só o tema ativo nos dois
-// quadradinhos. Valores batem com os tokens de DESIGN.md (canvas/surface-subtle/
+// quadradinhos. Valores batem com os tokens de docs/produto/DESIGN.md (canvas/surface-subtle/
 // primary no claro; ink/surface/signal no escuro).
 export const THEMES = [
   { id: 'light', nome: 'Claro', descricao: 'Mineral, preciso e confortável', amostra: ['#f3f8f6', '#e9efea', '#1f7a60'] },

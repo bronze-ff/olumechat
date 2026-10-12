@@ -7,7 +7,7 @@
 | Pasta | Responsabilidade |
 |---|---|
 | `api/` | Rotas do painel do cliente (RBAC via `auth/rbac.js`) |
-| `webhook/` | Entrada da Meta — evento bruto **persistido antes do ACK** e efeitos pós-commit em **outbox transacional** (`durabilidade.js` + `eventoStore.js` + `efeitoStore.js`, FIL-94), tenant por `phone_number_id`; `/webhook/<32 hex>` = app da Meta **do cliente** (FIL-97) |
+| `webhook/` | Entrada da Meta — evento bruto **persistido antes do ACK** e efeitos pós-commit em **outbox transacional** (`durabilidade.js` + `eventoStore.js` + `efeitoStore.js`), tenant por `phone_number_id`; `/webhook/<32 hex>` = app da Meta **do cliente** |
 | `ia/` | Agente de IA: `runtime.js` (3 fases), `perfilStore` (prompt em camadas), `operacoes.js` (ferramentas nativas), `stt.js`, `anexos.js`, `handoff.js`, `historico.js` (janela 40 turnos) |
 | `bot/` | Chatbot de fluxos determinístico |
 | `fila/` | Distribuidor (least-loaded + round-robin, debounce, leader) |
@@ -36,7 +36,7 @@
   automática do cliente quando o processo morre entre o commit e o dispatch — e o replay
   não reproduz (o dedup por WAMID pula a mensagem). Efeito novo = mais um `tipo` tratado
   em `processEvent::despachar`, nada além disso.
-- **Dois modelos de app da Meta convivem** (FIL-97): `/webhook` valida com o
+- **Dois modelos de app da Meta convivem**: `/webhook` valida com o
   `META_APP_SECRET` global (plataforma/Embedded Signup); `/webhook/<32 hex>` resolve o
   tenant PELO CAMINHO e valida com o App Secret daquele cliente (`meta/appCliente.js`).
   No caminho por cliente a assinatura prova a ORIGEM, nunca o conteúdo — por isso o
