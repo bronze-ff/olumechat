@@ -173,6 +173,11 @@ jobs:
           cache-dependency-path: client/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # O nome do job continua `client-build`: a proteção da main e o
+      # publicar-imagens dependem dele. O teste entra aqui para os casos de
+      # telemetria do client barrarem o merge, não só o build.
+      - name: Test client
+        run: npm test
       - name: Build client
         run: npm run build
 
