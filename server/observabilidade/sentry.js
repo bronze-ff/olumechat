@@ -7,6 +7,7 @@
 
 const Sentry = require('@sentry/node');
 const { permitirEvento, permitirBreadcrumb, limparSpan } = require('./scrub');
+const { idAceito } = require('./idSessao');
 
 let ativo = false;
 
@@ -84,9 +85,11 @@ function definirUsuario(id) {
   if (!ativo) return;
   // Escopo da requisição, não o escopo do processo. setUser() no escopo
   // padrão vaza o usuário de uma requisição para a seguinte.
+  // Id que não seja inteiro positivo (e-mail, token forjado) não identifica.
   const escopo = Sentry.getIsolationScope();
-  if (id == null || id === '') escopo.setUser(null);
-  else escopo.setUser({ id: String(id) });
+  const aceito = idAceito(id);
+  if (!aceito) escopo.setUser(null);
+  else escopo.setUser({ id: aceito });
 }
 
 function registrarErroExpress(app) {

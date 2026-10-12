@@ -39,7 +39,7 @@ No painel do Sentry, de cada projeto: Data Scrubber ligado, Scrub IP addresses l
 ## O que a telemetria aceita
 
 - Sentry: `sendDefaultPii` desligado, corpo/header/cookie/query fora, URL só com origem e caminho, tracing em taxa 0 com `beforeSendSpan` limpando a URL, usuário só com id interno (`u:<id>` ou `o:<id>`).
-- PostHog: só com alguém logado. `person_profiles: identified_only`. `identify` só com esse id. Máscara de texto, de atributo e de input. Gravação de sessão desligada, e evento de snapshot é descartado. Landing anônima não inicia o SDK.
+- PostHog: só com alguém logado. `person_profiles: identified_only`. `identify` só com `u:<id>` ou `o:<id>`, e `<id>` é inteiro positivo que veio de `/api/auth/perfil` ou `/api/operador/eu` depois que o servidor aceitou a sessão. O token guardado no navegador não é lido para isso. Máscara de texto, de atributo e de input. Gravação de sessão desligada, e evento de snapshot é descartado. Landing anônima não inicia o SDK.
 - Mensagem de chat, transcrição e corpo de webhook não são campo de evento.
 
 ## Logs e rollback

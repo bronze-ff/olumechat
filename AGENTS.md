@@ -64,7 +64,7 @@ O Codex Review (`codex review --base main`) roda em todo PR. Só se mergeia com 
 - Webhook respondendo 200 antes de gravar o evento.
 - As duas sessões JWT misturadas.
 - Corpo, header, cookie, query ou mensagem de WhatsApp indo para Sentry ou PostHog.
-- `identify` do PostHog com e-mail, nome ou telefone.
+- `identify` do PostHog ou `setUser` do Sentry com e-mail, nome, telefone, ou com id que não seja inteiro positivo confirmado pelo servidor.
 - Migração que apaga coluna na mesma release em que o código para de usá-la.
 - Camada 1 do prompt da IA editável pelo admin, ou enfraquecida.
 
@@ -80,7 +80,7 @@ O Codex Review (`codex review --base main`) roda em todo PR. Só se mergeia com 
 
 DSN e chave só por ambiente: `SENTRY_DSN` na API, `VITE_SENTRY_DSN` e `VITE_POSTHOG_KEY` no build do frontend. Sem variável, não há cliente. Projetos: Sentry `olumechat-web` e `olumechat-api`; PostHog na EU.
 
-O scrub é allowlist (`server/observabilidade/scrub.js` e `client/src/observabilidade/scrub.js`): sem headers, cookies, body ou query; URL só com origem e caminho; palavra sensível redige a string inteira e não altera campo de transporte do SDK. Tracing fica em taxa 0, com `beforeSendSpan` limpando a URL. PostHog só com usuário logado, `person_profiles: 'identified_only'`, `identify` só com `u:<id>` ou `o:<id>`, máscara total.
+O scrub é allowlist (`server/observabilidade/scrub.js` e `client/src/observabilidade/scrub.js`): sem headers, cookies, body ou query; URL só com origem e caminho; palavra sensível redige a string inteira e não altera campo de transporte do SDK. Tracing fica em taxa 0, com `beforeSendSpan` limpando a URL. PostHog só com usuário logado, `person_profiles: 'identified_only'`, `identify` só com `u:<id>` ou `o:<id>` em que `<id>` é inteiro positivo devolvido por resposta já autenticada (`/api/auth/perfil` ou `/api/operador/eu`). O token no navegador não é fonte de id. Máscara total.
 
 Variáveis públicas do Vite são lidas de forma estática (`import.meta.env.VITE_SENTRY_DSN`). Lista e onde configurar: `docs/operacao.md`.
 

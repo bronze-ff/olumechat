@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/react';
 import { DSN_SENTRY, AMBIENTE_SENTRY } from './env';
 import { permitirEvento, permitirBreadcrumb, limparSpan } from './scrub';
+import { idAceito } from './idSessao.js';
 
 let ativo = false;
 
@@ -50,8 +51,9 @@ function iniciarSentry() {
 
 function definirUsuarioSentry(id) {
   if (!DSN_SENTRY) return;
-  if (!id) Sentry.setUser(null);
-  else Sentry.setUser({ id: String(id) });
+  const aceito = idAceito(id);
+  if (!aceito) Sentry.setUser(null);
+  else Sentry.setUser({ id: aceito });
 }
 
 export { iniciarSentry, definirUsuarioSentry };

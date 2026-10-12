@@ -2,6 +2,7 @@ import { CHAVE_POSTHOG, HOST_POSTHOG } from './env';
 import { definirUsuarioSentry } from './sentry';
 import { limparEvento } from './posthogEvento.js';
 import { aplicarIdentidade } from './posthogSessao.js';
+import { idAceito } from './idSessao.js';
 
 const HOST_PADRAO = 'https://eu.i.posthog.com';
 
@@ -62,15 +63,16 @@ function sair() {
 }
 
 function definirSessao(id) {
-  definirUsuarioSentry(id || null);
+  const aceito = idAceito(id);
+  definirUsuarioSentry(aceito);
   const atual = ++geracao;
   if (!CHAVE_POSTHOG) return;
-  if (!id) {
+  if (!aceito) {
     sair();
     return;
   }
-  if (id === idAtual && iniciado) return;
-  entrar(id, atual);
+  if (aceito === idAtual && iniciado) return;
+  entrar(aceito, atual);
 }
 
 export { definirSessao };
