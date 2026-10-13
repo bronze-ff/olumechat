@@ -1,6 +1,12 @@
 node_modules/
+dist/
+__pycache__/
+*.pyc
+.mcp.json
 .env
-.env.local
+.env.*
+!.env.example
+!**/.env.example
 server/.env
 client/.env
 *.log

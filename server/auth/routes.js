@@ -299,6 +299,7 @@ router.get('/perfil', auth, async (req, res, next) => {
       return res.json({
         papel: s.papel, deptoIds: s.deptoIds, atendenteId: s.atendenteId,
         pausado: s.pausado, podeAtivo: s.podeAtivo, suporte: true, iaHabilitada,
+        operadorId: require('../observabilidade/idSessao').inteiroPositivo(req.user.operadorId),
       });
     }
     const p = await rbac.carregarPerfil(req.user.tenantId, req.user.matricula, req.user.nome);
@@ -311,6 +312,7 @@ router.get('/perfil', auth, async (req, res, next) => {
     res.json({
       papel: p.papel, deptoIds: p.deptoIds, atendenteId: p.atendenteId,
       pausado: !!p.pausado, podeAtivo: !!p.podeAtivo, iaHabilitada,
+      usuarioId: require('../observabilidade/idSessao').inteiroPositivo(req.user.usuarioId),
     });
   } catch (err) {
     next(err);

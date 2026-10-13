@@ -1,141 +1,100 @@
-# AGENTS.md — guia de agentes do Olume Chat
+# AGENTS.md — regras para agentes do Olume Chat
 
-> **Fonte de verdade única.** `CLAUDE.md` contém apenas `@AGENTS.md` (import nativo do
-> Claude Code) — edite SEMPRE este arquivo; o Claude importa e os demais agentes (Codex,
-> Gemini, etc.) leem `AGENTS.md` nativamente. Skills reutilizáveis vivem **globalmente** em
-> `~/.agents/skills/` (o Claude aponta `~/.claude/skills/<skill>` para a mesma pasta por
-> junction) — nada de skill é versionado aqui, e nenhum passo por checkout é necessário. A
-> skill global `orquestrar-projeto` (`/orquestrar-projeto` no Claude, `$orquestrar-projeto`
-> no Codex) coordena o trabalho e lê as políticas deste repo: este arquivo,
-> `docs/WORKFLOW.md` e `docs/AMBIENTES.md`.
+Fonte única. `CLAUDE.md` contém só `@AGENTS.md`. Edite este arquivo. Skills globais ficam em `~/.agents/skills/`; nada de skill é versionado aqui.
 
-## O que é
+## Comandos
 
-Plataforma **multi-tenant** de atendimento por WhatsApp direto na **Cloud API da Meta**
-(sem BSP): inbox multi-atendente com filas e tempo real (SSE), chatbot de fluxos, agente de
-IA (responde, escuta áudio, vê imagem, age e transfere para humano), campanhas, métricas e
-um **painel do operador** (provisionamento, financeiro, sessão de suporte auditada).
+Na raiz, antes de abrir PR:
 
-## Estado atual (2026-08-01)
-
-- **EM PRODUÇÃO.** `olumechat.com.br` (landing + app) e `api.olumechat.com.br` no ar,
-  em VPS com Coolify. Staging espelhado em `staging.olumechat.com.br` (atrás de
-  Cloudflare Access). Ver **`docs/AMBIENTES.md`** antes de mexer em qualquer coisa que
-  chegue ao deploy.
-- **Pipeline de deploy fechado e exercitado** (FIL-99→100→101 + FIL-113): a CI publica
-  `sha-<commit>` no GHCR, staging sobe sozinho, e produção só recebe promoção manual
-  aprovada (Actions → *Deploy produção*). Toda resposta carrega a build que a produziu
-  (`/health/*` e `/version.json`) e o smoke **falha** se a versão servida divergir.
-  Promoção e rollback foram exercitados de verdade em 2026-08-01.
-- Falta só a conta Meta para o WhatsApp funcionar (`META_APP_SECRET` está com
-  placeholder — o webhook rejeita tudo até ser trocado, que é o comportamento seguro).
-- Roadmap de IA completo (FIL-83..86): instruções/base de conhecimento por empresa,
-  atendimento com handoff nos dois sentidos, STT (whisper) + visão, ferramentas nativas
-  (ficha, tag, pedido com template por empresa) e upload de PDF/XLSX/CSV na base.
-- **Riscos aceitos e conscientes** (não são esquecimento): Neon no plano Free, com PITR
-  de **6 horas** — janela curta demais depois que houver dado de cliente (FIL-110);
-  carga medida em laboratório (`docs/CARGA-2026-08.md`), **nunca na VPS** — o limite de
-  produção segue desconhecido, e o que quebra primeiro é o pool, não o hub SSE.
-- Suite do server: `cd server && npm test` (1.000+ testes; integração com Postgres real só
-  com `TEST_DATABASE_URL` — na CI o job `server-test-rls` a fornece e teste pulado vira
-  falha). Client: `cd client && npm run build`.
-
-## Stack e estrutura
-
-| Onde | O quê |
-|---|---|
-| `server/` | Express + `pg` (Neon). Entrada `app.js`. Processo **persistente** (SSE via LISTEN/NOTIFY, dispatcher de campanha, distribuidor de fila, IA fire-and-forget) — não roda em serverless |
-| `server/db/migrations/` | Migrações numeradas, re-executadas TODAS a cada deploy (`npm run migrar`) |
-| `server/api/` `server/ia/` `server/bot/` `server/fila/` `server/webhook/` `server/operador/` | Módulos de negócio |
-| `client/` | React 18 + Vite + Tailwind. SPA; em dev o Vite proxeia `/api` → `:3001` |
-| `docs/` | Contratos e specs (índice abaixo) |
-
-## Rodar local
-
-```bash
-cd server && npm run migrar && node app.js     # precisa de server/.env (DATABASE_URL etc.)
-cd client && npm run dev                        # http://localhost:5173
+```powershell
+npm run verify
 ```
 
-## Regras de ouro (custam caro quando ignoradas)
+Isso é obrigatório. Equivale a `npm test` no `server/` e a `npm test` mais `npm run build` no `client/`.
 
-1. **`docs/WORKFLOW.md` é contrato**: branch `<tipo>/<descricao>` cortada de `origin/main`
-   fresca, Conventional Commits em português, suite verde antes do PR, nunca commitar
-   código direto na `main`, um ticket = uma branch = um PR. A `main` é protegida e exige
-   **7 checks verdes**: `server-test`, `server-test-rls`, `client-build`,
-   `npm-audit (server)`, `npm-audit (client)`, `backend-image` e `frontend-image`.
-2. **Produção está no ar.** Migração é **expand/contract** (nunca remove coluna na mesma
-   release que para de usá-la), variável nova precisa entrar no Coolify dos ambientes que
-   a usam, e `VITE_*` exige rebuild. Mudança vai para staging antes de produção — e
-   produção só recebe promoção manual aprovada, nunca deploy automático.
-3. **Tabela nova entra no bloco RLS `isolamento_tenant`** (padrão das migrações 013/016/
-   020/021/022) e ganha `UNIQUE (tenant_id, id)`. Fora do bloco = sem isolamento entre
-   empresas, silenciosamente.
-4. **Migração idempotente de verdade** — o histórico inteiro roda a cada deploy; "não dá
-   erro ao repetir" não basta (backfills precisam de guarda).
-5. **Nunca segure duas conexões do pool na mesma requisição.** O runtime da IA é dividido
-   em 3 fases exatamente por isso (`server/ia/runtime.js`); `iaConfigStore.carregar()` NÃO
-   recebe `conn`, `perfilStore.carregar(conn, ...)` recebe. Leia os cabeçalhos antes de mexer.
-6. **Dois JWTs distintos de propósito**: sessão do cliente (`JWT_SECRET`, `token`) e do
-   operador (`OPERADOR_JWT_SECRET`, `token_operador`) nunca se misturam — axios separados
-   (`services/api.js` vs `services/apiOperador.js`). `IA_CRYPTO_KEY` é dedicada e estável.
-7. **Não use a tabela `config` para dado sensível ou grande**: o GET devolve tudo a
-   qualquer autenticado e o PUT trunca em 2.000 chars.
-8. **Multi-tenant no webhook**: a Meta não manda tenant — resolve-se por `phone_number_id`
-   (única unicidade global do schema). Um único webhook para todos os clientes.
-9. **Texto de produto em PT-BR**, sem vocabulário da Multicanal (anti-referência do
-   `PRODUCT.md`), e sem expor jargão de implementação na UI.
-10. Camada 1 do prompt da IA (`BASE_SISTEMA` em `ia/perfilStore.js`) é **intocável por
-   admin**: anti-alucinação, guarda de escopo, anti-injeção e sigilo — não enfraqueça.
-11. Identificadores internos `falatta_*` (role do banco, migrações) são legado pré-rebrand
-    (FIL-91: empresa Olume / produto Olume Chat) e **não devem ser renomeados** — troca de
-    role é mudança de infra sem valor de marca e quebraria o banco existente.
+| Comando | Onde | O que faz |
+|---|---|---|
+| `npm test` | `server/` | Suíte (sem rede). Teste de RLS com Postgres real só roda com `TEST_DATABASE_URL`. |
+| `npm run migrar` | `server/` | Aplica `db/migrations/` em ordem. |
+| `npm run dev` | `server/` ou `client/` | API na 3001, Vite na 5173. |
+| `npm run build` | `client/` | Bundle de produção. |
 
-## Mapas por nível (padrão do repo)
+A `main` é protegida e exige estes checks verdes: `server-test`, `server-test-rls`, `client-build`, `npm-audit (server)`, `npm-audit (client)`, `backend-image` e `frontend-image`. O job `segredos` (gitleaks no diff) também precisa passar.
 
-Cada pasta de trabalho diário tem o próprio par `AGENTS.md` (conteúdo) + `CLAUDE.md`
-(`@AGENTS.md`): **`server/AGENTS.md`** (módulos e regras do backend) e
-**`client/AGENTS.md`** (front). São **deltas** — não repetem o raiz. Atenção com o Codex:
-ele varre da pasta de abertura para CIMA (nunca desce) — para trabalhar focado no server,
-abra-o de dentro de `server/`.
+## Estrutura e onde mexer
 
-## Política de orquestração (o que a skill global precisa saber daqui)
-
-A skill global `orquestrar-projeto` é agnóstica de projeto e lê estas decisões aqui.
-Não estão em lugar nenhum além deste bloco — se você orquestrar sem ler, vai improvisar:
-
-| Decisão | Política deste repo |
+| Onde | Mexa quando |
 |---|---|
-| Papéis | **Claude implementa, Codex revisa** (`codex review --base main`, uma passada por PR), humano mergeia |
-| Modelos dos workers | **Opus** para ticket de fundação/alto risco (deploy, segurança, schema); **Sonnet** para feature e correção padrão; **Haiku** só para mecânico. O modelo do orquestrador **nunca** é usado em worker |
-| Como subir o worker | Criar a worktree **sem** `--agent` e subir o agente com `orca terminal create --command "claude --model <x>"`. Lançar com `--agent` herda o modelo default da sessão e o `/model` posterior não corrige a tempo |
-| Tracker | Linear, time FIL, **projeto "Olume Chat"** (`51f26218-651e-483f-b6ed-32757605f2ac`) — passe `--project` ao criar ticket, senão ele nasce órfão |
-| Dependência | Só o que está em `blockedBy`. Nunca inferida do título |
-| Gate de onda | **Merge do humano.** O orquestrador nunca mergeia |
-| Gate de produção | Promoção manual aprovada no GitHub Environment `production`. Agente **não promove** sem pedido explícito, e nunca aprova |
-| Verificação | CI verde é obrigatório, não opcional; relato de worker não é prova — confira o PR e os checks |
-| Custo | Upgrade de plano, compra e credencial nova são **sempre** do humano |
+| `client/` | Tela, rota, estado do navegador. |
+| `server/api/` | Regra do painel da empresa. |
+| `server/webhook/` | Entrada da Meta. |
+| `server/ia/`, `server/bot/`, `server/fila/` | Agente, fluxo e distribuição. |
+| `server/operador/` | Painel interno. |
+| `server/db/migrations/` | Schema. Só arquivo novo. |
+| `docs/` | Comportamento visível, operação, decisão. |
 
-## Integrações que os agentes usam aqui
+Mapas locais: `server/AGENTS.md` e `client/AGENTS.md`. São deltas. O Codex sobe a partir da pasta aberta e não desce: para trabalhar no server, abra de dentro de `server/`.
 
-- **Orca CLI** (`orca ...`) — worktrees, terminais, automações; **`orca linear ...`** — tickets FIL-*
-- **gh** — PRs (sempre contra `main`); **Codex** — review cruzada (`codex review --base main`)
-- **Neon** (Postgres do produto) · **Meta Cloud API** (WhatsApp) · **R2/S3** (mídia em produção)
+Issues ficam no GitHub Issues deste repositório. Não abra ticket no Linear. Uma issue, uma branch, um PR. No PR, `Fixes #n`. Branch `<tipo>/<descricao>` cortada de `origin/main` fresca. Commit convencional em português. Não commite direto na `main`.
 
-## Índice de docs
+## Não faça
 
-- `docs/WORKFLOW.md` — branch/commit/teste/PR/deploy (contrato)
-- `docs/AMBIENTES.md` — **como produção funciona hoje**: endereços, acesso, promoção,
-  rollback e armadilhas. É a fonte de verdade sobre deploy; na dúvida entre docs, vale este.
-- `docs/GO-LIVE-PENDENCIAS.md` — o que falta para o primeiro cliente
-- `docs/CARGA-2026-08.md` — teste de carga: limites medidos e onde quebra (harness em
-  `scripts/carga/`). O gargalo é o pool do Postgres, não o hub SSE.
-- `docs/SEGURANCA.md` — checklist que todo PR confirma · `docs/PORTE.md` (histórico do porte)
-- ⚠️ **Legados, não siga**: `docs/DEPLOY.md` (Vercel + Render) e `docs/ESCALABILIDADE.md`
-  (diagramas com Vercel/Render) descrevem a infraestrutura **anterior**. Servem só como
-  histórico do desenho antigo. `docs/DEPLOY_VPS.md` é o plano da VPS — bom para custo,
-  decisões e runbook, mas foi escrito **antes** do provisionamento e não foi convertido em
-  registro do que realmente ficou (FIL-116).
-- `PRODUCT.md` (produto/marca) · `DESIGN.md` (visual)
-- `docs/superpowers/specs/` — specs aprovadas por feature (IA: 4 fatias + handoff + upload)
-- `docs/estudos/` — estudos (ex.: Meta Business Agent Platform)
+- Commitar `.env`, `.env.*` (exceto `.env.example`) ou `.mcp.json`.
+- Colocar DSN, chave do PostHog ou token no repositório. Sem a variável, o SDK fica desligado.
+- Renomear `client/` ou `server/`, ou mudar o deploy do Coolify, de staging ou de produção, sem um pedido explícito. O Dockerfile e os workflows de imagem dependem desses caminhos.
+- Editar migração já aplicada. Mudança de schema é arquivo novo, expand/contract, idempotente.
+- Segurar duas conexões do pool na mesma requisição. Leia o cabeçalho de `server/ia/runtime.js`.
+- Misturar os dois JWTs (`JWT_SECRET` / `token` e `OPERADOR_JWT_SECRET` / `token_operador`).
+- Usar a tabela `config` para dado sensível ou grande.
+- Enfraquecer `BASE_SISTEMA` em `server/ia/perfilStore.js`.
+- Renomear o role `falatta_app` ou os identificadores internos `falatta_*`. São legado do banco e quebram a instalação existente.
+- Logar ou enviar a telemetria mensagem de chat, telefone, e-mail, CPF/CNPJ, senha, token, header, cookie ou corpo de request.
+- Fazer merge. Quem mergeia é o humano, com review do Codex limpa e CI verde.
+- Promover produção ou aprovar o environment `production`.
+
+## Code Review Rules
+
+O Codex Review (`codex review --base main`) roda em todo PR. Só se mergeia com review limpa e CI verde.
+
+**P0 — barrar**
+
+- Segredo, DSN ou chave no diff.
+- Tabela nova fora do RLS `isolamento_tenant`, ou sem `UNIQUE (tenant_id, id)`.
+- Tenant vindo de query, header ou body.
+- Webhook respondendo 200 antes de gravar o evento.
+- As duas sessões JWT misturadas.
+- Corpo, header, cookie, query ou mensagem de WhatsApp indo para Sentry ou PostHog.
+- `identify` do PostHog ou `setUser` do Sentry com e-mail, nome, telefone, ou com id que não seja inteiro positivo confirmado pelo servidor.
+- Migração que apaga coluna na mesma release em que o código para de usá-la.
+- Camada 1 do prompt da IA editável pelo admin, ou enfraquecida.
+
+**P1 — barrar se não houver decisão escrita**
+
+- `VITE_*` nova sem build-arg no `client/Dockerfile` e sem nota em `docs/operacao.md`.
+- Tracing do Sentry com taxa maior que 0 sem `beforeSendSpan` limpando a URL.
+- Edição de workflow de deploy (`deploy-staging.yml`, `deploy-producao.yml`) ou de caminho do Coolify.
+- Query de tenant fora de `comTenant()`, ou caminho de operador fora de `comOperador()`.
+- Texto de UI em outro idioma, ou com jargão de implementação. O vocabulário está em `docs/produto/PRODUCT.md`.
+
+## Observabilidade
+
+DSN e chave só por ambiente: `SENTRY_DSN` na API, `VITE_SENTRY_DSN` e `VITE_POSTHOG_KEY` no build do frontend. Sem variável, não há cliente. Projetos: Sentry `olumechat-web` e `olumechat-api`; PostHog na EU.
+
+O scrub é allowlist (`server/observabilidade/scrub.js` e `client/src/observabilidade/scrub.js`): sem headers, cookies, body ou query; URL só com origem e caminho; palavra sensível redige a string inteira e não altera campo de transporte do SDK. Tracing fica em taxa 0, com `beforeSendSpan` limpando a URL. PostHog só com usuário logado, `person_profiles: 'identified_only'`, `identify` só com `u:<id>` ou `o:<id>` em que `<id>` é inteiro positivo devolvido por resposta já autenticada (`/api/auth/perfil` ou `/api/operador/eu`). O token no navegador não é fonte de id. Máscara total.
+
+Variáveis públicas do Vite são lidas de forma estática (`import.meta.env.VITE_SENTRY_DSN`). Lista e onde configurar: `docs/operacao.md`.
+
+## Regras de ouro
+
+1. Produção está no ar. A mudança passa por staging. Produção é promoção manual da mesma imagem.
+2. `docs/WORKFLOW.md` e `docs/AMBIENTES.md` são o contrato de branch, PR e deploy. Na dúvida de ambiente, vale `docs/AMBIENTES.md`.
+3. Texto de produto em português. Visual em `docs/produto/DESIGN.md`.
+4. O webhook resolve a empresa pelo `phone_number_id`. A Meta não manda tenant.
+5. Evento de tempo real só depois do commit.
+
+## Índice
+
+- `docs/funcionalidades.md`, `docs/arquitetura.md`, `docs/operacao.md`, `docs/decisoes/`
+- `docs/WORKFLOW.md`, `docs/AMBIENTES.md`, `docs/SEGURANCA.md`
+- `docs/GO-LIVE-PENDENCIAS.md`, `docs/CARGA-2026-08.md`
+- Legado, não siga como deploy atual: `docs/DEPLOY.md`, `docs/ESCALABILIDADE.md`. `docs/DEPLOY_VPS.md` é o plano anterior ao que está no ar; o runbook vigente é `docs/AMBIENTES.md`.

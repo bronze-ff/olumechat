@@ -52,7 +52,7 @@ desabilitada). Portas abertas: 22, 80, 443 — e só.
 
 ## Fluxo de uma funcionalidade nova
 
-1. Ticket no Linear → branch `<tipo>/<descricao>` cortada de `origin/main` **fresca**.
+1. Issue no GitHub Issues → branch `<tipo>/<descricao>` cortada de `origin/main` **fresca**.
 2. Desenvolva local, contra o Neon `main`. Migração arriscada? Crie uma **branch efêmera do
    Neon a partir da `production`**, rode a migração lá, confira com o formato de dados real
    e descarte. Custo zero.

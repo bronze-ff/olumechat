@@ -1,0 +1,12 @@
+{
+  "name": "olumechat",
+  "private": true,
+  "description": "Olume Chat — scripts da raiz. O código continua em client/ e server/.",
+  "scripts": {
+    "verify": "npm run verify --prefix server && npm run verify --prefix client",
+    "test": "npm test --prefix server && npm test --prefix client"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

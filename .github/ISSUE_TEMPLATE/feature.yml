@@ -1,0 +1,23 @@
+name: Feature
+description: Pedido de funcionalidade
+labels: [feature]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: Problema
+      description: Quem precisa disso e o que não consegue fazer hoje.
+    validations:
+      required: true
+  - type: textarea
+    id: aceite
+    attributes:
+      label: Critérios de aceite
+      description: O que tem que ser verdade para a issue fechar.
+    validations:
+      required: true
+  - type: textarea
+    id: fora
+    attributes:
+      label: Fora de escopo
+      description: O que este pedido não inclui.

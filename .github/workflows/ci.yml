@@ -22,6 +22,56 @@ permissions:
   contents: read
 
 jobs:
+  # Camada rápida: só os commits deste PR/push. Não varre o histórico antigo.
+  # Os jobs abaixo (server-test, server-test-rls, client-build, npm-audit,
+  # backend-image, frontend-image) continuam com o mesmo nome: a proteção da
+  # main e o job publicar-imagens dependem deles. Imagem e smoke não saem daqui
+  # — são o portão do deploy no Coolify, não a camada pesada de SAST.
+  segredos:
+    name: segredos
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (só commits novos)
+        env:
+          GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BASE="${PR_BASE:-$PUSH_BEFORE}"
+          if [ -z "${BASE}" ] || [ "${BASE}" = "0000000000000000000000000000000000000000" ]; then
+            RANGE="HEAD~1..HEAD"
+          else
+            RANGE="${BASE}..${HEAD}"
+          fi
+          echo "gitleaks range: ${RANGE}"
+          docker run --rm -v "$PWD:/repo" "$GITLEAKS_IMAGE" git /repo --redact --exit-code 1 --log-opts="$RANGE"
+      - name: zizmor (se o workflow de CI mudou)
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BASE="${PR_BASE:-$PUSH_BEFORE}"
+          if [ -z "${BASE}" ] || [ "${BASE}" = "0000000000000000000000000000000000000000" ]; then
+            git ls-files .github > changed.txt
+          else
+            git diff --name-only "$BASE" "$HEAD" > changed.txt
+          fi
+          if grep -qE '^\.github/workflows/ci(-full)?\.yml$' changed.txt; then
+            pipx run zizmor==1.30.1 --min-severity medium .github/workflows/ci.yml .github/workflows/ci-full.yml
+          else
+            echo "ci.yml e ci-full.yml não mudaram neste range"
+          fi
+
   server-test:
     runs-on: ubuntu-latest
     defaults:
@@ -29,11 +79,13 @@ jobs:
         working-directory: server
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Use Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: 24
+          persist-credentials: false
+      - name: Use Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: server/package-lock.json
       - name: Install dependencies
@@ -77,11 +129,13 @@ jobs:
           --health-retries 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Use Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: 24
+          persist-credentials: false
+      - name: Use Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: server/package-lock.json
       - name: Install dependencies
@@ -108,15 +162,22 @@ jobs:
         working-directory: client
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Use Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: 24
+          persist-credentials: false
+      - name: Use Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: client/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # O nome do job continua `client-build`: a proteção da main e o
+      # publicar-imagens dependem dele. O teste entra aqui para os casos de
+      # telemetria do client barrarem o merge, não só o build.
+      - name: Test client
+        run: npm test
       - name: Build client
         run: npm run build
 
@@ -132,11 +193,13 @@ jobs:
         working-directory: ${{ matrix.dir }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Use Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: 24
+          persist-credentials: false
+      - name: Use Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ${{ matrix.dir }}/package-lock.json
       - name: Install dependencies
@@ -166,7 +229,9 @@ jobs:
           --health-retries 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       # FIL-113: `--build-arg OLUME_COMMIT_SHA` é o que faz a imagem saber qual
       # commit ela é. Sem ele a imagem sobe com `origem: "desconhecida"` e o
       # smoke abaixo fica vermelho — de propósito: uma imagem sem marcador
@@ -253,7 +318,7 @@ jobs:
         run: docker save -o /tmp/olume-chat-server.tar olume-chat-server:ci
       - name: Upload do artefato do backend
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: backend-image
           path: /tmp/olume-chat-server.tar
@@ -269,19 +334,51 @@ jobs:
     needs: client-build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Build imagem do frontend (staging)
+        env:
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+          VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_WEB }}
+          SHA: ${{ github.sha }}
         run: |
           docker build -t olume-chat-client-staging:ci -f client/Dockerfile client \
             --build-arg VITE_API_URL=https://api-staging.olumechat.com.br/api \
             --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br \
-            --build-arg OLUME_COMMIT_SHA=${{ github.sha }}
+            --build-arg VITE_SENTRY_DSN="$VITE_SENTRY_DSN" \
+            --build-arg VITE_SENTRY_ENVIRONMENT=homologacao \
+            --build-arg VITE_POSTHOG_KEY="$VITE_POSTHOG_KEY" \
+            --build-arg VITE_POSTHOG_HOST="$VITE_POSTHOG_HOST" \
+            --build-arg SENTRY_AUTH_TOKEN="$SENTRY_AUTH_TOKEN" \
+            --build-arg SENTRY_ORG="$SENTRY_ORG" \
+            --build-arg SENTRY_PROJECT="$SENTRY_PROJECT" \
+            --build-arg OLUME_COMMIT_SHA="$SHA"
       - name: Build imagem do frontend (produção)
+        env:
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+          VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT_WEB }}
+          SHA: ${{ github.sha }}
         run: |
           docker build -t olume-chat-client-prod:ci -f client/Dockerfile client \
             --build-arg VITE_API_URL=https://api.olumechat.com.br/api \
             --build-arg VITE_COMERCIAL_EMAIL=comercial@olumechat.com.br \
-            --build-arg OLUME_COMMIT_SHA=${{ github.sha }}
+            --build-arg VITE_SENTRY_DSN="$VITE_SENTRY_DSN" \
+            --build-arg VITE_SENTRY_ENVIRONMENT=producao \
+            --build-arg VITE_POSTHOG_KEY="$VITE_POSTHOG_KEY" \
+            --build-arg VITE_POSTHOG_HOST="$VITE_POSTHOG_HOST" \
+            --build-arg SENTRY_AUTH_TOKEN="$SENTRY_AUTH_TOKEN" \
+            --build-arg SENTRY_ORG="$SENTRY_ORG" \
+            --build-arg SENTRY_PROJECT="$SENTRY_PROJECT" \
+            --build-arg OLUME_COMMIT_SHA="$SHA"
       # FIL-113: as DUAS imagens são conferidas, e por HTTP, não por `cat` no
       # arquivo. O que precisa ser verdade é que o Nginx SERVE /version.json —
       # um `location` mal ordenado devolveria index.html com 200, que é
@@ -344,7 +441,7 @@ jobs:
           docker save -o /tmp/images/olume-chat-client-prod.tar olume-chat-client-prod:ci
       - name: Upload dos artefatos do frontend
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: frontend-images
           path: /tmp/images
@@ -358,20 +455,21 @@ jobs:
     runs-on: ubuntu-latest
     # FIL-98: server-test-rls entra aqui pelo mesmo motivo dos demais — sem ele,
     # a imagem que produção recebe poderia vir de um commit cujo portão de
-    # isolamento entre tenants ficou vermelho.
-    needs: [server-test, server-test-rls, client-build, npm-audit, backend-image, frontend-image]
+    # isolamento entre tenants ficou vermelho. segredos entra pelo mesmo
+    # motivo: imagem publicada sem o scan de segredos ter passado.
+    needs: [segredos, server-test, server-test-rls, client-build, npm-audit, backend-image, frontend-image]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
     steps:
       - name: Baixar artefato do backend
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: backend-image
           path: /tmp/images
       - name: Baixar artefatos do frontend
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: frontend-images
           path: /tmp/images
@@ -381,7 +479,7 @@ jobs:
           docker load -i /tmp/images/olume-chat-client-staging.tar
           docker load -i /tmp/images/olume-chat-client-prod.tar
       - name: Login no GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

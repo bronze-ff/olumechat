@@ -2,6 +2,12 @@
 // Inicializa o pool Postgres, monta o webhook e o healthcheck.
 // NÃO aplicamos express.json() global de propósito: o webhook precisa do
 // corpo bruto (rawBodyJson) para validar a assinatura.
+//
+// O Sentry entra antes de qualquer outro require. Se o Express carregar
+// primeiro, as requisições compartilham um escopo e o usuário de uma vaza
+// para a outra.
+require('./observabilidade/instrument');
+
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
@@ -18,6 +24,7 @@ const { buildWebhookRouter } = require('./webhook/routes');
 
 const cfg = loadConfig();
 const hub = require('./realtime/hub');
+const telemetria = require('./observabilidade/sentry');
 
 const app = express();
 // 2 hops confiáveis: Cloudflare (borda) → Traefik (Coolify) → Express. Cada um
@@ -193,6 +200,8 @@ if (cfg.nodeEnv === 'production') {
 }
 
 app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada' }));
+
+telemetria.registrarErroExpress(app);
 
 // Error handler JSON — sempre o último. Devolver a mensagem real do banco
 // acelera MUITO o diagnóstico — antes o "Erro interno" seco obrigava a ir

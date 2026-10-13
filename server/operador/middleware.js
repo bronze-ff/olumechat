@@ -95,6 +95,9 @@ module.exports = async function autenticarOperador(req, res, next) {
     const operador = await contas.buscarAtivoPorId(operadorId);
     if (!operador) return res.status(401).json({ error: MSG_401 });
     req.operador = { ...operador, jti: decoded.jti, exp: decoded.exp };
+    try {
+      require('../observabilidade/sentry').definirUsuario(`o:${operadorId}`);
+    } catch { /* telemetria não pode derrubar a autenticação */ }
     next();
   } catch (err) {
     next(err);

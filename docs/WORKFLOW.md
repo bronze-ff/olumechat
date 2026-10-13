@@ -22,7 +22,7 @@ que muda é só o *passo 8* — o que se valida em staging.
 | # | O quê | Quem |
 |---|---|---|
 | 1 | Descrever o que se quer | humano |
-| 2 | Ticket no Linear, com escopo, fora-de-escopo e critérios de aceite | orquestrador |
+| 2 | Issue no GitHub Issues deste repo, com escopo, fora-de-escopo e critérios de aceite | orquestrador |
 | 3 | Worktree de `origin/main` fresca; worker implementa e roda a suíte | agente |
 | 4 | PR contra `main` (§4) + review cruzada do Codex + triagem dos achados | agente |
 | 5 | **Merge** | **humano** |
@@ -74,10 +74,10 @@ produção economizaria um clique e removeria a única etapa que exige julgament
 
 ### Estado atual
 
-O ciclo inteiro já funciona assim: a CI publica as imagens (FIL-99), o
-`deploy-staging.yml` leva o `sha-<commit>` para staging sozinho (FIL-100), a API
-e o frontend declaram qual build estão servindo (FIL-113) e o
-`deploy-producao.yml` promove sob aprovação (FIL-101). O desenho está em
+O ciclo inteiro já funciona assim: a CI publica as imagens, o
+`deploy-staging.yml` leva o `sha-<commit>` para staging sozinho, a API
+e o frontend declaram qual build estão servindo e o
+`deploy-producao.yml` promove sob aprovação. O desenho está em
 [`superpowers/specs/2026-07-30-deploy-automatizado-design.md`](superpowers/specs/2026-07-30-deploy-automatizado-design.md).
 
 ## §1 Branches
@@ -136,7 +136,7 @@ cd client && npm run build   # se tocou o frontend
   continua sendo o primeiro filtro — a CI é o juiz, porque roda em ambiente
   limpo.
 
-### Testes de RLS contra Postgres real — obrigatórios na CI (FIL-98)
+### Testes de RLS contra Postgres real — obrigatórios na CI
 
 Os testes de isolamento entre tenants só existem com banco de verdade: sem
 `TEST_DATABASE_URL` o `node:test` os marca como `skipped` e a suíte termina

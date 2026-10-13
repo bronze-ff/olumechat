@@ -62,6 +62,10 @@ O CRM guarda nome, CPF/CNPJ, e-mail, telefone e endereço de pessoas físicas.
 Toda funcionalidade nova que toca esses campos precisa: escopo por papel,
 registro em auditoria quando houver alteração, e nenhum vazamento em log.
 
+Telemetria (Sentry e PostHog) não é log de atendimento. Mensagem de chat,
+telefone, e-mail e corpo de request não entram. O scrub é allowlist, descrito
+em `docs/operacao.md`.
+
 ## Como usar
 
 Todo prompt de worker deste projeto deve incluir: "siga docs/SEGURANCA.md" e

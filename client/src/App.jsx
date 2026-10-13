@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import TelemetriaSessao from './observabilidade/TelemetriaSessao';
 import ProtectedRoute from './components/layout/ProtectedRoute';
 import RotaOperador from './components/layout/RotaOperador';
 
@@ -28,6 +29,7 @@ export default function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
+        <TelemetriaSessao />
         <ThemeProvider>
           <Suspense fallback={<RouteFallback />}>
             <Routes>

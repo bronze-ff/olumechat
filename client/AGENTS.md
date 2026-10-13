@@ -19,7 +19,7 @@
 - **Dois eixos de sessão**: `token` (cliente) vs `token_operador` — axios, guards e rotas
   separados de propósito. Sair da sessão de suporte é **navegação dura**
   (`location.replace`) — não "conserte" para SPA navigate: reintroduz a corrida com o
-  `ProtectedRoute` (FIL-90).
+  `ProtectedRoute`.
 - **Tema claro/escuro**: superfícies tematizadas usam variáveis (`var(--color-surface)`
   etc.) — nunca cor literal (`from-white`, `bg-white` fixo) em elemento que aparece nos
   dois temas (lição do PR #35).
@@ -29,5 +29,5 @@
   ser reinicializados por refetch de mutação vizinha (inicialize uma vez).
 - Mobile-first: barras de abas com scroll horizontal precisam do indicador de continuação
   (`useScrollEdges`); modais viram bottom-sheet no mobile.
-- Texto de UI em PT-BR, tom direto, sem jargão de implementação (`PRODUCT.md`).
+- Texto de UI em PT-BR, tom direto, sem jargão de implementação (`docs/produto/PRODUCT.md`).
 - Verificação mínima antes do push: `npm run build`.

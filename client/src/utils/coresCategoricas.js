@@ -1,5 +1,5 @@
 // Paleta categórica pra identificar tags e departamentos (não é estado
-// semântico — não usa os tokens success/warning/danger/info do DESIGN.md).
+// semântico — não usa os tokens success/warning/danger/info do docs/produto/DESIGN.md).
 // Fonte única: era duplicada em components/TagsConversa.jsx e
 // admin/Departamentos.jsx, extraída aqui no FIL-112.
 //
