@@ -82,7 +82,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Use Node.js 24
+      - name: Use Node.js 24.22.1
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -132,7 +132,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Use Node.js 24
+      - name: Use Node.js 24.22.1
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -165,7 +165,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Use Node.js 24
+      - name: Use Node.js 24.22.1
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -196,7 +196,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Use Node.js 24
+      - name: Use Node.js 24.22.1
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
@@ -485,7 +485,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # P2: docker push sobrescreve a tag sem perguntar, e um re-run no MESMO
-      # commit não é reproduzível (a base node:24-bookworm-slim e as
+      # commit não é reproduzível (a base node:24.22.1-bookworm-slim e as
       # dependências de sistema mudam por baixo). Se a tag sha-<commit> já
       # existe no registry, o push é pulado — a tag imutável nunca troca de
       # digest por baixo de quem já promoveu/validou aquele SHA.
