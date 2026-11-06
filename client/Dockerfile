@@ -1,6 +1,6 @@
 # Frontend estático — build reproduzível para Coolify (FIL-92, P0.3).
 # Multi-stage: build Vite em Node, serve os estáticos com Nginx.
-FROM node:24-bookworm-slim AS build
+FROM node:24.22.1-bookworm-slim AS build
 WORKDIR /app
 
 # VITE_* só existem embutidas no bundle (variáveis públicas, sem segredo) —

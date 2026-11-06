@@ -7,6 +7,6 @@
     "test": "npm test --prefix server && npm test --prefix client"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24.22.1 <25"
   }
 }
