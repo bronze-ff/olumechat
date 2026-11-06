@@ -1,12 +1,12 @@
 # SEGURANÇA — padrão do Olume
 
-Este bloco é obrigatório em todo ticket, PR e worker deste projeto. Foi
+Este bloco é obrigatório em toda issue e PR deste projeto. Foi
 derivado de (a) uma auditoria real feita neste repo e (b) das 15 perguntas de
 segurança do artigo "15 perguntas de segurança para quem está praticando vibe
 coding" (Marcio Frayze, dev.to).
 
 Todo PR que tocar um dos pontos abaixo deve confirmar, item a item, o que foi
-verificado — ver [`WORKFLOW.md`](WORKFLOW.md) §10.
+verificado — ver `AGENTS.md`.
 
 ## Regras não-negociáveis (checklist do PR)
 
@@ -68,5 +68,5 @@ em `docs/operacao.md`.
 
 ## Como usar
 
-Todo prompt de worker deste projeto deve incluir: "siga docs/SEGURANCA.md" e
-o PR deve confirmar, item a item, os pontos que o ticket tocou.
+Toda mudança deste projeto segue este documento, e o PR confirma, item a item,
+os pontos que a issue tocou.
