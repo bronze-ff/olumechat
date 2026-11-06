@@ -22,7 +22,7 @@ Infra comum aos dois ambientes hospedados: VPS Hostinger (`179.198.105.75`, 4 vC
 DNS/proxy/TLS.
 
 > ⚠️ **Staging tem metade do pool de produção — e isso muda o que "aprovado em staging"
-> significa.** O teste de carga (FIL-110, [`CARGA-2026-08.md`](CARGA-2026-08.md)) mostrou
+> significa.** O teste de carga ([`CARGA-2026-08.md`](CARGA-2026-08.md)) mostrou
 > que o gargalo de *tudo* é o pool do Postgres vezes a ida e volta ao Neon. Com
 > `DB_POOL_MAX=5`, staging tem **metade** do teto de vazão de produção e sua fila dobra na
 > mesma carga: medir desempenho lá encontra o ponto de quebra em cerca de metade do valor
@@ -63,7 +63,7 @@ desabilitada). Portas abertas: 22, 80, 443 — e só.
    ao ar a **mesma imagem** validada em staging — nunca um rebuild. Rebuildar é a forma
    clássica de "passou em staging e quebrou em produção".
 
-O ciclo completo, com quem faz cada passo, está na **§0 do [`WORKFLOW.md`](WORKFLOW.md)**.
+O ciclo completo está em [`processo-de-entrega.md`](processo-de-entrega.md).
 
 ### Três regras que evitam quase toda dor
 
