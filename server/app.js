@@ -190,7 +190,8 @@ if (cfg.nodeEnv === 'production') {
         }
       },
     }));
-    app.get('*', (req, res, next) => {
+    // Express 5: curinga precisa de nome; '/{*splat}' também casa '/'.
+    app.get('/{*splat}', (req, res, next) => {
       if (req.path.startsWith('/api') || req.path.startsWith('/webhook')
           || req.path.startsWith('/health') || req.path === '/exclusao-de-dados') return next();
       res.setHeader('Cache-Control', 'no-cache');
